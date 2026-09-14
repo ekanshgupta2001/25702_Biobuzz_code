@@ -6,6 +6,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import com.pedropathing.follower.Follower;
 import com.pedropathing.ivy.Command;
 import com.pedropathing.ivy.Scheduler;
 
@@ -154,6 +155,36 @@ public class AutoRoutineTest {
         assertEquals("the budget interrupted the macro", Macros.Outcome.CANCELLED, robot.macros.getOutcome());
         assertTrue(motors.driveCalls >= 1);
         assertFalse(motors.moving);
+    }
+
+    @Test
+    public void leavesThroughTheFollowerWhenPedroIsTuned() {
+        FakePathFollower follower = new FakePathFollower();
+        robot = new Robot(
+                new Drivetrain(follower, clock),
+                new OpenLoopDrive((com.pedropathing.drivetrain.Drivetrain) null, clock),   // Robot never fits both
+                new Intake(intakeMotor, clock),
+                new Storage(storageMotor, null, clock),
+                new Transfer(transferMotor, clock),
+                new Shooter(shooterMotor, null, clock),
+                new Limelight(null),
+                new ColorSensor(null), new ColorSensor(null),
+                new ColorSensor(null), new ColorSensor(null),
+                clock);
+        shooterMotor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM);
+        AutoRoutine auto = new AutoRoutine(robot);
+        final double[] leaveForward = {0};
+        run(auto.build(), () -> {
+            if (follower.mode == Follower.Mode.MANUAL && follower.lastForward != 0) {
+                leaveForward[0] = follower.lastForward;
+            }
+        });
+        assertEquals("done", auto.getPhase());
+        assertEquals(4, robot.macros.getShotsFired());
+        assertEquals("LEAVE went through the follower at LEAVE_POWER", -0.3, leaveForward[0], EPS);
+        assertEquals("handed back with zero power", 0, follower.lastForward, EPS);
+        assertEquals(Follower.Mode.MANUAL, follower.mode);
+        assertFalse("no open-loop layer on a tuned robot", robot.openLoopDrive.isAvailable());
     }
 
     @Test

@@ -11,13 +11,17 @@ import org.firstinspires.ftc.teamcode.pedro.Constants;
 import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
 import org.firstinspires.ftc.teamcode.util.time.Clock;
 
+import java.util.function.DoubleSupplier;
+
 /**
- * Open-loop, timed driving through Pedro's motor layer, for before the follower is tuned.
+ * Open-loop driving through Pedro's motor layer, for before the follower is tuned.
  *
  * <p>Pedro's {@code Mecanum} needs only motor names and directions ({@code Constants.drivetrainConfig}),
- * not a localizer or a tuned Foresight, so a hardcoded autonomous can move the robot without any
- * of the tuning the {@link Drivetrain} depends on. Powers are Pedro's robot-frame convention:
- * {@code +forward} ahead, {@code +strafe} left, {@code +turn} counter-clockwise.
+ * not a localizer or a tuned Foresight, so a hardcoded autonomous can move the robot, and teleop can
+ * drive it ({@link #driverControlCommand}), without any of the tuning the {@link Drivetrain} depends
+ * on. Powers are Pedro's robot-frame convention: {@code +forward} ahead, {@code +strafe} left,
+ * {@code +turn} counter-clockwise. {@code Robot} builds this on the real motors only while the
+ * follower is absent, so the two motor layers never coexist.
  *
  * <p>Intent-then-write, and the write happens <b>only when the intent changes</b>: once stopped it
  * writes zero once and then stays silent, so an idle OpenLoopDrive never fights the tuned follower
@@ -107,6 +111,25 @@ public class OpenLoopDrive {
                 })
                 .setDone(() -> clock.nowMs() - startedAt[0] >= ms)
                 .setEnd(ec -> stop())
+                .requiring(this);
+    }
+
+    /**
+     * The teleop default command for a robot whose follower is not yet tuned: the sticks go
+     * straight to the motors, robot-centric, with no heading hold. Same shape as
+     * {@code Drivetrain.driverControlCommand} (priority -1, SUSPEND, QUEUE, logic in
+     * {@code setExecute}) so a command requiring this subsystem preempts it and it resumes when that
+     * command ends. {@code Teleop} schedules exactly one of the two driver defaults.
+     */
+    public Command driverControlCommand(DoubleSupplier forward, DoubleSupplier strafe,
+                                        DoubleSupplier turn) {
+        return Command.build()
+                .setExecute(() -> drive(forward.getAsDouble(), strafe.getAsDouble(), turn.getAsDouble()))
+                .setDone(() -> false)
+                .setEnd(ec -> stop())
+                .setPriority(DEFAULT_STOP_PRIORITY)
+                .setInterruptedBehavior(InterruptedBehavior.SUSPEND)
+                .setBlockedBehavior(BlockedBehavior.QUEUE)
                 .requiring(this);
     }
 

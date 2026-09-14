@@ -83,6 +83,32 @@ public class OpenLoopDriveTest {
     }
 
     @Test
+    public void driverControlFeedsTheSticksAndYieldsToATimedDrive() {
+        final double[] stick = {0};
+        drive.driverControlCommand(() -> stick[0], () -> 0, () -> 0).schedule();
+        tick();
+        assertEquals("centred sticks never write", 0, motors.driveCalls);
+        stick[0] = 0.8;
+        tick();
+        assertEquals(0.8, motors.lastPowers.forward(), EPS);
+        assertTrue(motors.lastManual);
+
+        Command leave = drive.driveForMsCommand(-0.3, 0, 0, 40);
+        leave.schedule();
+        tick();
+        assertEquals("the timed drive preempts the sticks", -0.3, motors.lastPowers.forward(), EPS);
+        clock.advance(40);
+        tick();
+        tick();
+        assertFalse(Scheduler.isScheduled(leave));
+        assertEquals("the sticks are back by themselves", 0.8, motors.lastPowers.forward(), EPS);
+
+        stick[0] = 0;
+        tick();
+        assertFalse("centred sticks stop the motors", motors.moving);
+    }
+
+    @Test
     public void unavailableDriveNoOpsAndFinishesItsCommand() {
         OpenLoopDrive none = new OpenLoopDrive((com.pedropathing.drivetrain.Drivetrain) null, clock);
         assertFalse(none.isAvailable());

@@ -18,9 +18,11 @@ import org.firstinspires.ftc.teamcode.subsystems.ColorSensor;
 import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
 import org.firstinspires.ftc.teamcode.subsystems.FakeDcMotorEx;
 import org.firstinspires.ftc.teamcode.subsystems.FakePathFollower;
+import org.firstinspires.ftc.teamcode.subsystems.FakePedroDrivetrain;
 import org.firstinspires.ftc.teamcode.subsystems.Intake;
 import org.firstinspires.ftc.teamcode.subsystems.Limelight;
 import org.firstinspires.ftc.teamcode.subsystems.OpenLoopDrive;
+import org.firstinspires.ftc.teamcode.subsystems.PathFollower;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.subsystems.Storage;
 import org.firstinspires.ftc.teamcode.subsystems.Transfer;
@@ -136,6 +138,23 @@ public class TeleopTest {
         op.start();
     }
 
+    /** Rebuilds the fixture as the first-event robot: no follower, the sticks reach the motors open loop. */
+    private FakePedroDrivetrain useUntunedRobot() {
+        FakePedroDrivetrain motors = new FakePedroDrivetrain();
+        robot = new Robot(
+                new Drivetrain((PathFollower) null, clock),
+                new OpenLoopDrive(motors, clock),
+                new Intake(intakeMotor, clock),
+                new Storage(storageMotor, null, clock),
+                new Transfer(transferMotor, clock),
+                new Shooter(shooterMotor, null, clock),
+                new Limelight(null),
+                new ColorSensor(null), new ColorSensor(null),
+                new ColorSensor(null), new ColorSensor(null),
+                clock);
+        return motors;
+    }
+
     private void loopUntilMacroDone() {
         int loops = 0;
         while (robot.macros.isRunning()) {
@@ -156,6 +175,27 @@ public class TeleopTest {
         assertEquals("full stick forward is full forward power", 1.0, follower.lastForward, EPS);
         assertEquals(0, follower.lastStrafe, EPS);
         assertEquals(0, follower.lastTurn, EPS);
+    }
+
+    @Test
+    public void stickForwardDrivesOpenLoopWhenPedroIsNotTuned() {
+        FakePedroDrivetrain motors = useUntunedRobot();
+        initAndStart();
+        assertTrue(telemetry.contains("OPEN LOOP (Pedro not tuned)"));
+        press(op.gamepad1, g -> g.left_stick_y = -1f);
+        loop();
+        assertTrue(motors.moving);
+        assertEquals("full stick forward is full forward power", 1.0, motors.lastPowers.forward(), EPS);
+        assertTrue("through Pedro's manual write", motors.lastManual);
+        release(op.gamepad1);
+        loop();
+        assertFalse("centred sticks stop the motors", motors.moving);
+
+        press(op.gamepad1, g -> g.b = true);              // DRIVE_TO_SHOOT: nothing to follow a path
+        loop();
+        assertEquals("no drive macro without a follower", "idle", robot.macros.getActiveName());
+        assertEquals(Macros.Outcome.IDLE, robot.macros.getOutcome());
+        assertTrue("the driver is told", op.gamepad1.isRumbling());
     }
 
     @Test

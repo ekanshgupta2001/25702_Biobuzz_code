@@ -92,6 +92,29 @@ public class DrivetrainCommandTest {
     // ---- Manual drive ----
 
     @Test
+    public void driveForMsIssuesManualPowersThenHandsBack() {
+        Command cmd = drivetrain.driveForMsCommand(-0.3, 0.1, 0, 100);
+        cmd.schedule();
+        tick();
+        assertEquals(Follower.Mode.MANUAL, fake.mode);
+        assertEquals(-0.3, fake.lastForward, EPS);
+        assertEquals(0.1, fake.lastStrafe, EPS);
+        tick();
+        assertTrue("re-issued every loop", fake.manualCalls >= 2);
+        clock.advance(100);
+        tick();
+        assertFalse(Scheduler.isScheduled(cmd));
+        assertEquals("handed back with zero power", 0, fake.lastForward, EPS);
+        assertEquals(0, fake.lastStrafe, EPS);
+        assertEquals(Follower.Mode.MANUAL, fake.mode);
+
+        Command none = new Drivetrain((PathFollower) null, clock).driveForMsCommand(1, 0, 0, 100);
+        none.schedule();
+        Scheduler.execute();
+        assertFalse("no follower: finishes at once", Scheduler.isScheduled(none));
+    }
+
+    @Test
     public void fieldCentricRotatesStickInputIntoTheRobotFrame() {
         fake.pose = new Pose(0, 0, Math.PI / 2);      // facing field +Y
         drivetrain.setFieldCentric(true);

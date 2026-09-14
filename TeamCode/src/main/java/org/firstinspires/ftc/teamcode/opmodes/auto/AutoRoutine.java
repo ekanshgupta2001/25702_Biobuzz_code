@@ -68,13 +68,25 @@ public final class AutoRoutine {
                 }),
                 Waits.waitMs(robot.getClock(), SETTLE_MS),
                 instant(() -> setPhase("leave")),
-                robot.openLoopDrive.driveForMsCommand(leave[0], leave[1], leave[2], LEAVE_MS),
+                leaveCommand(leave),
                 instant(() -> {
                     robot.stopMechanisms();
                     setPhase("done");
                 }))
                 .requiring(robot.intake, robot.storage, robot.transfer, robot.shooter,
                         robot.openLoopDrive, robot.drivetrain);
+    }
+
+    /**
+     * The LEAVE move through whichever motor layer exists: the tuned follower once
+     * {@code Constants.create()} returns one, otherwise the open-loop drive. Decided when the routine
+     * is built (in {@code start()}), when availability is known. {@code Robot} guarantees only one
+     * of the two is fitted.
+     */
+    private Command leaveCommand(double[] powers) {
+        return robot.drivetrain.isAvailable()
+                ? robot.drivetrain.driveForMsCommand(powers[0], powers[1], powers[2], LEAVE_MS)
+                : robot.openLoopDrive.driveForMsCommand(powers[0], powers[1], powers[2], LEAVE_MS);
     }
 
     /** {@code {forward, strafe, turn}} for a leave direction, in Pedro's robot-frame convention. */

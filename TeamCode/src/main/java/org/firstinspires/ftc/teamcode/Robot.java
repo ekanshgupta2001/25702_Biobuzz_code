@@ -60,7 +60,11 @@ public class Robot {
     public static long VOLTAGE_SAMPLE_MS = 250;
 
     public final Drivetrain drivetrain;
-    /** Timed open-loop driving through Pedro's motor layer, for before the follower is tuned. */
+    /**
+     * Open-loop driving through Pedro's motor layer, for before the follower is tuned. Built on the
+     * real motors only while {@link #drivetrain} is unavailable; once {@code Constants.create()}
+     * returns a follower this is an unfitted stub, so the two can never share the drive motors.
+     */
     public final OpenLoopDrive openLoopDrive;
     public final Intake intake;
     public final Storage storage;
@@ -114,7 +118,12 @@ public class Robot {
         }
 
         drivetrain = new Drivetrain(hardwareMap, clock);
-        openLoopDrive = new OpenLoopDrive(hardwareMap, clock);
+        // One motor layer at a time: the open-loop drive is built on the real motors only while there
+        // is no follower, so two Pedro Mecanum objects can never share the four drive motors. Once
+        // Constants.create() returns a follower this is an unavailable stub and every call no-ops.
+        openLoopDrive = drivetrain.isAvailable()
+                ? new OpenLoopDrive((com.pedropathing.drivetrain.Drivetrain) null, clock)
+                : new OpenLoopDrive(hardwareMap, clock);
         intake = new Intake(hardwareMap, HardwareNames.INTAKE_MOTOR, clock);
         storage = new Storage(hardwareMap, HardwareNames.STORAGE_MOTOR, HardwareNames.STORAGE_MOTOR_2, clock);
         transfer = new Transfer(hardwareMap, HardwareNames.TRANSFER_MOTOR, clock);

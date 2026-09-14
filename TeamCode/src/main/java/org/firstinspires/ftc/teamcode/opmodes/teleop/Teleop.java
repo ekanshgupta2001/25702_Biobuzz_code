@@ -95,10 +95,20 @@ public class Teleop extends MatchOpMode {
         // Default commands: priority -1, SUSPEND, QUEUE. Any command that needs the resource
         // preempts them and they resume by themselves when it ends. The sticks are read live by the
         // suppliers, not from the per-loop snapshot: analog values are never consumed.
-        robot.drivetrain.driverControlCommand(
-                () -> shaped(Controls.DRIVE_FORWARD),
-                () -> shaped(Controls.DRIVE_STRAFE),
-                () -> shaped(Controls.DRIVE_TURN)).schedule();
+        // Exactly one drive default. Before Pedro is tuned there is no follower, so the sticks go
+        // straight to the motors through OpenLoopDrive: robot-centric, no heading hold, and the
+        // drive macros stay off (see handleDriver). Robot builds only one of the two motor layers.
+        if (robot.drivetrain.isAvailable()) {
+            robot.drivetrain.driverControlCommand(
+                    () -> shaped(Controls.DRIVE_FORWARD),
+                    () -> shaped(Controls.DRIVE_STRAFE),
+                    () -> shaped(Controls.DRIVE_TURN)).schedule();
+        } else {
+            robot.openLoopDrive.driverControlCommand(
+                    () -> shaped(Controls.DRIVE_FORWARD),
+                    () -> shaped(Controls.DRIVE_STRAFE),
+                    () -> shaped(Controls.DRIVE_TURN)).schedule();
+        }
         robot.intake.defaultIdleCommand().schedule();
         robot.storage.defaultIdleCommand().schedule();
         robot.transfer.defaultIdleCommand().schedule();
@@ -137,6 +147,7 @@ public class Teleop extends MatchOpMode {
         int[] tags = tagRange();
         telemetry.addData("Aim target", alliance + " " + targetSide() + " CELL, tags " + tags[0] + "-" + tags[1]);
         telemetry.addData("Pose", robot.drivetrain.getPose());
+        telemetry.addData("Drive", driveStatus());
         if (loggerError != null) telemetry.addData("!! Logger FAILED", loggerError);
         telemetry.addLine();
         for (String line : Controls.helpLines()) telemetry.addLine(line);
@@ -192,6 +203,18 @@ public class Teleop extends MatchOpMode {
             abortMacro();
         }
         if (macroRunning()) return;
+
+        if (!robot.drivetrain.isAvailable()) {
+            // No follower: every drive macro would finish at once with TIMED_OUT and the aim lock has
+            // nothing to steer. Answer the press with the failure rumble instead.
+            if (in.pressed(Controls.COLLECT) || in.pressed(Controls.ALIGN)
+                    || in.pressed(Controls.DRIVE_TO_SHOOT) || in.pressed(Controls.DRIVE_TO_PARK)
+                    || in.pressed(Controls.SNAP_90) || in.pressed(Controls.SNAP_0)
+                    || in.pressed(Controls.SNAP_270) || in.pressed(Controls.SNAP_180)) {
+                gamepad1.rumbleBlips(RUMBLE_FAILURE_BLIPS);
+            }
+            return;
+        }
 
         if (in.pressed(Controls.COLLECT)) {
             startMacro(robot.macros.collectPiece());
@@ -260,7 +283,7 @@ public class Teleop extends MatchOpMode {
      * any macro without being rescheduled.
      */
     private void updateAimLock(Controls.Snapshot in) {
-        boolean wanted = in.axis(Controls.AIM_LOCK) > AIM_LOCK_TRIGGER;
+        boolean wanted = robot.drivetrain.isAvailable() && in.axis(Controls.AIM_LOCK) > AIM_LOCK_TRIGGER;
         if (wanted && !robot.drivetrain.isAimLocked()) {
             robot.drivetrain.setAimLock(() -> {
                 int[] tags = tagRange();
@@ -326,6 +349,17 @@ public class Teleop extends MatchOpMode {
         // once handed a path: this is the call that actually stops the robot.
         robot.abortMacro();
         activeMacro = null;
+    }
+
+    /** Which motor layer the sticks reach, and what that costs the driver. */
+    private String driveStatus() {
+        if (robot.drivetrain.isAvailable()) {
+            return robot.drivetrain.isFieldCentric() ? "Pedro, field-centric" : "Pedro, robot-centric";
+        }
+        if (robot.openLoopDrive.isAvailable()) {
+            return "OPEN LOOP (Pedro not tuned): robot-centric, no heading hold, drive macros off";
+        }
+        return "!! NO DRIVE MOTORS";
     }
 
     // ---- Season targets, from game/ ----
@@ -398,7 +432,7 @@ public class Teleop extends MatchOpMode {
         telemetry.addData("Pieces", robot.macros.piecesOnBoard() + "/" + Storage.CAPACITY
                 + (robot.storage.isFull() ? "  FULL" : ""));
         telemetry.addData("Macro", robot.macros.getStatus());
-        telemetry.addData("Drive", robot.drivetrain.isFieldCentric() ? "Field" : "Robot");
+        telemetry.addData("Drive", driveStatus());
         telemetry.addData("Aim", (robot.drivetrain.isAimLocked() ? "LOCKED on " : Controls.AIM_LOCK.button() + " aims at ")
                 + alliance + " " + targetSide() + " CELL");
         telemetry.addData("Flywheel", flywheelArmed

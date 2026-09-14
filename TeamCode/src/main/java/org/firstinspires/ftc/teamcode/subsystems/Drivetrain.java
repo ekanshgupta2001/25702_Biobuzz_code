@@ -474,6 +474,27 @@ public class Drivetrain {
                 .requiring(this);
     }
 
+    /**
+     * Drives at fixed robot-frame powers for {@code ms} on the injected clock, then hands the
+     * follower back ({@code manual(0, 0, 0)}). The tuned twin of
+     * {@code OpenLoopDrive.driveForMsCommand}: the hardcoded auto's LEAVE goes through whichever
+     * motor layer exists. Bypasses field-centric mixing and the heading hold on purpose. Finishes at
+     * once without a follower.
+     */
+    public Command driveForMsCommand(double forward, double strafe, double turn, long ms) {
+        if (follower == null) return finishedCommand();
+        final long[] startedAt = new long[1];
+        return Command.build()
+                .setStart(() -> {
+                    startedAt[0] = clock.nowMs();
+                    follower.manual(forward, strafe, turn);
+                })
+                .setExecute(() -> follower.manual(forward, strafe, turn))
+                .setDone(() -> clock.nowMs() - startedAt[0] >= ms)
+                .setEnd(ec -> cancelPath())
+                .requiring(this);
+    }
+
     /** A command that completes on its first tick. Returned when there is no drivetrain to move. */
     private static Command finishedCommand() {
         return Command.build().setDone(() -> true);

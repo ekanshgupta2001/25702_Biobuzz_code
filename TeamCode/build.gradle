@@ -26,6 +26,13 @@ android {
     testOptions {
         unitTests.returnDefaultValues = true
     }
+
+    // Without -Ptuning the AutoTune library is not on the classpath (BIOBUZZ R704; see
+    // build.dependencies.gradle), so the sources that import it stay out of the build.
+    if (!project.hasProperty('tuning')) {
+        sourceSets.main.java.exclude 'org/firstinspires/ftc/teamcode/pedro/Tuning.java'
+        sourceSets.main.java.exclude 'org/firstinspires/ftc/teamcode/pedro/procedures/**'
+    }
 }
 
 dependencies {

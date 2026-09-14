@@ -10,10 +10,12 @@ import com.qualcomm.robotcore.hardware.Gamepad;
 
 import org.firstinspires.ftc.teamcode.Robot;
 import org.firstinspires.ftc.teamcode.commands.Macros;
+import org.firstinspires.ftc.teamcode.game.FieldPoses;
 import org.firstinspires.ftc.teamcode.opmodes.FakeTelemetry;
 import org.firstinspires.ftc.teamcode.subsystems.ColorSensor;
 import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
 import org.firstinspires.ftc.teamcode.subsystems.FakeDcMotorEx;
+import org.firstinspires.ftc.teamcode.subsystems.FakePathFollower;
 import org.firstinspires.ftc.teamcode.subsystems.FakePedroDrivetrain;
 import org.firstinspires.ftc.teamcode.subsystems.Intake;
 import org.firstinspires.ftc.teamcode.subsystems.Limelight;
@@ -24,6 +26,7 @@ import org.firstinspires.ftc.teamcode.subsystems.Storage;
 import org.firstinspires.ftc.teamcode.subsystems.Transfer;
 import org.firstinspires.ftc.teamcode.util.diagnostics.MatchLogger;
 import org.firstinspires.ftc.teamcode.util.field.Alliance;
+import org.firstinspires.ftc.teamcode.util.field.FieldConstants;
 import org.firstinspires.ftc.teamcode.util.field.PoseStorage;
 import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
 import org.firstinspires.ftc.teamcode.util.time.FakeClock;
@@ -146,6 +149,35 @@ public class MainAutoTest {
         assertEquals("teleop inherits the alliance", Alliance.RED, PoseStorage.getAlliance());
         assertFalse("no pose without a localizer", PoseStorage.hasPose());
         op.stop();
+    }
+
+    @Test
+    public void startSeedsTheStartPoseForTheSelectedAlliance() {
+        FakePathFollower follower = new FakePathFollower();          // Pedro tuned: a follower exists
+        robot = new Robot(
+                new Drivetrain(follower, clock),
+                new OpenLoopDrive((com.pedropathing.drivetrain.Drivetrain) null, clock),
+                new Intake(intakeMotor, clock),
+                new Storage(new FakeDcMotorEx(), null, clock),
+                new Transfer(new FakeDcMotorEx(), clock),
+                new Shooter(shooterMotor, null, clock),
+                new Limelight(null),
+                new ColorSensor(null), new ColorSensor(null),
+                new ColorSensor(null), new ColorSensor(null),
+                clock);
+        op.init();
+        press(op.gamepad1, g -> g.dpad_left = true);                 // RED
+        op.init_loop();
+        assertTrue("built a moment ago: still calibrating", telemetry.contains("Localizer calibrating"));
+        assertTrue(telemetry.contains("Drive: Pedro follower"));
+        op.start();
+        com.pedropathing.math.Pose expected = FieldConstants.forAlliance(FieldPoses.BLUE_START_FACING_HIVE, Alliance.RED);
+        assertEquals(expected.x(), follower.pose.x(), EPS);
+        assertEquals(expected.y(), follower.pose.y(), EPS);
+        assertEquals(expected.heading(), follower.pose.heading(), 1e-9);
+        assertTrue("repeated once the Pinpoint has calibrated", robot.drivetrain.isPoseReapplyPending());
+        loop();
+        assertTrue("teleop inherits a real pose", PoseStorage.hasPose());
     }
 
     @Test

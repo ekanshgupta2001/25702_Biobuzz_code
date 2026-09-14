@@ -103,6 +103,16 @@ public final class Field {
         }
     }
 
+    /**
+     * The field heading a driver at the alliance station calls "forward": straight away from their
+     * own wall. The blue wall is the +X (column F) wall, so blue drivers face -X and red drivers +X.
+     * Feeds {@code Drivetrain.setDriverHeadingOffset}; without it a blue driver's stick-up drove the
+     * robot toward themselves once the pose was in the true field frame (fixthese B3).
+     */
+    public static double driverForwardHeading(Alliance alliance) {
+        return alliance == Alliance.BLUE ? Math.PI : 0;
+    }
+
     // ---- HIVE structure (manual section 9.6, figures 9-15 and 10-2) ----
 
     /** The HIVE structure sits on the centre four tiles C3, C4, D3, D4. */

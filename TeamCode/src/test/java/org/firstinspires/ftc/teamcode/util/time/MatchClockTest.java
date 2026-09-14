@@ -41,17 +41,30 @@ public class MatchClockTest {
     }
 
     @Test
-    public void entersEndgameAtTheBoundary() {
+    public void teleopClockHasNoEndgameInBiobuzz() {
         MatchClock clock = MatchClock.forTeleop();
+        clock.start(T0);
+        clock.update(T0 + MatchClock.TELEOP_MS - 30_000);
+        assertEquals("BIOBUZZ has no endgame period", MatchClock.Phase.RUNNING, clock.getPhase());
+        assertFalse(clock.isEndgame());
+        assertEquals("RUNNING 30.0s", clock.getStatus());
+        clock.update(T0 + MatchClock.TELEOP_MS - 1);
+        assertEquals(MatchClock.Phase.RUNNING, clock.getPhase());
+    }
+
+    @Test
+    public void anOffSeasonClockEntersEndgameAtTheBoundary() {
+        long endgame = 60_000;
+        MatchClock clock = MatchClock.of(MatchClock.Period.TELEOP, MatchClock.TELEOP_MS, endgame);
         clock.start(T0);
 
         // One millisecond before the boundary is still RUNNING.
-        clock.update(T0 + MatchClock.TELEOP_MS - MatchClock.ENDGAME_MS - 1);
+        clock.update(T0 + MatchClock.TELEOP_MS - endgame - 1);
         assertEquals(MatchClock.Phase.RUNNING, clock.getPhase());
         assertFalse(clock.isEndgame());
 
         // Exactly at the boundary, endgame has begun.
-        clock.update(T0 + MatchClock.TELEOP_MS - MatchClock.ENDGAME_MS);
+        clock.update(T0 + MatchClock.TELEOP_MS - endgame);
         assertEquals(MatchClock.Phase.ENDGAME, clock.getPhase());
         assertTrue(clock.isEndgame());
     }
@@ -93,7 +106,7 @@ public class MatchClockTest {
         MatchClock clock = MatchClock.forAutonomous();
         clock.start(T0);
 
-        // Deep into the period, where a teleop clock would be in endgame.
+        // Deep into the period.
         clock.update(T0 + MatchClock.AUTONOMOUS_MS - 1);
         assertEquals(MatchClock.Phase.RUNNING, clock.getPhase());
         assertFalse(clock.isEndgame());

@@ -5,7 +5,9 @@ import com.pedropathing.ivy.Scheduler;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 
 import org.firstinspires.ftc.teamcode.game.Field;
+import org.firstinspires.ftc.teamcode.game.FieldPoses;
 import org.firstinspires.ftc.teamcode.opmodes.MatchOpMode;
+import org.firstinspires.ftc.teamcode.util.field.FieldConstants;
 import org.firstinspires.ftc.teamcode.util.field.PoseStorage;
 import org.firstinspires.ftc.teamcode.util.time.MatchClock;
 
@@ -49,6 +51,9 @@ public class MainAuto extends MatchOpMode {
     protected void onInitLoop() {
         selector.poll(gamepad1);
         reportMissingHardware();
+        if (robot.drivetrain.isAvailable() && !robot.drivetrain.isLocalizerSettled()) {
+            telemetry.addLine("!! Localizer calibrating: wait a second before START");
+        }
         telemetry.addData("Setup", selector.status());
         telemetry.addLine("Place the robot touching the wall, REAR (shooter) toward the up CELL.");
         telemetry.addData("Pre-loads", robot.storage.count() + " POLLEN");
@@ -61,6 +66,10 @@ public class MainAuto extends MatchOpMode {
 
     @Override
     protected void onStart() {
+        // Where the robot was placed, in the true field frame. A no-op without a follower; once
+        // Constants.create() is real this is what makes teleop's inherited pose mean something.
+        robot.drivetrain.setPose(FieldConstants.forAlliance(
+                FieldPoses.startPose(selector.getStart()), selector.getAlliance()));
         routine = new AutoRoutine(robot);
         routineCommand = routine.build();
         routineCommand.schedule();

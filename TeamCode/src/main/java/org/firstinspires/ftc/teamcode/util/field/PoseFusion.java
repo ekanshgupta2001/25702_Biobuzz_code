@@ -85,10 +85,14 @@ public class PoseFusion {
     /**
      * Advances the estimate by one loop.
      *
-     * <p><b>Contract: the caller must write the returned pose back to the follower.</b> The
-     * per-loop delta is measured against the pose this class last handed out, which is only the
-     * true odometry increment if that pose became the follower's new baseline. Ignore the return
-     * value and the next correction gets counted a second time as if the robot had moved.
+     * <p><b>Contract: when {@link #getLastResult()} is {@link Result#ACCEPTED}, the caller must write
+     * the returned pose back to the follower.</b> The per-loop delta is measured against the pose this
+     * class last handed out, which is only the true odometry increment if that pose became the
+     * follower's new baseline; ignore an accepted fix and the correction is counted a second time as
+     * motion. On every other result the returned x/y equal the odometry to within a rounding error
+     * (the filter is fed its own projection, so its correction term is exactly zero), so the caller
+     * should <em>not</em> write it back: a per-loop {@code setPose} costs a localizer write and, in
+     * {@code Drivetrain}, drops the heading hold every tick.
      *
      * @param nowMs           current time in milliseconds
      * @param odometry        the follower's own pose estimate this loop, never null

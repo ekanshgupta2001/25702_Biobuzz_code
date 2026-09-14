@@ -54,6 +54,8 @@ public class Teleop extends MatchOpMode {
     public static double LOW_BATTERY_VOLTS = 11.5;
     /** Right-trigger pull past this holds the aim lock. */
     public static double AIM_LOCK_TRIGGER = 0.5;
+    /** How often init retries an AprilTag fix; the pipeline switch and read are camera round-trips. */
+    public static long LOCALIZE_RETRY_MS = 500;
 
     private static final int RUMBLE_SUCCESS_BLIPS = 1;
     /** Distinguishable from success without looking. */
@@ -62,9 +64,12 @@ public class Teleop extends MatchOpMode {
     private static final int RUMBLE_FINAL_BLIPS = 2;
 
     private Alliance alliance = Alliance.BLUE;
-    private boolean allianceFromAuto = false;
+    /** Where the current alliance came from, for the init card: default, auto, or the dpad. */
+    private String allianceSource = "default";
     private boolean inheritedPose = false;
     private boolean localized = false;
+    private boolean localizeTried = false;
+    private long lastLocalizeTryMs = 0;
     /** TIPs of our HIVE the operator has counted; the up-CELL flips on each. */
     private int tipsCounted = 0;
 
@@ -124,24 +129,41 @@ public class Teleop extends MatchOpMode {
         }
         if (PoseStorage.hasAlliance()) {
             alliance = PoseStorage.getAlliance();
-            allianceFromAuto = true;
+            allianceSource = "from auto";
         }
+        applyAlliance();
         lastCount = robot.storage.count();
+    }
+
+    /** Everything that depends on the alliance and must follow it when the dpad changes it. */
+    private void applyAlliance() {
+        robot.drivetrain.setDriverHeadingOffset(Field.driverForwardHeading(alliance));
     }
 
     @Override
     protected void onInitLoop() {
-        // Auto normally chooses the alliance; without it the driver picks on the dpad.
-        if (!allianceFromAuto
-                && (gamepad1.dpadLeftWasPressed() || gamepad1.dpadRightWasPressed())) {
+        // Auto normally chooses the alliance, but PoseStorage outlives the match: a practice run or
+        // the previous match can leave the wrong one behind, so the dpad always wins (fixthese B4).
+        if (gamepad1.dpadLeftWasPressed() || gamepad1.dpadRightWasPressed()) {
             alliance = alliance.opposite();
+            allianceSource = allianceSource.equals("from auto") || allianceSource.startsWith("dpad, overrode")
+                    ? "dpad, overrode auto" : "dpad";
+            applyAlliance();
         }
-        // Re-evaluated every loop rather than latched. Expected false all season (BIOBUZZ tags move).
-        localized = robot.tryLocalizeFromAprilTag();
+        // Expected to stay false all season (BIOBUZZ tags move). Only with a camera, and no more
+        // often than LOCALIZE_RETRY_MS: the attempt is a pipeline switch plus a read.
+        long now = robot.getClock().nowMs();
+        if (robot.limelight.isAvailable() && (!localizeTried || now - lastLocalizeTryMs >= LOCALIZE_RETRY_MS)) {
+            localizeTried = true;
+            lastLocalizeTryMs = now;
+            localized = robot.tryLocalizeFromAprilTag();
+        }
 
         reportMissingHardware();
-        telemetry.addData("Alliance", alliance
-                + (allianceFromAuto ? " (from auto)" : " (dpad left/right to change)"));
+        if (robot.drivetrain.isAvailable() && !robot.drivetrain.isLocalizerSettled()) {
+            telemetry.addLine("!! Localizer calibrating: wait a second before START");
+        }
+        telemetry.addData("Alliance", alliance + " (" + allianceSource + ")  dpad left/right to change");
         telemetry.addData("Pose from auto?", inheritedPose ? "yes" : "no - press Y once facing away from the driver wall");
         telemetry.addData("Localized?", localized ? "yes" : "no (odometry only this season)");
         int[] tags = tagRange();
@@ -151,11 +173,6 @@ public class Teleop extends MatchOpMode {
         if (loggerError != null) telemetry.addData("!! Logger FAILED", loggerError);
         telemetry.addLine();
         for (String line : Controls.helpLines()) telemetry.addLine(line);
-    }
-
-    @Override
-    protected void onStart() {
-        robot.drivetrain.startTeleop();
     }
 
     @Override
@@ -191,8 +208,8 @@ public class Teleop extends MatchOpMode {
     private void handleDriver(Controls.Snapshot in) {
         if (in.pressed(Controls.TOGGLE_DRIVE_FRAME)) robot.drivetrain.toggleFieldCentric();
         if (in.pressed(Controls.RESET_HEADING)) {
-            // Escape hatch when field-centric drive has drifted: treat the current facing as
-            // heading zero. Without this a bad localisation makes the robot undrivable.
+            // Escape hatch when field-centric drive has drifted: the driver faces the robot away
+            // from their wall and presses it. Without this a bad localisation makes the robot undrivable.
             robot.drivetrain.resetHeading();
         }
 

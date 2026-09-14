@@ -87,6 +87,15 @@ public class RobotTest {
         clock.advance(20);
     }
 
+    /** The full MatchOpMode loop, localization step included. */
+    private void fullLoop() {
+        robot.readSensors();
+        robot.updateLocalization();
+        Scheduler.execute();
+        robot.writeActuators();
+        clock.advance(20);
+    }
+
     private Object cell(Object[] cells, String column) {
         String[] header = MatchLogger.BIOBUZZ_COLUMNS;
         for (int i = 0; i < header.length; i++) {
@@ -168,18 +177,33 @@ public class RobotTest {
     }
 
     @Test
-    public void updateLocalizationWritesTheFusedPoseBack() {
+    public void updateLocalizationLeavesTheFollowerAloneWithoutAFix() {
         follower.pose = new Pose(10, 20, 0.5);
-        robot.updateLocalization();
-        assertEquals(1, follower.setPoseCalls);
-        assertEquals(10, follower.pose.x(), 1e-6);
-        assertEquals(20, follower.pose.y(), 1e-6);
-        assertEquals(0.5, follower.pose.heading(), 1e-6);
+        for (int i = 0; i < 20; i++) {
+            robot.updateLocalization();
+            follower.pose = new Pose(10 + i, 20, 0.5);      // the robot drives on
+            clock.advance(20);
+        }
+        assertEquals("odometry only: nothing is written back", 0, follower.setPoseCalls);
+        assertEquals(PoseFusion.Result.ODOMETRY_ONLY, robot.poseFusion.getLastResult());
+        assertTrue(robot.poseFusion.isSeeded());
+    }
 
-        clock.advance(20);
-        robot.updateLocalization();
-        assertEquals(2, follower.setPoseCalls);
-        assertEquals("no vision this season", PoseFusion.Result.ODOMETRY_ONLY, robot.poseFusion.getLastResult());
+    @Test
+    public void headingHoldCorrectsThroughTheFullLoop() {
+        // fixthese B1: the per-loop pose write-back used to release the hold every loop, so it never
+        // produced a correction on the robot. This runs the real loop order, localization included.
+        follower.pose = new Pose(0, 0, 0);
+        robot.drivetrain.driverControlCommand(() -> 0, () -> 0, () -> 0).schedule();
+        fullLoop();
+        fullLoop();
+        assertTrue("centred sticks capture the heading", robot.drivetrain.isHeadingHoldActive());
+        follower.pose = new Pose(0, 0, 0.2);                  // knocked 0.2 rad counter-clockwise
+        fullLoop();
+        fullLoop();
+        fullLoop();
+        assertTrue("still holding", robot.drivetrain.isHeadingHoldActive());
+        assertTrue("correcting back clockwise: turn " + follower.lastTurn, follower.lastTurn < -0.05);
     }
 
     @Test

@@ -4,9 +4,11 @@ package org.firstinspires.ftc.teamcode.util.time;
  * Tracks how much of the match period is left.
  *
  * <h2>BIOBUZZ</h2>
- * The numbers below are the BIOBUZZ match structure. The only time-gated rule in the game is the
- * 1:00 FLOWER unlock, exposed as {@link #isFlowerUnlocked()}; {@link Phase#ENDGAME} covers the
- * same window so telemetry and haptics can treat it as the endgame it functionally is.
+ * The numbers below are the BIOBUZZ match structure. There is <b>no endgame period</b>: a teleop
+ * clock reads {@link Phase#RUNNING} until the buzzer. The only time-gated rule in the game is the
+ * 1:00 FLOWER unlock, exposed as {@link #isFlowerUnlocked()} (V1 has no FLOWER mechanism, so nothing
+ * reads it yet). {@link Phase#ENDGAME} remains reachable only through {@link #of} for off-season
+ * games that have one.
  *
  * <h2>Why this exists</h2>
  * Without a clock the robot cannot make any decision that depends on time — it cannot warn the
@@ -44,12 +46,7 @@ public class MatchClock {
     public static long TRANSITION_MS = 8_000;
     /** BIOBUZZ driver-controlled period, inclusive of the FLOWER-unlock window. */
     public static long TELEOP_MS = 120_000;
-    /**
-     * Trailing slice of teleop reported as {@link Phase#ENDGAME}. BIOBUZZ has no endgame period;
-     * this is the last 60 s, when FLOWER ownership is unlocked and NECTAR may enter a FLOWER.
-     */
-    public static long ENDGAME_MS = 60_000;
-    /** Same window as {@link #ENDGAME_MS}, named for what it means in BIOBUZZ. */
+    /** FLOWER ownership scoring opens, and NECTAR may enter a FLOWER, with this much time left (G410). */
     public static long FLOWER_UNLOCK_MS = 60_000;
     /** The field's final warning (train whistle) sounds with this much time left. */
     public static long FINAL_WARNING_MS = 20_000;
@@ -60,8 +57,8 @@ public class MatchClock {
     /**
      * Where we are in the period.
      *
-     * <p>{@link #ENDGAME} only ever occurs on a {@link Period#TELEOP} clock; an autonomous clock
-     * goes straight from {@link #RUNNING} to {@link #EXPIRED}.
+     * <p>{@link #ENDGAME} never occurs on a BIOBUZZ clock ({@link #forTeleop()} has no endgame);
+     * only a clock built with {@link #of} and a non-zero {@code endgameMs} reports it.
      */
     public enum Phase { NOT_STARTED, RUNNING, ENDGAME, EXPIRED }
 
@@ -84,9 +81,9 @@ public class MatchClock {
         return new MatchClock(Period.AUTONOMOUS, AUTONOMOUS_MS, 0);
     }
 
-    /** A clock for the driver-controlled period, with the final {@link #ENDGAME_MS} as endgame. */
+    /** A clock for the BIOBUZZ driver-controlled period: no endgame, RUNNING until the buzzer. */
     public static MatchClock forTeleop() {
-        return new MatchClock(Period.TELEOP, TELEOP_MS, ENDGAME_MS);
+        return new MatchClock(Period.TELEOP, TELEOP_MS, 0);
     }
 
     /** A clock with explicit durations, for practice periods that are not match length. */
@@ -178,7 +175,7 @@ public class MatchClock {
         return getRemainingMs() >= budgetMs;
     }
 
-    /** Compact status for telemetry, e.g. {@code "ENDGAME 24.6s"}. */
+    /** Compact status for telemetry, e.g. {@code "RUNNING 24.6s"}. */
     public String getStatus() {
         if (!started) return "not started";
         return getPhase() + String.format(java.util.Locale.US, " %.1fs", getRemainingSeconds());

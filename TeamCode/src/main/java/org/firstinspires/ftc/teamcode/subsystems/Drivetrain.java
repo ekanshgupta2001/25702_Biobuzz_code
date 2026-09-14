@@ -71,6 +71,12 @@ public class Drivetrain {
     public static long TURN_TIMEOUT_MS = 2500;
     /** A turn counts as arrived inside this error. */
     public static double TURN_TOLERANCE_RAD = Math.toRadians(2.0);
+    /**
+     * How long a freshly constructed Pinpoint localizer spends recalibrating its IMU. A pose written
+     * before that is lost (docs/01 A.9 gotcha 6), so {@link #setPose} written inside this window is
+     * repeated once by {@link #update()} after it.
+     */
+    public static long LOCALIZER_SETTLE_MS = 1000;
 
     /** Null when the drivetrain could not be built; every motion call then no-ops. */
     private final PathFollower follower;
@@ -79,6 +85,18 @@ public class Drivetrain {
     private final Clock clock;
 
     private boolean fieldCentric = true;
+    /**
+     * Field heading the driver calls "forward", radians. Field-centric sticks are rotated by
+     * (heading - this), so a blue driver, who stands behind the +X wall facing -X, pushes the stick
+     * up and the robot drives -X. Season value from {@code game/Field.driverForwardHeading}; the aim
+     * lock and every macro stay in the true field frame.
+     */
+    private double driverHeadingOffset = 0;
+
+    private final long builtAtMs;
+    /** The last pose written through {@link #setPose}, for the post-calibration repeat. */
+    private Pose lastSetPose = null;
+    private boolean reapplyWhenSettled = false;
 
     private final PIDController headingController =
             Controller.pid(HEADING_HOLD_P, HEADING_HOLD_I, HEADING_HOLD_D);
@@ -93,6 +111,7 @@ public class Drivetrain {
 
     public Drivetrain(HardwareMap hardwareMap, Clock clock) {
         this.clock = clock;
+        this.builtAtMs = clock.nowMs();
         Follower built = null;
         try {
             built = Constants.create(hardwareMap);
@@ -111,6 +130,7 @@ public class Drivetrain {
     /** Builds on an already-constructed follower. Tests inject a fake here. */
     public Drivetrain(PathFollower follower, Clock clock) {
         this.clock = clock;
+        this.builtAtMs = clock.nowMs();
         this.follower = follower;
         this.pedro = follower instanceof PedroPathFollower ? ((PedroPathFollower) follower).raw() : null;
     }
@@ -120,9 +140,37 @@ public class Drivetrain {
         return follower != null;
     }
 
-    /** Hands the follower to the sticks: manual mode with zero power. Call from {@code start()}. */
-    public void startTeleop() {
+    /**
+     * Call once from the OpMode's {@code start()} (MatchOpMode does): hands the follower to the
+     * sticks, manual mode with zero power. A pose written during init is repeated by the first
+     * {@link #update()} after {@link #LOCALIZER_SETTLE_MS}, whether START came early or late.
+     */
+    public void onStart() {
         if (follower != null) follower.manual(0, 0, 0);
+    }
+
+    /** True once the localizer's IMU calibration window has passed (always true without a follower). */
+    public boolean isLocalizerSettled() {
+        return follower == null || clock.nowMs() - builtAtMs >= LOCALIZER_SETTLE_MS;
+    }
+
+    /** True while a pose written during calibration is still waiting to be repeated. */
+    public boolean isPoseReapplyPending() {
+        return reapplyWhenSettled;
+    }
+
+    /** The field heading the driver calls "forward"; see {@link #setDriverHeadingOffset}. */
+    public double getDriverHeadingOffset() {
+        return driverHeadingOffset;
+    }
+
+    /**
+     * Sets which field heading is "stick forward" for field-centric driving: {@code 0} for a driver
+     * behind the -X wall, {@code Math.PI} for one behind the +X wall. {@link #resetHeading()} uses
+     * the same value, since the driver presses it facing away from their own wall.
+     */
+    public void setDriverHeadingOffset(double fieldHeadingRad) {
+        driverHeadingOffset = fieldHeadingRad;
     }
 
     /**
@@ -135,7 +183,10 @@ public class Drivetrain {
         if (follower == null) return;
         Pose pose = follower.pose();
         if (fieldCentric && pose != null) {
-            DrivePowers p = ManualDrive.fieldCentric(forward, strafe, turn, pose.heading());
+            // The driver's "forward" is field heading driverHeadingOffset, so the stick is rotated
+            // by the robot's heading relative to that, not relative to +X.
+            DrivePowers p = ManualDrive.fieldCentric(forward, strafe, turn,
+                    pose.heading() - driverHeadingOffset);
             follower.manual(p.forward(), p.strafe(), p.turn());
         } else {
             follower.manual(forward, strafe, turn);
@@ -165,9 +216,18 @@ public class Drivetrain {
      * <p>Also drops the held heading. The hold's setpoint was captured in the old heading frame;
      * keeping it after the frame changes makes the controller chase a number that no longer means
      * anything, and the robot rotates by the size of the correction.
+     *
+     * <p>A write inside {@link #LOCALIZER_SETTLE_MS} of construction lands during the Pinpoint's IMU
+     * calibration and is lost, so it is repeated once by {@link #update()} after the window. If the
+     * robot has already started moving by then (START within a second of INIT), up to that second of
+     * motion is discarded in exchange for a heading that is right for the rest of the match.
      */
     public void setPose(Pose pose) {
-        if (follower != null && pose != null) follower.setPose(pose);
+        if (follower != null && pose != null) {
+            follower.setPose(pose);
+            lastSetPose = pose;
+            reapplyWhenSettled = !isLocalizerSettled();
+        }
         releaseHeadingHold();
     }
 
@@ -226,8 +286,9 @@ public class Drivetrain {
     }
 
     /**
-     * Treats the robot's current facing as heading zero, keeping its x/y position. The driver
-     * escape hatch for field-centric drive when localisation has drifted.
+     * Treats the robot's current facing as "away from the driver wall" (the driver-forward heading,
+     * see {@link #setDriverHeadingOffset}), keeping its x/y position. The driver escape hatch for
+     * field-centric drive when localisation has drifted: face away from your wall, press it.
      */
     public void resetHeading() {
         if (follower == null) return;
@@ -235,7 +296,7 @@ public class Drivetrain {
         if (p == null) return;
         // setPose() releases the heading hold. Without that, the hold would still be aiming at the
         // heading this call just discarded and would spin the robot back toward it.
-        setPose(new Pose(p.x(), p.y(), 0));
+        setPose(new Pose(p.x(), p.y(), driverHeadingOffset));
     }
 
     // ---- Heading hold ----
@@ -335,7 +396,12 @@ public class Drivetrain {
     }
 
     public void update() {
-        if (follower != null) follower.update();
+        if (follower == null) return;
+        if (reapplyWhenSettled && isLocalizerSettled()) {
+            reapplyWhenSettled = false;
+            if (lastSetPose != null) follower.setPose(lastSetPose);
+        }
+        follower.update();
     }
 
     // ---- Ivy commands ----

@@ -76,7 +76,7 @@ public abstract class MatchOpMode extends OpMode {
     /** Runs after {@code readSensors()} on every init loop. Menus, localisation, warnings. */
     protected void onInitLoop() {}
 
-    /** Runs once on START, after edge detection is reset and the clock has started. */
+    /** Runs once on START, after edge detection is reset, the clock has started and the drivetrain is in manual. */
     protected void onStart() {}
 
     /** Read inputs and schedule commands. Runs before the scheduler, on fresh sensor data. */
@@ -139,6 +139,7 @@ public abstract class MatchOpMode extends OpMode {
         gamepad1.resetEdgeDetection();
         gamepad2.resetEdgeDetection();
         robot.startMatch(matchPeriod());
+        robot.drivetrain.onStart();      // follower to the sticks; init pose repeats after calibration
         loopTimer.reset();
         onStart();
     }

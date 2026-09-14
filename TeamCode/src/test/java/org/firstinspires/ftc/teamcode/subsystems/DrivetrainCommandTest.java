@@ -92,6 +92,64 @@ public class DrivetrainCommandTest {
     // ---- Manual drive ----
 
     @Test
+    public void driverOffsetMakesBlueForwardFieldMinusX() {
+        // The blue wall is +X, so a blue driver faces -X: stick up must drive -X.
+        drivetrain.setFieldCentric(true);
+        drivetrain.setDriverHeadingOffset(Math.PI);
+        fake.pose = new Pose(0, 0, Math.PI);          // robot facing away from the blue driver
+        drivetrain.drive(1, 0, 0);
+        assertEquals("facing away from the driver, stick up is robot forward", 1, fake.lastForward, 1e-9);
+        assertEquals(0, fake.lastStrafe, 1e-9);
+
+        fake.pose = new Pose(0, 0, 0);                // robot facing the blue driver
+        drivetrain.drive(1, 0, 0);
+        assertEquals("facing the driver, stick up is robot backward", -1, fake.lastForward, 1e-9);
+
+        drivetrain.setDriverHeadingOffset(0);         // red: the -X wall
+        drivetrain.drive(1, 0, 0);
+        assertEquals(1, fake.lastForward, 1e-9);
+    }
+
+    @Test
+    public void resetHeadingUsesTheDriverForwardHeading() {
+        drivetrain.setDriverHeadingOffset(Math.PI);
+        fake.pose = new Pose(12, 34, 1.0);
+        drivetrain.resetHeading();
+        assertEquals(12, fake.pose.x(), EPS);
+        assertEquals(34, fake.pose.y(), EPS);
+        assertEquals("facing away from the blue wall is heading pi", Math.PI, fake.pose.heading(), 1e-9);
+        assertFalse(drivetrain.isHeadingHoldActive());
+    }
+
+    @Test
+    public void poseWrittenDuringCalibrationIsRewrittenOnceSettled() {
+        Drivetrain.LOCALIZER_SETTLE_MS = 1000;
+        Pose start = new Pose(48, 8.75, Math.toRadians(270));
+        clock.advance(100);                           // init(): the Pinpoint is still calibrating
+        drivetrain.setPose(start);
+        assertEquals(1, fake.setPoseCalls);
+        assertTrue(drivetrain.isPoseReapplyPending());
+        drivetrain.onStart();
+        assertEquals(Follower.Mode.MANUAL, fake.mode);
+        tick();                                       // 120 ms: too early
+        assertEquals(1, fake.setPoseCalls);
+        clock.advance(1000);
+        fake.pose = new Pose(50, 9, 4.0);             // whatever calibration left behind
+        tick();
+        assertEquals("written once more after the settle time", 2, fake.setPoseCalls);
+        assertEquals(start.heading(), fake.pose.heading(), 1e-9);
+        assertFalse(drivetrain.isPoseReapplyPending());
+        tick();
+        tick();
+        assertEquals("and never again", 2, fake.setPoseCalls);
+
+        drivetrain.setPose(new Pose(1, 2, 3));        // a write after settling is not repeated
+        assertFalse(drivetrain.isPoseReapplyPending());
+        tick();
+        assertEquals(3, fake.setPoseCalls);
+    }
+
+    @Test
     public void driveForMsIssuesManualPowersThenHandsBack() {
         Command cmd = drivetrain.driveForMsCommand(-0.3, 0.1, 0, 100);
         cmd.schedule();

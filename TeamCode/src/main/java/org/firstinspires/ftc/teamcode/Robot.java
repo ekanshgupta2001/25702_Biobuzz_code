@@ -264,9 +264,14 @@ public class Robot {
         Pose corrected = poseFusion.update(
                 clock.nowMs(), odometry, vision, limelight.getVisionLatencyMs());
 
-        // The fusion contract requires writing the result back: its delta bookkeeping assumes the
-        // returned pose became the follower's new baseline. setPose also releases the heading hold.
-        if (corrected != null) drivetrain.setPose(corrected);
+        // Write back only when fusion actually changed the estimate. On the odometry-only path the
+        // fused x/y equal the follower's own (the filter's correction term is exactly zero), and a
+        // write every loop released the heading hold each tick, so it never corrected anything, and
+        // re-wrote the Pinpoint over I2C for nothing (fixthese B1). setPose releases the hold, which
+        // is right for a real correction: the old setpoint was in the old frame.
+        if (corrected != null && poseFusion.getLastResult() == PoseFusion.Result.ACCEPTED) {
+            drivetrain.setPose(corrected);
+        }
     }
 
     /**

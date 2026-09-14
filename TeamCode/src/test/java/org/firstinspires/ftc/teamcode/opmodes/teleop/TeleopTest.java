@@ -167,14 +167,42 @@ public class TeleopTest {
 
     @Test
     public void stickForwardDrivesThroughThePedroFollower() {
-        initAndStart();
+        initAndStart();                                     // blue by default
         assertEquals("start() hands the follower to the sticks", Follower.Mode.MANUAL, follower.mode);
+        follower.pose = new Pose(0, 0, Math.PI);           // facing away from the blue wall (+X)
         press(op.gamepad1, g -> g.left_stick_y = -1f);
         loop();
         assertEquals(Follower.Mode.MANUAL, follower.mode);
         assertEquals("full stick forward is full forward power", 1.0, follower.lastForward, EPS);
         assertEquals(0, follower.lastStrafe, EPS);
         assertEquals(0, follower.lastTurn, EPS);
+
+        follower.pose = new Pose(0, 0, 0);                 // now facing the blue driver
+        loop();
+        assertEquals("field-centric: stick up still drives away from the driver", -1.0, follower.lastForward, EPS);
+    }
+
+    @Test
+    public void redForwardIsFieldPlusX() {
+        PoseStorage.save(new Pose(0, 0, 0), Alliance.RED, StartPosition.FACING_HIVE);
+        initAndStart();
+        press(op.gamepad1, g -> g.left_stick_y = -1f);
+        loop();
+        assertEquals("red drivers face +X", 1.0, follower.lastForward, EPS);
+        assertEquals(0, robot.drivetrain.getDriverHeadingOffset(), EPS);
+    }
+
+    @Test
+    public void dpadOverridesTheAllianceLeftByAuto() {
+        PoseStorage.save(null, Alliance.RED, StartPosition.FACING_HIVE);
+        op.init();
+        op.init_loop();
+        assertTrue(telemetry.contains("RED (from auto)"));
+        press(op.gamepad1, g -> g.dpad_right = true);      // the practice field left the wrong one
+        op.init_loop();
+        assertTrue(telemetry.joined(), telemetry.contains("BLUE (dpad, overrode auto)"));
+        assertTrue("blue's up-CELL tags", telemetry.contains("tags 42-45"));
+        assertEquals("driver frame followed the alliance", Math.PI, robot.drivetrain.getDriverHeadingOffset(), EPS);
     }
 
     @Test
@@ -239,6 +267,7 @@ public class TeleopTest {
         loop();
         assertEquals(Macros.Outcome.RUNNING, robot.macros.getOutcome());
 
+        follower.pose = new Pose(0, 0, Math.PI);           // blue robot facing away from its driver
         press(op.gamepad1, g -> g.left_stick_y = -1f);   // the driver grabs the sticks
         loop();
         assertEquals(Macros.Outcome.CANCELLED, robot.macros.getOutcome());
@@ -255,6 +284,7 @@ public class TeleopTest {
         press(op.gamepad2, g -> g.right_trigger = 1f);     // SHOOT_ONE
         loop();
         assertEquals("shootOne", robot.macros.getActiveName());
+        follower.pose = new Pose(0, 0, Math.PI);           // blue robot facing away from its driver
         press(op.gamepad1, g -> g.left_stick_y = -1f);
         loop();
         assertEquals("the shot does not own the drivetrain", Macros.Outcome.RUNNING, robot.macros.getOutcome());

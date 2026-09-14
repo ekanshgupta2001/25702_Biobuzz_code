@@ -126,6 +126,12 @@ public class FieldTest {
     }
 
     @Test
+    public void driversFaceAwayFromTheirOwnWall() {
+        assertEquals("red wall is -X, so red drivers face +X", 0, Field.driverForwardHeading(Alliance.RED), 1e-9);
+        assertEquals("blue wall is +X, so blue drivers face -X", Math.PI, Field.driverForwardHeading(Alliance.BLUE), 1e-9);
+    }
+
+    @Test
     public void tipArithmetic() {
         assertEquals("up-CELL starts with 3 NECTAR, so 3 POLLEN tip it", 3, Field.pollenNeededForFirstTip());
         assertEquals(28, Scoring.threeShotAutoPoints());

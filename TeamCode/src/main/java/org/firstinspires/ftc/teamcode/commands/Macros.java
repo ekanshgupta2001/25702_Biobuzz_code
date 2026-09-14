@@ -1,0 +1,526 @@
+package org.firstinspires.ftc.teamcode.commands;
+
+import static com.pedropathing.ivy.commands.Commands.conditional;
+import static com.pedropathing.ivy.commands.Commands.instant;
+import static com.pedropathing.ivy.commands.Commands.lazy;
+import static com.pedropathing.ivy.commands.Commands.waitUntil;
+import static com.pedropathing.ivy.groups.Groups.deadline;
+import static com.pedropathing.ivy.groups.Groups.parallel;
+import static com.pedropathing.ivy.groups.Groups.race;
+import static com.pedropathing.ivy.groups.Groups.sequential;
+
+import com.pedropathing.api.Paths;
+import com.pedropathing.ivy.Command;
+import com.pedropathing.math.Pose;
+import com.pedropathing.paths.Path;
+
+import org.firstinspires.ftc.teamcode.Robot;
+import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
+import org.firstinspires.ftc.teamcode.subsystems.Limelight;
+import org.firstinspires.ftc.teamcode.subsystems.Shooter;
+import org.firstinspires.ftc.teamcode.subsystems.Storage;
+import org.firstinspires.ftc.teamcode.util.math.Angles;
+
+import java.util.Locale;
+import java.util.function.BooleanSupplier;
+import java.util.function.Supplier;
+
+/**
+ * Multi-subsystem, one-button actions composed from the subsystems' own command factories.
+ *
+ * <p>Every macro follows four rules (docs/03 section 9; the Guide's lessons):
+ * <ol>
+ *   <li><b>Bounded.</b> Every wait is raced against a timeout on the robot's {@code Clock}
+ *       ({@link Waits}), so a macro can never hold its subsystems for the rest of the match.</li>
+ *   <li><b>Reports an outcome.</b> {@code begin(name)} at the start, {@code finish(...)} at the end,
+ *       and success is measured after the fact against a snapshot taken at the start: a perfect
+ *       drive that collected nothing is a failure.</li>
+ *   <li><b>Declares its resources through what it composes.</b> Requirements come from the
+ *       subsystem commands inside the group, so scheduling a macro suspends the default commands
+ *       it needs and ending it restores them. Nothing here touches hardware directly.</li>
+ *   <li><b>Builds vision paths lazily.</b> Paths are built inside {@code followLazyCommand}
+ *       suppliers at command start, never stored.</li>
+ * </ol>
+ *
+ * <p>Nothing here names a field location or a game piece: the season-specific targets (which HIVE
+ * CELL, which AprilTag IDs) are passed in by the OpMode from {@code game/}.
+ *
+ * <p><b>Aiming is the drivetrain's job on V1.</b> The shooter is fixed and fires out the rear
+ * ({@code Shooter.HEADING_OFFSET_RAD}), so {@link #aimHeading} is the one law that turns a target
+ * into a field heading, refined by a visible tag. {@link #aimAt} is the bounded one-shot turn;
+ * Teleop feeds the same law into {@code Drivetrain.setAimLock} so the driver can hold an aim while
+ * translating. {@link #shootOne()} and {@link #shootAll()} never require the drivetrain, so driving
+ * and aiming continue through a shot; {@link #aimAndShootAll} does both in sequence for autonomous.
+ */
+public class Macros {
+    // ---- Timeouts and tolerances (plain statics; edit and redeploy) ----
+    public static long INTAKE_TIMEOUT_MS = 8000;
+    /**
+     * Run the storage transport while intaking so pieces move rearward and make room. Whether the
+     * side wheels have to run for the channel to accept a piece is an open mechanism question
+     * (HANDOFF section 10); flip this if the mechanism self-feeds.
+     */
+    public static boolean INTAKE_RUNS_STORAGE = true;
+    public static long SHOOT_ONE_TIMEOUT_MS = 6000;
+    public static long SHOOT_ALL_TIMEOUT_MS = 20000;
+    public static long AIM_TIMEOUT_MS = 2500;
+    /** The robot counts as aimed within this of the wanted heading. */
+    public static double AIM_TOLERANCE_DEGREES = 2.0;
+    /** A one-shot aim re-issues Pedro's hold when the wanted heading moves by more than this. */
+    public static double AIM_REISSUE_DEGREES = 1.0;
+    /** A seen piece closer than this to the crosshair counts as aligned. */
+    public static double ALIGN_TOLERANCE_DEGREES = 1.5;
+    public static long PIPELINE_WARMUP_MS = 250;
+    public static long SEARCH_TIMEOUT_MS = 2000;
+    public static long APPROACH_TIMEOUT_MS = 4000;
+    public static long ALIGN_TIMEOUT_MS = 1500;
+    public static long RELOCALIZE_TIMEOUT_MS = 1500;
+    public static long SNAP_TIMEOUT_MS = 1500;
+    public static double SNAP_TOLERANCE_DEGREES = 3.0;
+    public static long DRIVE_TO_TIMEOUT_MS = 6000;
+    /** A drive-to counts as arrived within this of the target on both axes. */
+    public static double DRIVE_TO_TOLERANCE_INCHES = 3.0;
+
+    /** How the last macro finished. */
+    public enum Outcome { IDLE, RUNNING, SUCCESS, TIMED_OUT, NO_TARGET, CANCELLED }
+
+    private final Robot robot;
+    private Outcome outcome = Outcome.IDLE;
+    private String activeName = "idle";
+    private int shotsFired = 0;
+
+    public Macros(Robot robot) {
+        this.robot = robot;
+    }
+
+    // ---- State ----
+
+    public Outcome getOutcome() {
+        return outcome;
+    }
+
+    /** The running macro's name, or {@code "idle"}. */
+    public String getActiveName() {
+        return activeName;
+    }
+
+    public boolean isRunning() {
+        return outcome == Outcome.RUNNING;
+    }
+
+    /** Pieces the last shooting macro actually fired (per the sensors, or the pulse count). */
+    public int getShotsFired() {
+        return shotsFired;
+    }
+
+    /** Human-readable one-liner for telemetry. */
+    public String getStatus() {
+        return activeName + " : " + outcome;
+    }
+
+    /** Call when an operator aborts a macro, so the reported outcome reflects what happened. */
+    public void markCancelled() {
+        if (outcome == Outcome.RUNNING) outcome = Outcome.CANCELLED;
+        activeName = "idle";
+    }
+
+    /** Pieces currently in the robot: the storage queue plus one in the lift, if sensed. */
+    public int piecesOnBoard() {
+        return robot.storage.count() + (robot.transfer.hasPieceInLift() ? 1 : 0);
+    }
+
+    // ---- Plumbing shared by every macro ----
+
+    private Command begin(String name) {
+        return instant(() -> {
+            activeName = name;
+            outcome = Outcome.RUNNING;
+        });
+    }
+
+    private Command finish(Outcome success, Outcome failure, BooleanSupplier ok) {
+        return finishWith(() -> ok.getAsBoolean() ? success : failure);
+    }
+
+    private Command finishWith(Supplier<Outcome> result) {
+        return instant(() -> {
+            outcome = result.get();
+            activeName = "idle";
+        });
+    }
+
+    private Command waitMs(long ms) {
+        return Waits.waitMs(robot.getClock(), ms);
+    }
+
+    private Command bounded(Command work, long timeoutMs) {
+        return Waits.bounded(robot.getClock(), work, timeoutMs);
+    }
+
+    private static Command noop() {
+        return instant(() -> { });
+    }
+
+    // ---- Collecting ----
+
+    /**
+     * Runs the intake (and, by default, the storage transport) until the storage reports full or
+     * the timeout passes. NO_TARGET when the storage was already full.
+     */
+    public Command intakeUntilFull() {
+        final int[] countAtStart = new int[1];
+        final boolean[] alreadyFull = new boolean[1];
+        Command transport = INTAKE_RUNS_STORAGE
+                ? robot.storage.advanceUntilCommand(robot.storage::isFull, INTAKE_TIMEOUT_MS)
+                : noop();
+        Command work = race(
+                parallel(robot.intake.intakeCommand(), transport),
+                waitUntil(robot.storage::isFull),
+                waitMs(INTAKE_TIMEOUT_MS));
+        return sequential(
+                begin("intake"),
+                instant(() -> {
+                    countAtStart[0] = robot.storage.count();
+                    alreadyFull[0] = robot.storage.isFull();
+                }),
+                conditional(() -> !alreadyFull[0], work, noop()),
+                finishWith(() -> robot.storage.count() > countAtStart[0] ? Outcome.SUCCESS
+                        : alreadyFull[0] ? Outcome.NO_TARGET : Outcome.TIMED_OUT));
+    }
+
+    /**
+     * Blob pipeline, wait for a stable detection, drive to the piece while capturing, then restore
+     * the AprilTag pipeline. Success is a <em>new</em> piece: the storage count rose, or the intake
+     * captured something it did not already hold. With no camera this times out in
+     * {@link #PIPELINE_WARMUP_MS} + {@link #SEARCH_TIMEOUT_MS} without moving.
+     */
+    public Command collectPiece() {
+        final int[] countAtStart = new int[1];
+        final boolean[] hadPieceAtStart = new boolean[1];
+        BooleanSupplier capturedNew = () -> robot.storage.count() > countAtStart[0]
+                || (robot.intake.hasPiece() && !hadPieceAtStart[0]);
+        return sequential(
+                begin("collect"),
+                instant(() -> {
+                    countAtStart[0] = robot.storage.count();
+                    hadPieceAtStart[0] = robot.intake.hasPiece();
+                }),
+                instant(robot.limelight::activateBlobPipeline),
+                waitMs(PIPELINE_WARMUP_MS),
+                race(waitUntil(robot.limelight::hasStableBlob), waitMs(SEARCH_TIMEOUT_MS)),
+                // A race, not a deadline: race ends its losers INTERRUPTED, whereas deadline and
+                // parallel forward their own end condition, so a capture command inside a
+                // deadline that finished NATURALLY would be told it captured something.
+                race(
+                        robot.drivetrain.followLazyCommand(this::approachPath, false),
+                        robot.intake.captureCommand(),
+                        waitUntil(capturedNew),
+                        waitMs(APPROACH_TIMEOUT_MS)),
+                instant(robot.limelight::activateAprilTagPipeline),
+                finish(Outcome.SUCCESS, Outcome.TIMED_OUT, capturedNew));
+    }
+
+    /**
+     * Turns in place to face the seen piece (no path: a zero-length line is degenerate). NO_TARGET
+     * unless a stable blob ends up within {@link #AIM_TX_TOLERANCE_DEGREES} of the crosshair.
+     */
+    public Command alignToPiece() {
+        Command turn = lazy(() -> {
+            double heading = headingToBlob();
+            return Double.isNaN(heading) ? null : robot.drivetrain.turnToCommand(heading);
+        }).requiring(robot.drivetrain);   // lazy contributes no requirements of its own
+        return sequential(
+                begin("align"),
+                instant(robot.limelight::activateBlobPipeline),
+                waitMs(PIPELINE_WARMUP_MS),
+                race(waitUntil(robot.limelight::hasStableBlob), waitMs(SEARCH_TIMEOUT_MS)),
+                bounded(turn, ALIGN_TIMEOUT_MS),
+                instant(robot.limelight::activateAprilTagPipeline),
+                finish(Outcome.SUCCESS, Outcome.NO_TARGET, this::alignedToBlob));
+    }
+
+    // ---- Shooting ----
+
+    /**
+     * Spins up, moves one piece storage → transfer → flywheel, and idles the wheel. Holds the
+     * shooter for the whole feed ({@code holdSpeedCommand}) so the default command cannot wind it
+     * down under the piece. NO_TARGET with nothing on board.
+     */
+    public Command shootOne() {
+        final int[] shots = new int[1];
+        final boolean[] hadPieces = new boolean[1];
+        Command work = bounded(deadline(
+                sequential(robot.shooter.spinUpCommand(), feedOneCore(shots)),
+                robot.shooter.holdSpeedCommand()), SHOOT_ONE_TIMEOUT_MS);
+        return sequential(
+                begin("shootOne"),
+                instant(() -> {
+                    shots[0] = 0;
+                    shotsFired = 0;
+                    hadPieces[0] = piecesOnBoard() > 0;
+                }),
+                conditional(() -> hadPieces[0], work, noop()),
+                finishWith(() -> shots[0] >= 1 ? Outcome.SUCCESS
+                        : hadPieces[0] ? Outcome.TIMED_OUT : Outcome.NO_TARGET));
+    }
+
+    /**
+     * One spin-up, then every piece on board in turn. SUCCESS only when as many pieces were fired
+     * as were on board at the start; {@link #getShotsFired()} reports a partial run.
+     */
+    public Command shootAll() {
+        final int[] shots = new int[1];
+        final int[] onBoard = new int[1];
+        return sequential(
+                begin("shootAll"),
+                instant(() -> {
+                    shots[0] = 0;
+                    shotsFired = 0;
+                    onBoard[0] = piecesOnBoard();
+                }),
+                conditional(() -> onBoard[0] > 0, shootAllCore(shots, onBoard), noop()),
+                finishWith(() -> shootAllOutcome(shots[0], onBoard[0])));
+    }
+
+    /**
+     * {@link #aimAt} then {@link #shootAll()} as one bounded, reporting macro: the autonomous
+     * "empty the pre-loads into the up-CELL" move. Requires the drivetrain, storage, transfer and
+     * shooter for the whole run, so it is autonomous's move, not a teleop button.
+     */
+    public Command aimAndShootAll(Pose target, int minTagId, int maxTagId) {
+        final int[] shots = new int[1];
+        final int[] onBoard = new int[1];
+        return sequential(
+                begin("aimShootAll"),
+                instant(() -> {
+                    shots[0] = 0;
+                    shotsFired = 0;
+                    onBoard[0] = piecesOnBoard();
+                }),
+                conditional(() -> onBoard[0] > 0,
+                        sequential(aimCore(target, minTagId, maxTagId), shootAllCore(shots, onBoard)),
+                        noop()),
+                finishWith(() -> shootAllOutcome(shots[0], onBoard[0])));
+    }
+
+    private Command shootAllCore(int[] shots, int[] onBoard) {
+        // Unrolled to CAPACITY guarded steps rather than Ivy's repeat(): a sequential that is
+        // interrupted (by the timeout) before it reaches a Repeat child calls end() on the
+        // never-started Repeat, which NPEs on its null command list (docs/01 B.5 trap 8).
+        final int[] attempts = new int[1];
+        Command[] steps = new Command[Storage.CAPACITY + 1];
+        steps[0] = sequential(instant(() -> attempts[0] = 0), robot.shooter.spinUpCommand());
+        for (int i = 1; i <= Storage.CAPACITY; i++) {
+            steps[i] = conditional(() -> attempts[0] < onBoard[0],
+                    sequential(instant(() -> attempts[0]++), feedOneCore(shots)),
+                    noop());
+        }
+        return bounded(deadline(sequential(steps), robot.shooter.holdSpeedCommand()), SHOOT_ALL_TIMEOUT_MS);
+    }
+
+    private static Outcome shootAllOutcome(int shots, int onBoard) {
+        if (onBoard == 0) return Outcome.NO_TARGET;
+        if (shots == 0) return Outcome.TIMED_OUT;
+        return shots >= onBoard ? Outcome.SUCCESS : Outcome.TIMED_OUT;
+    }
+
+    /**
+     * The storage → transfer → flywheel hand-off for one piece; requires storage and transfer. The
+     * caller holds the shooter. Every per-shot flag is reset in the leading instant so no step
+     * can inherit a previous piece's state.
+     *
+     * <p>A shot is counted only when the sensors that exist agree: the exit sensor saw the piece
+     * leave the storage (or a piece was already in the lift), and the feed sensor saw it staged
+     * and then clear. Without an exit sensor the storage count is dead-reckoned down by one so a
+     * bench robot on timed pulses keeps an honest count and the intake interlock releases.
+     */
+    private Command feedOneCore(int[] shots) {
+        final int[] exitsAtStart = new int[1];
+        final boolean[] preloaded = new boolean[1];
+        final boolean[] staged = new boolean[1];
+        return sequential(
+                instant(() -> {
+                    exitsAtStart[0] = robot.storage.getExitEvents();
+                    preloaded[0] = robot.transfer.hasPieceInLift() || robot.transfer.pieceAtFeed();
+                    staged[0] = false;
+                }),
+                // advanceOne ends on the transfer sensor's rising edge (or its own timeout).
+                conditional(() -> preloaded[0], noop(), robot.storage.advanceOneCommand()),
+                robot.transfer.liftOneCommand(),
+                instant(() -> staged[0] = !robot.transfer.hasFeedSensor() || robot.transfer.pieceAtFeed()),
+                robot.transfer.feedCommand(),
+                instant(() -> {
+                    if (!pieceWasShot(exitsAtStart[0], preloaded[0], staged[0])) return;
+                    shots[0]++;
+                    shotsFired = shots[0];
+                    if (!robot.storage.hasExitSensor()) robot.storage.markExited();
+                }));
+    }
+
+    private boolean pieceWasShot(int exitsAtStart, boolean preloaded, boolean staged) {
+        boolean left = !robot.storage.hasExitSensor() || preloaded
+                || robot.storage.getExitEvents() > exitsAtStart;
+        boolean fed = !robot.transfer.hasFeedSensor() || (staged && !robot.transfer.pieceAtFeed());
+        return left && fed;
+    }
+
+    // ---- Aiming ----
+
+    /**
+     * The field heading the robot must hold so the shooter faces {@code target}. When a tag in
+     * {@code [minTagId, maxTagId]} is visible the bearing comes from its {@code tx} (heading +
+     * camera yaw - tx; tx is positive to the right), otherwise from odometry toward the point. The
+     * shooter's firing direction ({@code Shooter.HEADING_OFFSET_RAD}) is subtracted, so a rear-firing
+     * shooter turns its back to the target. NaN without a pose, or without a target and a tag.
+     */
+    public double aimHeading(Pose target, int minTagId, int maxTagId) {
+        Pose pose = robot.drivetrain.getPose();
+        if (pose == null) return Double.NaN;
+        double tx = robot.limelight.getTagTx(minTagId, maxTagId);
+        double bearing;
+        if (!Double.isNaN(tx)) {
+            bearing = pose.heading() + Math.toRadians(Limelight.CAMERA_YAW_OFFSET_DEGREES) - Math.toRadians(tx);
+        } else {
+            if (target == null) return Double.NaN;
+            bearing = Math.atan2(target.y() - pose.y(), target.x() - pose.x());
+        }
+        return Angles.normalizeAngle(bearing - Shooter.HEADING_OFFSET_RAD);
+    }
+
+    /**
+     * Turns in place until the shooter faces {@code target} (tag-refined when one is visible), then
+     * hands the sticks back. SUCCESS within {@link #AIM_TOLERANCE_DEGREES}; TIMED_OUT after
+     * {@link #AIM_TIMEOUT_MS}, or when no pose is available.
+     */
+    public Command aimAt(Pose target, int minTagId, int maxTagId) {
+        return sequential(
+                begin("aim"),
+                bounded(aimCore(target, minTagId, maxTagId), AIM_TIMEOUT_MS),
+                finish(Outcome.SUCCESS, Outcome.TIMED_OUT, () -> aimed(target, minTagId, maxTagId)));
+    }
+
+    /**
+     * Pedro's hold as the turn primitive (as {@code Drivetrain.turnToCommand}), re-issued whenever
+     * the wanted heading moves by more than {@link #AIM_REISSUE_DEGREES} so a tag can refine it.
+     * Requires the drivetrain; {@code setEnd} hands control back either way.
+     */
+    private Command aimCore(Pose target, int minTagId, int maxTagId) {
+        final long[] startedAt = new long[1];
+        final double[] commanded = new double[1];
+        return Command.build()
+                .setStart(() -> {
+                    startedAt[0] = robot.getClock().nowMs();
+                    commanded[0] = Double.NaN;
+                    reissueAim(target, minTagId, maxTagId, commanded);
+                })
+                .setExecute(() -> reissueAim(target, minTagId, maxTagId, commanded))
+                .setDone(() -> robot.getClock().nowMs() - startedAt[0] >= Drivetrain.MIN_PATH_MS
+                        && aimed(target, minTagId, maxTagId))
+                .setEnd(ec -> robot.drivetrain.cancelPath())
+                .requiring(robot.drivetrain);
+    }
+
+    private void reissueAim(Pose target, int minTagId, int maxTagId, double[] commanded) {
+        double wanted = aimHeading(target, minTagId, maxTagId);
+        if (Double.isNaN(wanted)) return;
+        if (!Double.isNaN(commanded[0])
+                && Math.abs(Angles.angleError(commanded[0], wanted)) < Math.toRadians(AIM_REISSUE_DEGREES)) {
+            return;
+        }
+        commanded[0] = wanted;
+        robot.drivetrain.holdHeading(wanted);
+    }
+
+    private boolean aimed(Pose target, int minTagId, int maxTagId) {
+        double wanted = aimHeading(target, minTagId, maxTagId);
+        return !Double.isNaN(wanted)
+                && robot.drivetrain.atHeading(wanted, Math.toRadians(AIM_TOLERANCE_DEGREES));
+    }
+
+    // ---- Localization and heading ----
+
+    /**
+     * AprilTag pipeline, wait for a trustworthy botpose, apply it. In BIOBUZZ every tag rides on a
+     * moving HIVE CELL, so this is expected to report NO_TARGET all season; it stays wired for a
+     * future static reference and costs nothing.
+     */
+    public Command relocalize() {
+        final boolean[] fixed = new boolean[1];
+        return sequential(
+                begin("relocalize"),
+                instant(() -> {
+                    fixed[0] = false;
+                    robot.limelight.activateAprilTagPipeline();
+                }),
+                waitMs(PIPELINE_WARMUP_MS),
+                race(waitUntil(() -> robot.limelight.getBotposeAsPedroPose() != null),
+                        waitMs(RELOCALIZE_TIMEOUT_MS)),
+                // The only explicit requirement in this class: nothing else here drives, and a
+                // pose write must not race the driver-control default command.
+                instant(() -> fixed[0] = robot.tryLocalizeFromAprilTag()).requiring(robot.drivetrain),
+                finish(Outcome.SUCCESS, Outcome.NO_TARGET, () -> fixed[0]));
+    }
+
+    /** Turns in place to an absolute heading; hands the follower back either way. */
+    public Command snapToHeading(double headingRadians) {
+        String name = String.format(Locale.US, "snapTo %.0f",
+                Math.toDegrees(Angles.normalizeAngle(headingRadians)));
+        return sequential(
+                begin(name),
+                bounded(robot.drivetrain.turnToCommand(headingRadians), SNAP_TIMEOUT_MS),
+                finish(Outcome.SUCCESS, Outcome.TIMED_OUT, () -> atHeading(headingRadians)));
+    }
+
+    /**
+     * Drives a straight Pedro path from the current pose to {@code target}, then hands the follower
+     * back. The path is built at start ({@code Paths.line(current, target)} with a linear heading
+     * sweep), so the target may be computed any time earlier. {@code holdEnd} is false: in teleop
+     * the driver-control default resumes the moment this releases the drivetrain, and in auto the
+     * next leg follows.
+     */
+    public Command driveTo(Pose target) {
+        return sequential(
+                begin("driveTo"),
+                bounded(robot.drivetrain.followLazyCommand(() -> lineTo(target), false), DRIVE_TO_TIMEOUT_MS),
+                finish(Outcome.SUCCESS, Outcome.TIMED_OUT, () -> robot.drivetrain.atPose(
+                        target, DRIVE_TO_TOLERANCE_INCHES, DRIVE_TO_TOLERANCE_INCHES)));
+    }
+
+    // ---- Private geometry helpers ----
+
+    /** Straight line from the current pose to {@code target}; null without a pose. */
+    private Path lineTo(Pose target) {
+        Pose current = robot.drivetrain.getPose();
+        if (current == null || target == null) return null;
+        return Paths.line(current, target).linear(current.heading(), target.heading());
+    }
+
+    /** Straight line from the current pose to the standoff pose in front of the seen piece. */
+    private Path approachPath() {
+        Pose current = robot.drivetrain.getPose();
+        if (current == null || !robot.limelight.hasStableBlob()) return null;
+        Pose target = robot.limelight.estimateBlobApproachPose(current);
+        if (target == null) return null;
+        return Paths.line(current, target).linear(current.heading(), target.heading());
+    }
+
+    private double headingToBlob() {
+        Pose current = robot.drivetrain.getPose();
+        if (current == null || !robot.limelight.hasStableBlob()) return Double.NaN;
+        double[] robotFrame = robot.limelight.estimateBlobInRobotFrame();
+        if (robotFrame == null) return Double.NaN;
+        return Angles.headingToward(current.heading(), robotFrame[0], robotFrame[1]);
+    }
+
+    private boolean alignedToBlob() {
+        return robot.limelight.hasStableBlob()
+                && Math.abs(robot.limelight.getFilteredBlobTx()) <= ALIGN_TOLERANCE_DEGREES;
+    }
+
+    private boolean atHeading(double headingRadians) {
+        Pose pose = robot.drivetrain.getPose();
+        if (pose == null) return false;
+        double errorDegrees = Math.toDegrees(Angles.angleError(pose.heading(), headingRadians));
+        return Math.abs(errorDegrees) <= SNAP_TOLERANCE_DEGREES;
+    }
+}

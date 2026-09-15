@@ -52,8 +52,14 @@ public class Drivetrain {
      * localizer's heading; {@link #resetHeading()} is the driver's escape hatch.
      */
     public static boolean HEADING_HOLD_ENABLED = true;
-    /** Turn-stick magnitude above which the driver is considered to be steering. */
-    public static double HEADING_HOLD_STICK_DEADBAND = 0.05;
+    /**
+     * Turn-stick magnitude above which the driver is considered to be steering. The stick arrives
+     * already shaped ({@code DriveScaling.shape}: 0.07 raw deadband, then square expo, then the slow
+     * scale), so noise is already zero and any non-zero value is intent. A larger figure here is
+     * compared against the <em>shaped</em> value: 0.05 meant a raw deflection up to ~0.28 (0.45 in
+     * slow mode) was thrown away and the hold fought the driver's small corrections.
+     */
+    public static double HEADING_HOLD_STICK_DEADBAND = 0.001;
     /** Error is in RADIANS here, so a gain of 1.5 maps 10 degrees (0.17 rad) to ~0.26 turn power. */
     public static double HEADING_HOLD_P = 1.5;
     public static double HEADING_HOLD_I = 0.0;

@@ -390,6 +390,20 @@ public class DrivetrainCommandTest {
     }
 
     @Test
+    public void aSmallDeliberateTurnReleasesTheHold() {
+        // The stick arrives shaped (deadband and expo already applied), so a tiny non-zero value is
+        // a real, gentle correction by the driver, not noise. The hold must get out of the way.
+        fake.pose = new Pose(0, 0, 1.0);
+        driverControl().schedule();
+        tick();
+        assertTrue(drivetrain.isHeadingHoldActive());
+        turnStick = 0.01;
+        tick();
+        assertFalse(drivetrain.isHeadingHoldActive());
+        assertEquals("passed through, not replaced by a correction", 0.01, fake.lastTurn, EPS);
+    }
+
+    @Test
     public void resetHeadingReleasesTheHoldInsteadOfSpinningTheRobot() {
         fake.pose = new Pose(0, 0, 1.5);
         driverControl().schedule();

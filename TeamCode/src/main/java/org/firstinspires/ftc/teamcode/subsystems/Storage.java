@@ -57,6 +57,7 @@ public class Storage {
     private BooleanSupplier fullSupplier = () -> false;
     private BooleanSupplier exitSupplier = () -> false;
     private boolean exitSensorFitted = false;
+    private boolean entranceSensorFitted = false;
     private boolean lastEntrance = false;
     private boolean lastExit = false;
 
@@ -86,9 +87,23 @@ public class Storage {
 
     // ---- Sensors ----
 
-    /** "A piece is at the storage entrance." Counted on the rising edge. */
+    /**
+     * "A piece is at the storage entrance." Counted on the rising edge. {@code null} means no
+     * entrance sensor is fitted: the count then only changes through {@link #setCount} (auto's
+     * pre-loads, the auto-to-teleop hand-off) and the shooting macro's dead-reckoning, so a
+     * teleop robot without one cannot know how many pieces it holds (see {@link #hasEntranceSensor()}).
+     */
     public void setEntranceSupplier(BooleanSupplier supplier) {
+        this.entranceSensorFitted = supplier != null;
         this.entranceSupplier = supplier == null ? () -> false : supplier;
+    }
+
+    /**
+     * False when no entrance sensor is wired: the count cannot rise on its own, so a zero count
+     * means "unknown", not "empty". {@code Macros.piecesOnBoard()} shoots blind in that case.
+     */
+    public boolean hasEntranceSensor() {
+        return entranceSensorFitted;
     }
 
     /** "The last slot is occupied." Makes {@link #isFull()} true regardless of the count. */

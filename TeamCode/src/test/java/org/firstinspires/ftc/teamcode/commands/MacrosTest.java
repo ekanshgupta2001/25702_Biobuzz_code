@@ -148,7 +148,8 @@ public class MacrosTest {
     // ---- Shooting ----
 
     @Test
-    public void shootOneReportsNoTargetWhenNothingIsOnBoard() {
+    public void shootOneReportsNoTargetWhenTheEntranceSensorSaysEmpty() {
+        robot.storage.setEntranceSupplier(() -> false);     // a sensor is fitted and sees nothing
         runToCompletion(robot.macros.shootOne());
         assertEquals(Macros.Outcome.NO_TARGET, robot.macros.getOutcome());
         assertEquals("idle", robot.macros.getActiveName());
@@ -248,9 +249,95 @@ public class MacrosTest {
     }
 
     @Test
-    public void shootAllReportsNoTargetWhenEmpty() {
+    public void shootAllReportsNoTargetWhenTheEntranceSensorSaysEmpty() {
+        robot.storage.setEntranceSupplier(() -> false);
         runToCompletion(robot.macros.shootAll());
         assertEquals(Macros.Outcome.NO_TARGET, robot.macros.getOutcome());
+    }
+
+    @Test
+    public void shootOneFiresOnePulseWhenTheCountIsUnknowable() {
+        // The first-event robot: no entrance sensor, so the count never rises in teleop. Refusing
+        // to shoot would make the operator's button useless; it fires one metered pulse instead.
+        assertFalse(robot.storage.hasEntranceSensor());
+        assertFalse(robot.macros.isCountKnown());
+        assertEquals(Storage.CAPACITY, robot.macros.piecesOnBoard());
+        shooterAtSpeed();
+        runToCompletion(robot.macros.shootOne());
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        assertEquals(1, robot.macros.getShotsFired());
+        assertEquals("the transfer fed at feed speed", Transfer.FEED_TICKS_PER_SEC, transferMotor.maxCommandedVelocity, EPS);
+        assertEquals("the transport pulsed with it", Storage.ADVANCE_TICKS_PER_SEC, storageMotor.maxCommandedVelocity, EPS);
+        assertEquals("count clamps at zero, still unknown", 0, robot.storage.count());
+        assertEquals(0, transferMotor.commandedVelocity, EPS);
+    }
+
+    @Test
+    public void shootAllEmptiesTheRobotWithFourPulsesWhenTheCountIsUnknowable() {
+        shooterAtSpeed();
+        runToCompletion(robot.macros.shootAll());
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        assertEquals("one pulse per slot the robot could be holding", Storage.CAPACITY, robot.macros.getShotsFired());
+    }
+
+    @Test
+    public void aKnownCountIsShotExactlyEvenWithoutAnEntranceSensor() {
+        robot.storage.setCount(2);                            // the auto-to-teleop hand-off
+        assertTrue(robot.macros.isCountKnown());
+        shooterAtSpeed();
+        runToCompletion(robot.macros.shootAll());
+        assertEquals(2, robot.macros.getShotsFired());
+        assertEquals(0, robot.storage.count());
+    }
+
+    @Test
+    public void shootAllShootsAPieceWaitingInTheLiftToo() {
+        // 4 in the queue + 1 already lifted = 5: one more feed step than the storage holds.
+        robot.transfer.setInLiftSupplier(() -> true);
+        robot.storage.setCount(4);
+        shooterAtSpeed();
+        runToCompletion(robot.macros.shootAll());
+        assertEquals(5, robot.macros.getShotsFired());
+        assertEquals("five on board, five fired", Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+    }
+
+    @Test
+    public void shootOneDoesNotWaitForRecoveryAfterItsOnlyShot() {
+        // The wheel never reads at speed, so every wait runs to its timeout: spin-up 3 s, the pulse,
+        // then only the 150 ms dwell. A 1.5 s recovery wait after the last piece would be dead time.
+        robot.storage.setCount(2);
+        int ticks = runToCompletion(robot.macros.shootOne());
+        long ms = ticks * 20L;
+        long withRecovery = Shooter.SPINUP_TIMEOUT_MS + Macros.SENSORLESS_FEED_PULSE_MS
+                + Shooter.SHOT_RECOVERY_MIN_MS + Shooter.SHOT_RECOVERY_TIMEOUT_MS;
+        assertTrue("finished in " + ms + " ms, must be well under " + withRecovery, ms < withRecovery - 1000);
+        assertTrue("but not before the dwell", ms >= Shooter.SPINUP_TIMEOUT_MS
+                + Macros.SENSORLESS_FEED_PULSE_MS + Shooter.SHOT_RECOVERY_MIN_MS);
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+    }
+
+    @Test
+    public void shootAllWaitsForRecoveryOnlyBetweenPieces() {
+        robot.storage.setCount(2);                            // never at speed: every wait times out
+        int ticks = runToCompletion(robot.macros.shootAll());
+        long ms = ticks * 20L;
+        long perPiece = Macros.SENSORLESS_FEED_PULSE_MS + Shooter.SHOT_RECOVERY_MIN_MS;
+        long expected = Shooter.SPINUP_TIMEOUT_MS + 2 * perPiece + Shooter.SHOT_RECOVERY_TIMEOUT_MS;  // one recovery, between
+        // Ivy hands off one child per tick, so a few dozen 20 ms ticks of overhead ride on top; a
+        // second full recovery would add another SHOT_RECOVERY_TIMEOUT_MS, which is what is ruled out.
+        assertTrue("took " + ms + " ms, expected about " + expected, ms >= expected && ms < expected + 1000);
+        assertEquals(2, robot.macros.getShotsFired());
+    }
+
+    @Test
+    public void markCancelledLeavesAFinishedMacroAlone() {
+        robot.storage.setCount(1);
+        shooterAtSpeed();
+        runToCompletion(robot.macros.shootOne());
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        robot.macros.markCancelled();                          // a late callback from an old group
+        assertEquals("a terminal outcome is never changed", Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        assertEquals("idle", robot.macros.getActiveName());
     }
 
     @Test
@@ -408,6 +495,19 @@ public class MacrosTest {
         assertEquals(Macros.Outcome.TIMED_OUT, robot.macros.getOutcome());
         assertTrue(ticks >= Macros.AIM_TIMEOUT_MS / 20);
         assertEquals(Follower.Mode.MANUAL, follower.mode);
+    }
+
+    @Test
+    public void aimAndShootAllGivesUpAimingAfterTheTimeoutAndStillShoots() {
+        follower.pose = Pose.zero();                          // and the robot never turns
+        robot.storage.setCount(2);
+        shooterAtSpeed();
+        int ticks = runToCompletion(robot.macros.aimAndShootAll(new Pose(72, 72), 30, 45));
+        long ms = ticks * 20L;
+        assertTrue("the aim is bounded: " + ms + " ms", ms < Macros.AIM_TIMEOUT_MS + 2 * Macros.SENSORLESS_FEED_PULSE_MS + 3000);
+        assertEquals("a held piece scores nothing: it shot anyway", 2, robot.macros.getShotsFired());
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        assertEquals("the hold was released", Follower.Mode.MANUAL, follower.mode);
     }
 
     @Test

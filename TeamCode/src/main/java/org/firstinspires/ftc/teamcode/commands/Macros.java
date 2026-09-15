@@ -60,6 +60,12 @@ import java.util.function.Supplier;
  * storage transport and the transfer run <em>together</em> for {@link #SENSORLESS_FEED_PULSE_MS},
  * then the macro waits for the flywheel to recover before the next piece. The side wheels never push
  * the queue into a stopped transfer, and {@link #getShotsFired()} is honestly a pulse count.
+ *
+ * <p><b>Without a storage-entrance sensor the count is unknowable in teleop</b> (it only rises on
+ * that sensor's edge or through {@code setCount}), so {@link #piecesOnBoard()} treats a zero count as
+ * "assume full": Shoot One always fires one pulse and Shoot All fires {@code Storage.CAPACITY} of
+ * them (the operator cancels early with the stop button). A robot that refuses to shoot because it
+ * cannot count is useless at an event; a spare pulse on an empty channel costs nothing.
  */
 public class Macros {
     // ---- Timeouts and tolerances (plain statics; edit and redeploy) ----
@@ -139,13 +145,29 @@ public class Macros {
      * follower and pipeline cleanup that Ivy cannot do.
      */
     public void markCancelled() {
-        if (outcome == Outcome.RUNNING) outcome = Outcome.CANCELLED;
-        activeName = "idle";
+        // Both inside the guard: a late callback from an already-finished macro must not blank the
+        // name of one that is running.
+        if (outcome == Outcome.RUNNING) {
+            outcome = Outcome.CANCELLED;
+            activeName = "idle";
+        }
     }
 
-    /** Pieces currently in the robot: the storage queue plus one in the lift, if sensed. */
+    /**
+     * Pieces currently in the robot: the storage queue plus one in the lift, if sensed. Without a
+     * storage-entrance sensor a zero count is "unknown", not "empty", and this returns
+     * {@code Storage.CAPACITY} so the shooting macros fire blind (see the class doc).
+     */
     public int piecesOnBoard() {
-        return robot.storage.count() + (robot.transfer.hasPieceInLift() ? 1 : 0);
+        int known = robot.storage.count() + (robot.transfer.hasPieceInLift() ? 1 : 0);
+        if (known == 0 && !robot.storage.hasEntranceSensor()) return Storage.CAPACITY;
+        return known;
+    }
+
+    /** False when the count is a guess: no entrance sensor and nothing set the count this OpMode. */
+    public boolean isCountKnown() {
+        return robot.storage.hasEntranceSensor() || robot.storage.count() > 0
+                || robot.transfer.hasPieceInLift();
     }
 
     // ---- Plumbing shared by every macro ----
@@ -283,7 +305,7 @@ public class Macros {
         final int[] shots = new int[1];
         final boolean[] hadPieces = new boolean[1];
         Command work = bounded(deadline(
-                sequential(robot.shooter.waitForSpeedCommand(), feedOneCore(shots)),
+                sequential(robot.shooter.waitForSpeedCommand(), feedOneCore(shots, () -> false)),
                 robot.shooter.holdSpeedCommand()), SHOOT_ONE_TIMEOUT_MS);
         return reporting("shootOne",
                 sequential(
@@ -330,8 +352,12 @@ public class Macros {
                             shotsFired = 0;
                             onBoard[0] = piecesOnBoard();
                         }),
+                        // The aim is bounded like every other wait; if the robot cannot settle
+                        // within AIM_TOLERANCE_DEGREES in time it shoots anyway: in autonomous a
+                        // piece kept on board scores nothing, a near miss might.
                         conditional(() -> onBoard[0] > 0,
-                                sequential(aimCore(target, minTagId, maxTagId), shootAllCore(shots, onBoard)),
+                                sequential(bounded(aimCore(target, minTagId, maxTagId), AIM_TIMEOUT_MS),
+                                        shootAllCore(shots, onBoard)),
                                 noop())),
                 () -> shootAllOutcome(shots[0], onBoard[0]));
     }
@@ -340,12 +366,16 @@ public class Macros {
         // Unrolled to CAPACITY guarded steps rather than Ivy's repeat(): a sequential that is
         // interrupted (by the timeout) before it reaches a Repeat child calls end() on the
         // never-started Repeat, which NPEs on its null command list (docs/01 B.5 trap 8).
+        // CAPACITY + 1 feed steps: the queue holds CAPACITY and the lift can hold one more.
         final int[] attempts = new int[1];
-        Command[] steps = new Command[Storage.CAPACITY + 1];
+        final int feedSteps = Storage.CAPACITY + 1;
+        Command[] steps = new Command[feedSteps + 1];
         steps[0] = sequential(instant(() -> attempts[0] = 0), robot.shooter.waitForSpeedCommand());
-        for (int i = 1; i <= Storage.CAPACITY; i++) {
+        for (int i = 1; i <= feedSteps; i++) {
+            // attempts is bumped before the feed, so "more pieces" is judged after this one.
             steps[i] = conditional(() -> attempts[0] < onBoard[0],
-                    sequential(instant(() -> attempts[0]++), feedOneCore(shots)),
+                    sequential(instant(() -> attempts[0]++),
+                            feedOneCore(shots, () -> attempts[0] < onBoard[0])),
                     noop());
         }
         // holdSpeedCommand is the only child that requires the shooter (fixthese C7).
@@ -369,8 +399,12 @@ public class Macros {
      * into a stopped transfer for seconds at a time (fixthese B2). Either way the shot is counted
      * only when the sensors that exist agree, and without an exit sensor the storage count is
      * dead-reckoned down by one so the intake interlock releases.
+     *
+     * @param morePieces read after the hand-off: true when another piece follows, so the flywheel
+     *                   recovery is waited for; false after the last piece, when only the short
+     *                   dwell runs (nothing is fed into a slowed wheel, so nothing to wait for).
      */
-    private Command feedOneCore(int[] shots) {
+    private Command feedOneCore(int[] shots, BooleanSupplier morePieces) {
         final int[] exitsAtStart = new int[1];
         final boolean[] preloaded = new boolean[1];
         final boolean[] staged = new boolean[1];
@@ -390,7 +424,7 @@ public class Macros {
                     staged[0] = !robot.transfer.hasFeedSensor();
                 }),
                 handoff,
-                flywheelRecovery(),
+                afterShot(morePieces),
                 instant(() -> {
                     if (!pieceWasShot(exitsAtStart[0], preloaded[0], staged[0])) return;
                     shots[0]++;
@@ -417,12 +451,18 @@ public class Macros {
     }
 
     /**
-     * After a piece has gone through the wheel: a short minimum so the speed dip has begun, then
-     * wait for the wheel to come back up, bounded. A second piece fed into a slowed wheel is a short
-     * shot. Nothing to wait for without a shooter.
+     * After a piece has gone through the wheel. With another piece to come: a short minimum so the
+     * speed dip has begun, then wait for the wheel to come back up, bounded (a second piece fed into
+     * a slowed wheel is a short shot). After the last piece: only the minimum dwell, so the wheel is
+     * never idled with the piece still in it, but no time is spent waiting for a recovery nobody
+     * needs. Nothing to wait for without a shooter.
      */
-    private Command flywheelRecovery() {
+    private Command afterShot(BooleanSupplier morePieces) {
         if (!robot.shooter.isAvailable()) return noop();
+        return conditional(morePieces, flywheelRecovery(), waitMs(Shooter.SHOT_RECOVERY_MIN_MS));
+    }
+
+    private Command flywheelRecovery() {
         return sequential(
                 waitMs(Shooter.SHOT_RECOVERY_MIN_MS),
                 race(waitUntil(robot.shooter::atSpeed), waitMs(Shooter.SHOT_RECOVERY_TIMEOUT_MS)));

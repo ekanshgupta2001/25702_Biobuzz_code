@@ -179,14 +179,17 @@ public class Robot {
      * of them after construction.
      */
     private void wireSuppliers() {
-        intake.setCapturedSupplier(this::pieceAtStorageEntrance);
+        // Storage and Transfer keep null as "no sensor fitted". Entrance: the count then cannot
+        // rise, so zero means "unknown" and the shooting macros fire blind rather than refusing
+        // (an operator without a sensor still has to be able to shoot). Exit: the count is
+        // dead-reckoned down by the shooting macro. Feed: the transfer falls back to timed pulses.
+        // Never pass an always-false supplier for any of these.
+        boolean entrance = storageEntranceSensor.isAvailable();
+        intake.setCapturedSupplier(entrance ? this::pieceAtStorageEntrance : null);
         intake.setFullSupplier(storage::isFull);                    // G407: roller held still at 4
-        storage.setEntranceSupplier(this::pieceAtStorageEntrance);  // rising edge -> count + 1
+        storage.setEntranceSupplier(entrance ? this::pieceAtStorageEntrance : null);  // rising edge -> count + 1
         storage.setFullSupplier(this::storageFullSensorSees);       // ORed with count >= CAPACITY
         transfer.setInLiftSupplier(this::pieceInTransfer);
-        // Storage and Transfer keep null as "no sensor fitted": the storage count is then
-        // dead-reckoned down by the shooting macro, and the transfer falls back to timed pulses,
-        // so a bench robot without those sensors still cycles. Never pass an always-false supplier.
         storage.setExitSupplier(transferSensor.isAvailable() ? this::pieceInTransfer : null);
         transfer.setAtFeedSupplier(shooterFeedSensor.isAvailable() ? this::pieceAtShooterFeed : null);
     }

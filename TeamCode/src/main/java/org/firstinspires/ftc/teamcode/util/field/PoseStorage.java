@@ -3,7 +3,7 @@ package org.firstinspires.ftc.teamcode.util.field;
 import com.pedropathing.math.Pose;
 
 /**
- * Carries the robot's pose and alliance from autonomous into teleop.
+ * Carries the robot's pose, alliance and piece count from autonomous into teleop.
  *
  * <p>Without this, teleop starts with no idea where the robot is — and it defaults to field-centric
  * drive, which is the mode that depends most on a correct heading. The driver's first stick input
@@ -20,6 +20,8 @@ public final class PoseStorage {
     private static volatile Pose pose = null;
     private static volatile Alliance alliance = null;
     private static volatile StartPosition startPosition = null;
+    /** Pieces still in the robot when the previous OpMode ended; {@code -1} = never recorded. */
+    private static volatile int pieceCount = -1;
 
     private PoseStorage() {}
 
@@ -28,6 +30,17 @@ public final class PoseStorage {
         if (currentPose != null) pose = currentPose;
         if (currentAlliance != null) alliance = currentAlliance;
         if (start != null) startPosition = start;
+    }
+
+    /**
+     * As {@link #save(Pose, Alliance, StartPosition)}, plus how many pieces the robot still holds.
+     * Teleop seeds its storage count from it: a cut autonomous that shot two of four must not start
+     * teleop believing the robot is empty (G407's interlock would then be two pieces off), and a
+     * robot without an entrance sensor has no other way to know.
+     */
+    public static void save(Pose currentPose, Alliance currentAlliance, StartPosition start, int pieces) {
+        save(currentPose, currentAlliance, start);
+        if (pieces >= 0) pieceCount = pieces;
     }
 
     /** The pose left by the previous OpMode, or {@code null} if there isn't one. */
@@ -54,10 +67,21 @@ public final class PoseStorage {
         return startPosition;
     }
 
+    /** True when a previous OpMode recorded how many pieces the robot holds. */
+    public static boolean hasPieceCount() {
+        return pieceCount >= 0;
+    }
+
+    /** Pieces left on board by the previous OpMode, or {@code -1} if never recorded. */
+    public static int getPieceCount() {
+        return pieceCount;
+    }
+
     /** Forgets everything. Call when starting a genuinely new match. */
     public static void clear() {
         pose = null;
         alliance = null;
         startPosition = null;
+        pieceCount = -1;
     }
 }

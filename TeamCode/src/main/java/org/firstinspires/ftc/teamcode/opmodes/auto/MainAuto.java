@@ -13,8 +13,8 @@ import org.firstinspires.ftc.teamcode.util.time.MatchClock;
 
 /**
  * The autonomous OpMode. Runs {@link AutoSelector} during init, schedules {@link AutoRoutine} on
- * start, writes {@link PoseStorage} every loop so teleop inherits the alliance (and the pose, once
- * there is one), and stops everything at the buzzer.
+ * start, writes {@link PoseStorage} every loop so teleop inherits the alliance, the piece count
+ * (and the pose, once there is one), and stops everything at the buzzer.
  *
  * <p>This is the hardcoded first-competition version: no localizer, no paths. The robot is placed
  * touching its wall with the shooter (rear) toward the up-facing CELL; the routine shoots the four
@@ -92,12 +92,14 @@ public class MainAuto extends MatchOpMode {
     @Override
     protected void onAfterAct() {
         // Every loop, not once at the end: if this OpMode is stopped early, teleop still inherits.
-        PoseStorage.save(robot.drivetrain.getPose(), selector.getAlliance(), selector.getStart());
+        PoseStorage.save(robot.drivetrain.getPose(), selector.getAlliance(), selector.getStart(),
+                robot.storage.count());
     }
 
     @Override
     protected void onStop() {
-        PoseStorage.save(robot.drivetrain.getPose(), selector.getAlliance(), selector.getStart());
+        PoseStorage.save(robot.drivetrain.getPose(), selector.getAlliance(), selector.getStart(),
+                robot.storage.count());
     }
 
     @Override

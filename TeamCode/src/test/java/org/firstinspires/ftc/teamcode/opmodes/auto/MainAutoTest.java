@@ -181,6 +181,21 @@ public class MainAutoTest {
     }
 
     @Test
+    public void handsThePieceCountToTeleop() {
+        op.init();
+        op.init_loop();
+        op.start();
+        loop();
+        assertTrue(PoseStorage.hasPieceCount());
+        assertEquals("four pre-loads on record from the first loop", 4, PoseStorage.getPieceCount());
+        loopUntil(() -> robot.macros.getShotsFired() >= 2);
+        assertEquals("kept current every loop", robot.storage.count(), PoseStorage.getPieceCount());
+        op.stop();                                           // a cut auto
+        assertEquals(robot.storage.count(), PoseStorage.getPieceCount());
+        assertTrue(PoseStorage.getPieceCount() < 4);
+    }
+
+    @Test
     public void theBuzzerStopsARunningRoutine() {
         MatchClock.AUTONOMOUS_MS = 1000;             // a one-second "period"
         op.init();

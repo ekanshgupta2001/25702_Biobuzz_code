@@ -31,6 +31,7 @@ import org.firstinspires.ftc.teamcode.util.field.Alliance;
 import org.firstinspires.ftc.teamcode.util.field.PoseStorage;
 import org.firstinspires.ftc.teamcode.util.field.StartPosition;
 import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
+import org.firstinspires.ftc.teamcode.util.math.DriveScaling;
 import org.firstinspires.ftc.teamcode.util.time.FakeClock;
 import org.junit.After;
 import org.junit.Before;
@@ -183,6 +184,18 @@ public class TeleopTest {
     }
 
     @Test
+    public void aLightTurnStickIsNotSwallowedByTheHold() {
+        initAndStart();
+        loop();                                             // centred sticks: the hold captures
+        assertTrue(robot.drivetrain.isHeadingHoldActive());
+        press(op.gamepad1, g -> g.right_stick_x = -0.2f);   // a small, deliberate turn to the left
+        loop();
+        assertFalse("the driver is steering", robot.drivetrain.isHeadingHoldActive());
+        assertEquals("the shaped stick reaches the follower unchanged",
+                DriveScaling.shape(0.2), follower.lastTurn, 1e-6);
+    }
+
+    @Test
     public void redForwardIsFieldPlusX() {
         PoseStorage.save(new Pose(0, 0, 0), Alliance.RED, StartPosition.FACING_HIVE);
         initAndStart();
@@ -292,6 +305,23 @@ public class TeleopTest {
     }
 
     // ---- Operator ----
+
+    @Test
+    public void operatorShootOneFeedsOnASensorlessRobot() {
+        // No entrance sensor, nothing from auto: the count is unknown, and the button must still work.
+        initAndStart();
+        shooterMotor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM);
+        loop();
+        assertTrue(telemetry.joined(), telemetry.contains("Pieces: ?"));
+        press(op.gamepad2, g -> g.right_trigger = 1f);     // SHOOT_ONE
+        loop();
+        assertEquals("shootOne", robot.macros.getActiveName());
+        release(op.gamepad2);
+        loopUntilMacroDone();
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        assertEquals(1, robot.macros.getShotsFired());
+        assertEquals(Transfer.FEED_TICKS_PER_SEC, transferMotor.maxCommandedVelocity, EPS);
+    }
 
     @Test
     public void operatorIntakeButtonsGoThroughCommands() {
@@ -410,6 +440,16 @@ public class TeleopTest {
         assertEquals(Math.PI, follower.pose.heading(), EPS);
         assertTrue(telemetry.contains("RED (from auto)"));
         assertTrue("red starts on the audience-side CELL", telemetry.contains("tags 34-37"));
+    }
+
+    @Test
+    public void inheritsThePieceCountLeftByAuto() {
+        PoseStorage.save(null, Alliance.RED, StartPosition.FACING_HIVE, 2);   // a cut auto: two left
+        op.init();
+        op.init_loop();
+        assertEquals(2, robot.storage.count());
+        assertTrue(robot.macros.isCountKnown());
+        assertTrue(telemetry.joined(), telemetry.contains("Pieces: 2/4  (from auto)"));
     }
 
     @Test

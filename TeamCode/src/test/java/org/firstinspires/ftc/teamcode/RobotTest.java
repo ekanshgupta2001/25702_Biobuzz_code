@@ -149,6 +149,8 @@ public class RobotTest {
         assertFalse(robot.transfer.hasFeedSensor());
         assertFalse(robot.transfer.pieceAtFeed());
         assertFalse("no transfer sensor: the storage count cannot decrement itself", robot.storage.hasExitSensor());
+        assertFalse("no entrance sensor: the count cannot rise, so zero is unknown", robot.storage.hasEntranceSensor());
+        assertFalse(robot.macros.isCountKnown());
     }
 
     @Test

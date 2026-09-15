@@ -67,6 +67,7 @@ public class Teleop extends MatchOpMode {
     /** Where the current alliance came from, for the init card: default, auto, or the dpad. */
     private String allianceSource = "default";
     private boolean inheritedPose = false;
+    private boolean inheritedCount = false;
     private boolean localized = false;
     private boolean localizeTried = false;
     private long lastLocalizeTryMs = 0;
@@ -131,6 +132,12 @@ public class Teleop extends MatchOpMode {
             alliance = PoseStorage.getAlliance();
             allianceSource = "from auto";
         }
+        // The pieces auto left on board. Without an entrance sensor this is the only way teleop's
+        // count can ever be right; with one it carries a cut auto's remainder across.
+        if (PoseStorage.hasPieceCount()) {
+            robot.storage.setCount(PoseStorage.getPieceCount());
+            inheritedCount = true;
+        }
         applyAlliance();
         lastCount = robot.storage.count();
     }
@@ -165,6 +172,7 @@ public class Teleop extends MatchOpMode {
         }
         telemetry.addData("Alliance", alliance + " (" + allianceSource + ")  dpad left/right to change");
         telemetry.addData("Pose from auto?", inheritedPose ? "yes" : "no - press Y once facing away from the driver wall");
+        telemetry.addData("Pieces", piecesLine() + (inheritedCount ? "  (from auto)" : ""));
         telemetry.addData("Localized?", localized ? "yes" : "no (odometry only this season)");
         int[] tags = tagRange();
         telemetry.addData("Aim target", alliance + " " + targetSide() + " CELL, tags " + tags[0] + "-" + tags[1]);
@@ -447,8 +455,7 @@ public class Teleop extends MatchOpMode {
     private void matchTelemetry() {
         MatchClock clock = robot.getMatchClock();
         telemetry.addData("Time", clock == null ? "-" : clock.getStatus());
-        telemetry.addData("Pieces", robot.macros.piecesOnBoard() + "/" + Storage.CAPACITY
-                + (robot.storage.isFull() ? "  FULL" : ""));
+        telemetry.addData("Pieces", piecesLine());
         telemetry.addData("Macro", robot.macros.getStatus());
         telemetry.addData("Drive", driveStatus());
         telemetry.addData("Aim", (robot.drivetrain.isAimLocked() ? "LOCKED on " : Controls.AIM_LOCK.button() + " aims at ")
@@ -469,6 +476,18 @@ public class Teleop extends MatchOpMode {
         if (!DEBUG_TELEMETRY) {
             telemetry.addLine("(" + Controls.TOGGLE_DEBUG.button() + " on gamepad 2 for debug)");
         }
+    }
+
+    /**
+     * The count as the drivers should read it. Without an entrance sensor and nothing on record the
+     * robot cannot know, and says so rather than showing a guess as a fact.
+     */
+    private String piecesLine() {
+        if (!robot.macros.isCountKnown()) {
+            return "?  (no entrance sensor: " + Controls.SHOOT_ONE.button() + " = 1 pulse, "
+                    + Controls.SHOOT_ALL.button() + " = " + Storage.CAPACITY + ")";
+        }
+        return robot.macros.piecesOnBoard() + "/" + Storage.CAPACITY + (robot.storage.isFull() ? "  FULL" : "");
     }
 
     /** Everything else. Useful in the pit and at practice; noise during a match. */

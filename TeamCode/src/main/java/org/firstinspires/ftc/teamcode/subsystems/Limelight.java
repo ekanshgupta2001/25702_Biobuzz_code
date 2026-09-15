@@ -39,6 +39,21 @@ import java.util.List;
 public class Limelight {
     /** Added to the tag-derived yaw, for a camera whose forward axis is not the robot's. */
     public static double BOTPOSE_HEADING_OFFSET_RAD = 0.0;
+    /**
+     * Set true only after the camera mount constants below have been measured on the built robot
+     * ({@code Bench: Limelight}, estimated distance against a tape measure). Until then the
+     * approach-pose geometry is a guess, and Teleop refuses the collect/align macros rather than
+     * drive four seconds toward a wrong spot.
+     */
+    public static boolean MOUNT_CALIBRATED = false;
+    /**
+     * Set true only once the Limelight field frame has been checked against ours on a real field.
+     * The Limelight's frame has its origin at the field centre with X along the red wall; ours has
+     * its origin at the A1 corner with +X toward column F. The conversion in
+     * {@link #getBotposeAsPedroPose()} adds the half-field offset and uses the yaw as is, which is
+     * a guess; nothing this season needs it (every BIOBUZZ tag moves), so it stays gated to null.
+     */
+    public static boolean BOTPOSE_FRAME_VERIFIED = false;
 
     public static int APRILTAG_PIPELINE_INDEX = 0;
     public static int BLOB_PIPELINE_INDEX = 1;
@@ -257,6 +272,7 @@ public class Limelight {
      * tags move, so this is expected to stay {@code null}; it remains for a future static map.
      */
     public Pose getBotposeAsPedroPose() {
+        if (!BOTPOSE_FRAME_VERIFIED) return null;
         if (!hasTarget()) return null;
         if (currentPipeline != APRILTAG_PIPELINE_INDEX) return null;
         if (latestResult.getBotposeTagCount() < 1) return null;

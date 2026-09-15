@@ -14,8 +14,10 @@ package org.firstinspires.ftc.teamcode.util.control;
  * High current alone is not a jam — a motor accelerating from rest draws stall current for a moment.
  * So over-current must <em>persist</em> for {@code stallTimeoutMs} before it counts. Once it does,
  * the caller is told to reverse for {@code unjamDurationMs}, and that is one attempt. Current
- * dropping back below the threshold clears both the timer and the attempt count, so the limit
- * bounds <em>consecutive</em> failed attempts rather than attempts over the whole match.
+ * staying below the threshold for {@code healthyResetMs} clears the attempt count, so the limit
+ * bounds <em>consecutive</em> failed attempts rather than attempts over the whole match. That
+ * window matters: after every reversal the current dips for a few loops while the motor
+ * re-accelerates, and a reset on a single quiet sample would hand a hard jam an unlimited budget.
  *
  * <h2>The eligibility rule is load-bearing</h2>
  * The caller passes {@code eligible}, and must only pass true while actively intaking. Holding a
@@ -36,6 +38,8 @@ public class JamDetector {
     private long stallTimeoutMs = 200;
     private long unjamDurationMs = 150;
     private int maxAttempts = 3;
+    /** How long current must stay healthy before the attempt count is forgiven. 0 = one sample. */
+    private long healthyResetMs = 0;
 
     /**
      * When over-current was first seen. Paired with {@link #stalling} rather than using 0 as a
@@ -48,6 +52,9 @@ public class JamDetector {
     private long unjamUntilMs = 0;
     private boolean unjamming = false;
     private int attempts = 0;
+    /** Start of the current run of sub-threshold samples; paired with {@link #healthy}. */
+    private long healthySinceMs = 0;
+    private boolean healthy = false;
 
     /**
      * Updates the thresholds. Safe to call every loop — that is what keeps dashboard edits to the
@@ -55,10 +62,17 @@ public class JamDetector {
      */
     public void configure(double stallCurrentAmps, long stallTimeoutMs, long unjamDurationMs,
                           int maxAttempts) {
+        configure(stallCurrentAmps, stallTimeoutMs, unjamDurationMs, maxAttempts, 0);
+    }
+
+    /** As above, with the healthy-current window that must pass before attempts are forgiven. */
+    public void configure(double stallCurrentAmps, long stallTimeoutMs, long unjamDurationMs,
+                          int maxAttempts, long healthyResetMs) {
         this.stallCurrentAmps = stallCurrentAmps;
         this.stallTimeoutMs = stallTimeoutMs;
         this.unjamDurationMs = unjamDurationMs;
         this.maxAttempts = maxAttempts;
+        this.healthyResetMs = healthyResetMs;
     }
 
     /**
@@ -81,6 +95,7 @@ public class JamDetector {
         if (isUnjamming(nowMs)) return true;
 
         if (amps > stallCurrentAmps) {
+            healthy = false;
             if (!stalling) {
                 stalling = true;
                 stallStartMs = nowMs;
@@ -96,9 +111,14 @@ public class JamDetector {
             return false;
         }
 
-        // Current is normal: the mechanism is running freely, so any earlier trouble is over.
+        // Current is normal. Only once it has stayed normal for healthyResetMs is the mechanism
+        // running freely and any earlier trouble over; a brief dip between reversals is not that.
         stalling = false;
-        attempts = 0;
+        if (!healthy) {
+            healthy = true;
+            healthySinceMs = nowMs;
+        }
+        if (nowMs - healthySinceMs >= healthyResetMs) attempts = 0;
         return false;
     }
 
@@ -144,5 +164,6 @@ public class JamDetector {
         stallStartMs = 0;
         unjamming = false;
         unjamUntilMs = 0;
+        healthy = false;
     }
 }

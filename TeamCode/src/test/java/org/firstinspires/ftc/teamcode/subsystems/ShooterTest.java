@@ -7,6 +7,7 @@ import static org.junit.Assert.assertTrue;
 import com.pedropathing.ivy.Command;
 import com.pedropathing.ivy.Scheduler;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
+import com.qualcomm.robotcore.hardware.DcMotorSimple;
 
 import org.firstinspires.ftc.teamcode.util.time.FakeClock;
 import org.junit.After;
@@ -30,13 +31,22 @@ public class ShooterTest {
         Shooter.TICKS_PER_REV = 28;
         Shooter.SHOOT_RPM = 3000;
         Shooter.IDLE_RPM = 0;
-        Shooter.AT_SPEED_TOLERANCE_RPM = 100;
+        Shooter.AT_SPEED_TOLERANCE_RPM = 150;
+        Shooter.AT_SPEED_LOOPS = 5;
         Shooter.SPINUP_TIMEOUT_MS = 3000;
+        Shooter.CUSTOM_PIDF = false;
+        Shooter.SECOND_MOTOR_DIRECTION = DcMotorSimple.Direction.FORWARD;
     }
 
     @After
     public void tearDown() {
         Scheduler.reset();
+        Shooter.CUSTOM_PIDF = false;
+        Shooter.SECOND_MOTOR_DIRECTION = DcMotorSimple.Direction.FORWARD;
+    }
+
+    private void ticks(int n) {
+        for (int i = 0; i < n; i++) tick();
     }
 
     private void tick() {
@@ -61,6 +71,7 @@ public class ShooterTest {
         assertTrue(Scheduler.isScheduled(spin));
 
         motor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM - 50);
+        ticks(Shooter.AT_SPEED_LOOPS);                    // in band, held for the latch
         tick();
         assertFalse(Scheduler.isScheduled(spin));
         assertEquals(Shooter.Mode.READY, shooter.getMode());
@@ -97,8 +108,53 @@ public class ShooterTest {
     @Test
     public void atSpeedIsFalseForAZeroTargetEvenIfTheWheelIsTurning() {
         motor.measuredVelocity = 500;
+        ticks(Shooter.AT_SPEED_LOOPS + 1);
         assertFalse(shooter.atSpeed());
         assertEquals(Shooter.Mode.IDLE, shooter.getMode());
+    }
+
+    @Test
+    public void atSpeedNeedsConsecutiveInBandLoops() {
+        // fixthese C3: one noisy sample through the band must not release a shot.
+        shooter.spinUp();
+        motor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM);
+        ticks(Shooter.AT_SPEED_LOOPS - 1);
+        assertTrue(shooter.inBandNow());
+        assertFalse("four in a row is not yet ready", shooter.atSpeed());
+        tick();
+        assertTrue("five in a row is", shooter.atSpeed());
+
+        motor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM - 2 * Shooter.AT_SPEED_TOLERANCE_RPM);
+        tick();
+        assertFalse("one sample out of band resets the latch", shooter.atSpeed());
+        motor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM);
+        ticks(Shooter.AT_SPEED_LOOPS - 1);
+        assertFalse(shooter.atSpeed());
+    }
+
+    @Test
+    public void customPidfIsWrittenOnlyWhenEnabled() {
+        assertEquals("defaults untouched", null, motor.lastVelocityPidf);
+        Shooter.CUSTOM_PIDF = true;
+        FakeDcMotorEx tuned = new FakeDcMotorEx();
+        new Shooter(tuned, null, clock);
+        assertEquals(Shooter.PIDF_P, tuned.lastVelocityPidf[0], EPS);
+        assertEquals(Shooter.PIDF_I, tuned.lastVelocityPidf[1], EPS);
+        assertEquals(Shooter.PIDF_D, tuned.lastVelocityPidf[2], EPS);
+        assertEquals("F = 32767 / max ticks per second", 32767.0 / Shooter.MAX_TICKS_PER_SEC, tuned.lastVelocityPidf[3], EPS);
+    }
+
+    @Test
+    public void secondFlywheelTakesItsOwnDirection() {
+        Shooter.SECOND_MOTOR_DIRECTION = DcMotorSimple.Direction.REVERSE;
+        FakeDcMotorEx first = new FakeDcMotorEx();
+        FakeDcMotorEx second = new FakeDcMotorEx();
+        Shooter pair = new Shooter(first, second, clock);
+        assertEquals(DcMotorSimple.Direction.FORWARD, first.direction);
+        assertEquals("an opposed pair needs one reversed", DcMotorSimple.Direction.REVERSE, second.direction);
+        pair.spinUp();
+        pair.update();
+        assertEquals("both get the same target", first.commandedVelocity, second.commandedVelocity, EPS);
     }
 
     @Test

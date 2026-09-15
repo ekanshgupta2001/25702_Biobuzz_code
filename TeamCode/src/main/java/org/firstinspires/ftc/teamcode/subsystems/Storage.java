@@ -36,6 +36,11 @@ public class Storage {
     public static int CAPACITY = 4;
     public static double ADVANCE_TICKS_PER_SEC = 1500;
     public static double REVERSE_TICKS_PER_SEC = -1000;
+    /**
+     * Second transport motor's direction. The side wheels face each other across the channel, so
+     * two motors driving them from opposite sides usually need one REVERSE, or they fight.
+     */
+    public static DcMotorSimple.Direction SECOND_MOTOR_DIRECTION = DcMotorSimple.Direction.FORWARD;
     /** An advance that has not delivered a piece by then gives up (empty channel, or a jam). */
     public static long ADVANCE_TIMEOUT_MS = 2500;
     public static int DEFAULT_IDLE_PRIORITY = -1;
@@ -75,7 +80,7 @@ public class Storage {
     public Storage(DcMotorEx motor, DcMotorEx secondMotor, Clock clock) {
         this.transport = new VelocityMotor(motor, DcMotorSimple.Direction.FORWARD,
                 DcMotor.ZeroPowerBehavior.BRAKE);
-        this.transport2 = new VelocityMotor(secondMotor, DcMotorSimple.Direction.FORWARD,
+        this.transport2 = new VelocityMotor(secondMotor, SECOND_MOTOR_DIRECTION,
                 DcMotor.ZeroPowerBehavior.BRAKE);
         this.clock = clock;
     }

@@ -82,6 +82,7 @@ public class TeleopTest {
         Teleop.DEBUG_TELEMETRY = false;
         Storage.CAPACITY = 4;
         Drivetrain.MIN_PATH_MS = 60;
+        Limelight.MOUNT_CALIBRATED = true;      // most tests exercise the camera macros as if measured
 
         clock = new FakeClock();
         follower = new FakePathFollower();
@@ -113,6 +114,7 @@ public class TeleopTest {
         Hardware.reset();
         PoseStorage.clear();
         Teleop.DEBUG_TELEMETRY = false;
+        Limelight.MOUNT_CALIBRATED = false;
     }
 
     // ---- Helpers ----
@@ -288,6 +290,22 @@ public class TeleopTest {
         loop();
         assertEquals("driver control resumed by itself", Follower.Mode.MANUAL, follower.mode);
         assertEquals(1.0, follower.lastForward, EPS);
+    }
+
+    @Test
+    public void cameraMacrosAreIgnoredUntilTheMountIsMeasured() {
+        Limelight.MOUNT_CALIBRATED = false;
+        op.init();
+        op.init_loop();
+        assertTrue(telemetry.joined(), telemetry.contains("Camera macros"));
+        op.start();
+        press(op.gamepad1, g -> g.a = true);                // COLLECT
+        loop();
+        assertEquals("no macro from unmeasured geometry", "idle", robot.macros.getActiveName());
+        assertTrue("the driver is told", op.gamepad1.isRumbling());
+        press(op.gamepad1, g -> g.b = true);                // a Pedro path needs no camera
+        loop();
+        assertEquals("driveTo", robot.macros.getActiveName());
     }
 
     @Test

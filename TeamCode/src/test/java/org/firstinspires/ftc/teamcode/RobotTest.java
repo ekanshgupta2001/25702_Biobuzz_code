@@ -22,7 +22,9 @@ import org.firstinspires.ftc.teamcode.subsystems.OpenLoopDrive;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.subsystems.Storage;
 import org.firstinspires.ftc.teamcode.subsystems.Transfer;
+import org.firstinspires.ftc.teamcode.subsystems.FakeColorRangeSensor;
 import org.firstinspires.ftc.teamcode.util.diagnostics.MatchLogger;
+import org.firstinspires.ftc.teamcode.util.field.Alliance;
 import org.firstinspires.ftc.teamcode.util.field.PoseFusion;
 import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
 import org.firstinspires.ftc.teamcode.util.time.FakeClock;
@@ -77,6 +79,23 @@ public class RobotTest {
     public void tearDown() {
         Scheduler.reset();
         Hardware.reset();
+        Intake.REJECT_ENABLED = false;
+    }
+
+    /** The fixture robot with real (fake) sensors at the four points; {@code null} = not fitted. */
+    private Robot robotWithSensors(FakeColorRangeSensor entrance, FakeColorRangeSensor full,
+                                   FakeColorRangeSensor transfer, FakeColorRangeSensor feed) {
+        return new Robot(
+                new Drivetrain(follower, clock),
+                new OpenLoopDrive((com.pedropathing.drivetrain.Drivetrain) null, clock),
+                new Intake(intakeMotor, clock),
+                new Storage(storageMotor, null, clock),
+                new Transfer(transferMotor, clock),
+                new Shooter(shooterMotor, null, clock),
+                new Limelight(null),
+                new ColorSensor(entrance, 2f, true), new ColorSensor(full, 2f, true),
+                new ColorSensor(transfer, 2f, true), new ColorSensor(feed, 2f, true),
+                clock);
     }
 
     /** One robot loop in production order: observe, decide, act. */
@@ -151,6 +170,49 @@ public class RobotTest {
         assertFalse("no transfer sensor: the storage count cannot decrement itself", robot.storage.hasExitSensor());
         assertFalse("no entrance sensor: the count cannot rise, so zero is unknown", robot.storage.hasEntranceSensor());
         assertFalse(robot.macros.isCountKnown());
+    }
+
+    @Test
+    public void presenceUsesDistanceWhenTheSensorHasIt() {
+        // fixthese C1: the interlocks used to be a hue match against unmeasured windows, which fails
+        // silently to "no piece". A REV V3's proximity read does not care about colour or lighting.
+        FakeColorRangeSensor transferPoint = new FakeColorRangeSensor();     // black, far away
+        robot = robotWithSensors(null, null, transferPoint, null);
+        assertTrue("the transfer sensor is the storage's exit sensor", robot.storage.hasExitSensor());
+
+        robot.readSensors();
+        assertFalse(robot.transfer.hasPieceInLift());
+
+        transferPoint.distanceInches = Robot.PRESENCE_DISTANCE_INCHES - 0.5;   // a piece, any colour
+        robot.readSensors();
+        assertTrue("near enough counts, whatever the hue", robot.transfer.hasPieceInLift());
+
+        transferPoint.distanceInches = Robot.PRESENCE_DISTANCE_INCHES + 3;
+        robot.readSensors();
+        assertFalse(robot.transfer.hasPieceInLift());
+    }
+
+    @Test
+    public void opponentNectarTriggersRejectOnlyForTheOtherAlliance() {
+        Intake.REJECT_ENABLED = true;
+        FakeColorRangeSensor entrance = new FakeColorRangeSensor().showing(0.1f, 0.1f, 0.9f);   // blue NECTAR
+        robot = robotWithSensors(entrance, null, null, null);
+        robot.setAlliance(Alliance.RED);
+        robot.intake.intakeCommand().schedule();
+        tick();
+        assertTrue("red robot, blue piece: throw it back", robot.intake.isRejecting());
+        assertEquals(Intake.EJECT_TICKS_PER_SEC, intakeMotor.commandedVelocity, EPS);
+        assertEquals("a rejected piece is not counted into the queue", 0, robot.storage.count());
+        assertFalse(robot.intake.hasPiece());
+
+        robot = robotWithSensors(entrance, null, null, null);
+        robot.setAlliance(Alliance.BLUE);
+        robot.intake.intakeCommand().schedule();
+        tick();
+        assertFalse("blue robot, blue piece: ours", robot.intake.isRejecting());
+        assertEquals(Intake.INTAKE_TICKS_PER_SEC, intakeMotor.commandedVelocity, EPS);
+        assertEquals("and it is counted", 1, robot.storage.count());
+        assertTrue(robot.intake.hasPiece());
     }
 
     @Test

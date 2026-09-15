@@ -44,13 +44,35 @@ public class Intake {
     public static double OUTTAKE_TICKS_PER_SEC = -1400;
     public static double EJECT_TICKS_PER_SEC = -2500;
 
-    public static double STALL_CURRENT_AMPS = 5.0;
-    public static long STALL_TIMEOUT_MS = 200;
+    /**
+     * A 435 RPM goBILDA 5203 stalls near 9 A and a compliant roller pulling a ball in can sit at
+     * 5-6 A for a moment, so 5 A / 200 ms spat pieces mid-capture. Measure with {@code Bench: Intake}:
+     * the peak amps of a clean capture, then the amps of a deliberate jam, and set this between.
+     */
+    public static double STALL_CURRENT_AMPS = 7.0;
+    public static long STALL_TIMEOUT_MS = 300;
     public static double UNJAM_TICKS_PER_SEC = -2500;
     public static long UNJAM_DURATION_MS = 150;
     public static boolean ANTI_JAM_ENABLED = true;
     /** Consecutive unjam attempts before giving up, so a hard jam cannot cook the motor all match. */
     public static int MAX_UNJAM_ATTEMPTS = 3;
+    /**
+     * Current must stay under the stall threshold this long before the attempt count is forgiven.
+     * The dip while the motor re-accelerates after a reversal is shorter than this, so a hard jam
+     * really does stop after {@link #MAX_UNJAM_ATTEMPTS}.
+     */
+    public static long HEALTHY_RESET_MS = 500;
+
+    /**
+     * BIOBUZZ G408: never control the opponent's NECTAR. When the storage-entrance sensor sees the
+     * other alliance's colour while intaking, the roller reverses for {@link #REJECT_MS}. Off until
+     * the hue windows are measured on real pieces ({@code Bench: ColorSensor}): a mis-tuned window
+     * would spit out our own POLLEN. Note the sensor is past the roller; if the bench shows a
+     * reversal cannot push a piece back out from there, the reject must also reverse the storage
+     * transport, which is a {@code Robot}-level change.
+     */
+    public static boolean REJECT_ENABLED = false;
+    public static long REJECT_MS = 400;
 
     public static int DEFAULT_IDLE_PRIORITY = -1;
 
@@ -64,6 +86,10 @@ public class Intake {
     private boolean hasPiece = false;
     private BooleanSupplier capturedSupplier = () -> false;
     private BooleanSupplier fullSupplier = () -> false;
+    private BooleanSupplier rejectSupplier = () -> false;
+    private boolean rejecting = false;
+    private long rejectUntilMs = 0;
+    private int rejections = 0;
 
     /** The stall/un-jam state machine. Lives in {@code util/} so it can be unit tested. */
     private final JamDetector jamDetector = new JamDetector();
@@ -98,6 +124,11 @@ public class Intake {
         this.fullSupplier = supplier == null ? () -> false : supplier;
     }
 
+    /** "The opponent's NECTAR is at the entrance": while intaking, triggers a {@link #REJECT_MS} reversal. */
+    public void setRejectSupplier(BooleanSupplier supplier) {
+        this.rejectSupplier = supplier == null ? () -> false : supplier;
+    }
+
     /** Sets the raw velocity request. Prefer the named modes so anti-jam stays correct. */
     public void setVelocity(double ticksPerSec) {
         setMode(ticksPerSec > 0 ? Mode.INTAKING : ticksPerSec < 0 ? Mode.EJECTING : Mode.IDLE,
@@ -110,6 +141,7 @@ public class Intake {
         if (newMode != mode) {
             if (newMode == Mode.INTAKING) jamDetector.resetTiming();
             else jamDetector.reset();
+            rejecting = false;      // a deliberate mode change abandons a reject in progress
         }
         mode = newMode;
         targetVelocity = ticksPerSec;
@@ -184,9 +216,32 @@ public class Intake {
         return jamDetector.hasGivenUp();
     }
 
+    /** True while the roller is reversing to throw an opponent's NECTAR back out (G408). */
+    public boolean isRejecting() {
+        return rejecting;
+    }
+
+    public int getRejections() {
+        return rejections;
+    }
+
     public void update() {
         if (!motor.isAvailable()) return;
         long now = clock.nowMs();
+
+        // G408 first: a piece being thrown back out is neither a capture nor a stall.
+        if (rejecting && now >= rejectUntilMs) rejecting = false;
+        if (REJECT_ENABLED && !rejecting && mode == Mode.INTAKING && !isBlockedByFullStorage()
+                && rejectSupplier.getAsBoolean()) {
+            rejecting = true;
+            rejectUntilMs = now + REJECT_MS;
+            rejections++;
+        }
+        if (rejecting) {
+            jamDetector.resetTiming();
+            motor.write(EJECT_TICKS_PER_SEC);
+            return;
+        }
 
         if (mode == Mode.INTAKING && !hasPiece && capturedSupplier.getAsBoolean()) {
             hasPiece = true;
@@ -194,7 +249,8 @@ public class Intake {
 
         // Pushed in every loop so edits to the public statics reach the detector.
         jamDetector.configure(
-                STALL_CURRENT_AMPS, STALL_TIMEOUT_MS, UNJAM_DURATION_MS, MAX_UNJAM_ATTEMPTS);
+                STALL_CURRENT_AMPS, STALL_TIMEOUT_MS, UNJAM_DURATION_MS, MAX_UNJAM_ATTEMPTS,
+                HEALTHY_RESET_MS);
 
         // Anti-jam applies while actively intaking only; a roller held still against a full
         // storage draws no current worth interpreting.

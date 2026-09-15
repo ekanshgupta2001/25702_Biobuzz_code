@@ -1,6 +1,7 @@
 package org.firstinspires.ftc.teamcode.game;
 
 import org.firstinspires.ftc.teamcode.subsystems.ColorSensor;
+import org.firstinspires.ftc.teamcode.util.field.Alliance;
 
 /**
  * The BIOBUZZ scoring elements: POLLEN (~2.8 in, yellow, neutral) and NECTAR (~3.6 in, red or
@@ -21,6 +22,9 @@ public enum PieceType {
     /** Red or blue, alliance-specific, about 3.6 in. Eight of each colour. */
     NECTAR("Nectar", 3.6, new float[] {0f, 220f});
 
+    /** NECTAR's two colours, one hue centre each; {@link #NECTAR} matches either (G408 needs both). */
+    public static float NECTAR_RED_HUE_DEGREES = 0f;
+    public static float NECTAR_BLUE_HUE_DEGREES = 220f;
     /** Half-width of each hue window, degrees. */
     public static float HUE_TOLERANCE_DEGREES = 20f;
     /** Below this saturation the hue is meaningless (white, grey, bare tile). */
@@ -54,18 +58,39 @@ public enum PieceType {
         return diameterInches / 2;
     }
 
-    /** Hue window centres, degrees. A copy. */
+    /**
+     * Hue window centres, degrees. A copy. NECTAR's come from the live
+     * {@link #NECTAR_RED_HUE_DEGREES} / {@link #NECTAR_BLUE_HUE_DEGREES} so one edit tunes both
+     * the piece detection and the alliance check.
+     */
     public float[] hueDegrees() {
+        if (this == NECTAR) return new float[] {NECTAR_RED_HUE_DEGREES, NECTAR_BLUE_HUE_DEGREES};
         return hueDegrees.clone();
     }
 
     /** True when the sensor's cached reading matches one of this type's hue windows. */
     public boolean isAtSensor(ColorSensor sensor) {
         if (sensor == null) return false;
-        for (float hue : hueDegrees) {
+        for (float hue : hueDegrees()) {
             if (sensor.matchesHue(hue, HUE_TOLERANCE_DEGREES, MIN_SATURATION, MIN_VALUE)) return true;
         }
         return false;
+    }
+
+    /**
+     * Which alliance's NECTAR the sensor sees, or {@code null} for POLLEN, nothing, or no sensor.
+     * The G408 question ("is this the opponent's?") is answered by comparing this with our own
+     * alliance; {@code Robot} does that and the {@code Intake} reject acts on it.
+     */
+    public static Alliance nectarAllianceAt(ColorSensor sensor) {
+        if (sensor == null) return null;
+        if (sensor.matchesHue(NECTAR_RED_HUE_DEGREES, HUE_TOLERANCE_DEGREES, MIN_SATURATION, MIN_VALUE)) {
+            return Alliance.RED;
+        }
+        if (sensor.matchesHue(NECTAR_BLUE_HUE_DEGREES, HUE_TOLERANCE_DEGREES, MIN_SATURATION, MIN_VALUE)) {
+            return Alliance.BLUE;
+        }
+        return null;
     }
 
     /** The type the sensor sees, POLLEN checked first, or {@code null} for nothing / no sensor. */

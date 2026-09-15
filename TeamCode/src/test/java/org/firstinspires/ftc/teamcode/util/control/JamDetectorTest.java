@@ -110,6 +110,35 @@ public class JamDetectorTest {
     }
 
     @Test
+    public void aBriefDipBetweenPulsesDoesNotResetTheAttempts() {
+        // fixthese C5: after each reversal the current dips for a few loops while the motor
+        // re-accelerates. With a one-sample reset that dip re-armed the budget and a hard jam
+        // cycled forward/reverse all match.
+        final long HEALTHY_MS = 500;
+        detector.configure(STALL_AMPS, STALL_MS, UNJAM_MS, MAX_ATTEMPTS, HEALTHY_MS);
+
+        detector.update(0, true, STALLED);
+        assertTrue(detector.update(STALL_MS, true, STALLED));            // attempt 1 at t=200
+        long t = STALL_MS + UNJAM_MS;                                     // reversal over at 350
+        assertFalse(detector.update(t, true, QUIET));                     // the dip
+        assertFalse(detector.update(t + 20, true, QUIET));
+        assertEquals("a 40 ms dip is not recovery", 1, detector.getAttempts());
+
+        t += 40;                                                          // stalled again
+        detector.update(t, true, STALLED);
+        assertTrue(detector.update(t + STALL_MS, true, STALLED));
+        assertEquals(2, detector.getAttempts());
+
+        t += STALL_MS + UNJAM_MS;                                         // genuinely free now
+        for (long q = t; q < t + HEALTHY_MS; q += 20) {
+            assertFalse(detector.update(q, true, QUIET));
+            assertEquals("still remembering until the window passes", 2, detector.getAttempts());
+        }
+        assertFalse(detector.update(t + HEALTHY_MS, true, QUIET));
+        assertEquals("half a second of healthy current forgives the attempts", 0, detector.getAttempts());
+    }
+
+    @Test
     public void ineligibleNeverUnjamsHoweverHighTheCurrent() {
         // This is the one that matters most. Holding a captured piece against a hard stop IS a
         // stalled motor; a detector running during HOLDING would eject the piece it just collected.

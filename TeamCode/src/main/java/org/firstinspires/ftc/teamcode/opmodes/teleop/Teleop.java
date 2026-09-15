@@ -5,10 +5,12 @@ import com.pedropathing.ivy.Scheduler;
 import com.pedropathing.math.Pose;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
+import org.firstinspires.ftc.teamcode.Robot;
 import org.firstinspires.ftc.teamcode.commands.Macros;
 import org.firstinspires.ftc.teamcode.game.Field;
 import org.firstinspires.ftc.teamcode.game.FieldPoses;
 import org.firstinspires.ftc.teamcode.opmodes.MatchOpMode;
+import org.firstinspires.ftc.teamcode.subsystems.Limelight;
 import org.firstinspires.ftc.teamcode.subsystems.Storage;
 import org.firstinspires.ftc.teamcode.util.field.Alliance;
 import org.firstinspires.ftc.teamcode.util.field.FieldConstants;
@@ -145,6 +147,7 @@ public class Teleop extends MatchOpMode {
     /** Everything that depends on the alliance and must follow it when the dpad changes it. */
     private void applyAlliance() {
         robot.drivetrain.setDriverHeadingOffset(Field.driverForwardHeading(alliance));
+        robot.setAlliance(alliance);                    // G408: which NECTAR is the opponent's
     }
 
     @Override
@@ -178,6 +181,10 @@ public class Teleop extends MatchOpMode {
         telemetry.addData("Aim target", alliance + " " + targetSide() + " CELL, tags " + tags[0] + "-" + tags[1]);
         telemetry.addData("Pose", robot.drivetrain.getPose());
         telemetry.addData("Drive", driveStatus());
+        if (!Limelight.MOUNT_CALIBRATED) {
+            telemetry.addLine("Camera macros (" + Controls.COLLECT.button() + "/" + Controls.ALIGN.button()
+                    + ") off until the mount is measured: Bench: Limelight, then Limelight.MOUNT_CALIBRATED");
+        }
         if (loggerError != null) telemetry.addData("!! Logger FAILED", loggerError);
         telemetry.addLine();
         for (String line : Controls.helpLines()) telemetry.addLine(line);
@@ -238,6 +245,13 @@ public class Teleop extends MatchOpMode {
                     || in.pressed(Controls.SNAP_270) || in.pressed(Controls.SNAP_180)) {
                 gamepad1.rumbleBlips(RUMBLE_FAILURE_BLIPS);
             }
+            return;
+        }
+
+        if (!Limelight.MOUNT_CALIBRATED && (in.pressed(Controls.COLLECT) || in.pressed(Controls.ALIGN))) {
+            // The approach geometry is built from unmeasured mount constants: a wrong estimate is
+            // four seconds of the robot driving somewhere unexpected before the timeout.
+            gamepad1.rumbleBlips(RUMBLE_FAILURE_BLIPS);
             return;
         }
 
@@ -469,6 +483,7 @@ public class Teleop extends MatchOpMode {
             telemetry.addLine("!! INTAKE JAMMED - anti-jam gave up. Use "
                     + Controls.OUTTAKE.button() + " on gamepad 2 to outtake.");
         }
+        if (robot.intake.isRejecting()) telemetry.addLine("REJECTING opponent NECTAR (G408)");
         double volts = robot.getBatteryVolts();
         if (volts > 0 && volts < LOW_BATTERY_VOLTS) {
             telemetry.addData("!! BATTERY LOW", "%.2f V", volts);
@@ -526,6 +541,10 @@ public class Teleop extends MatchOpMode {
         telemetry.addData("Sensors hue", "entrance %.0f  full %.0f  transfer %.0f  feed %.0f",
                 robot.storageEntranceSensor.getHue(), robot.storageFullSensor.getHue(),
                 robot.transferSensor.getHue(), robot.shooterFeedSensor.getHue());
+        telemetry.addData("Sensors dist", "entrance %.1f  full %.1f  transfer %.1f  feed %.1f in (near <= %.1f)",
+                robot.storageEntranceSensor.getDistanceInches(), robot.storageFullSensor.getDistanceInches(),
+                robot.transferSensor.getDistanceInches(), robot.shooterFeedSensor.getDistanceInches(),
+                Robot.PRESENCE_DISTANCE_INCHES);
         telemetry.addData("Shots fired", robot.macros.getShotsFired());
     }
 }

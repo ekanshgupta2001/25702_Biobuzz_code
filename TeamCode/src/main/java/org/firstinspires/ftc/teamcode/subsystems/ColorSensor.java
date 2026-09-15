@@ -39,13 +39,20 @@ public class ColorSensor {
     private final NormalizedColorSensor sensor;
     private final float[] hsv = new float[3];
     private NormalizedRGBA colors = new NormalizedRGBA();
+    /** Cached once per {@link #update()} when the device is also a {@link DistanceSensor}. */
+    private double distanceInches = Double.NaN;
 
     public ColorSensor(HardwareMap hardwareMap) {
         this(hardwareMap, DEFAULT_NAME, DEFAULT_GAIN, true);
     }
 
     public ColorSensor(HardwareMap hardwareMap, String name, float gain, boolean lightOn) {
-        sensor = Hardware.get(hardwareMap, NormalizedColorSensor.class, name);
+        this(Hardware.get(hardwareMap, NormalizedColorSensor.class, name), gain, lightOn);
+    }
+
+    /** Builds on an already-resolved device ({@code null} for "not fitted"). Tests inject a fake. */
+    public ColorSensor(NormalizedColorSensor device, float gain, boolean lightOn) {
+        sensor = device;
         if (sensor == null) return;
         sensor.setGain(gain);
         if (sensor instanceof SwitchableLight) {
@@ -58,12 +65,21 @@ public class ColorSensor {
         return sensor != null;
     }
 
+    /**
+     * One colour read and, on a device that has one, one distance read per loop. Each is its own
+     * I2C transaction (external I2C is not in the hub's bulk cache), so a robot with four sensors
+     * fitted pays for up to eight per loop here; watch the loop time in the debug telemetry.
+     */
     public void update() {
         if (sensor == null) return;
         NormalizedRGBA reading = sensor.getNormalizedColors();
-        if (reading == null) return;
-        colors = reading;
-        ColorMath.toHsv(colors.red, colors.green, colors.blue, hsv);
+        if (reading != null) {
+            colors = reading;
+            ColorMath.toHsv(colors.red, colors.green, colors.blue, hsv);
+        }
+        if (sensor instanceof DistanceSensor) {
+            distanceInches = ((DistanceSensor) sensor).getDistance(DistanceUnit.INCH);
+        }
     }
 
     /**
@@ -140,6 +156,16 @@ public class ColorSensor {
         return sensor instanceof DistanceSensor;
     }
 
+    /**
+     * The distance cached by the last {@link #update()}, in inches; {@code NaN} without a distance
+     * sensor or before the first read. This is the presence signal: a REV Color Sensor V3 reads
+     * proximity without caring what colour the piece is or how the pit lighting drifted.
+     */
+    public double getDistanceInches() {
+        return distanceInches;
+    }
+
+    /** A live read in any unit (one more I2C transaction). Prefer {@link #getDistanceInches()}. */
     public double getDistance(DistanceUnit unit) {
         return sensor instanceof DistanceSensor ? ((DistanceSensor) sensor).getDistance(unit) : Double.NaN;
     }

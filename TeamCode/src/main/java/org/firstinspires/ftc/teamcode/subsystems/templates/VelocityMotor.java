@@ -94,4 +94,13 @@ public final class VelocityMotor {
     public void write(double ticksPerSec) {
         if (motor != null) motor.setVelocity(ticksPerSec);
     }
+
+    /**
+     * Replaces the hub's velocity-loop gains for this motor. The SDK's defaults depend on the motor
+     * type chosen in the Robot Controller configuration and are tuned for geared drive motors; a
+     * high-inertia flywheel usually needs its own. F is the feedforward: {@code 32767 / maxTicksPerSec}.
+     */
+    public void setVelocityPidf(double p, double i, double d, double f) {
+        if (motor != null) motor.setVelocityPIDFCoefficients(p, i, d, f);
+    }
 }

@@ -31,6 +31,8 @@ public final class FakeDcMotorEx implements DcMotorEx {
     public double minCommandedVelocity = 0;
     /** Most positive velocity ever commanded. */
     public double maxCommandedVelocity = 0;
+    /** The last {@code setVelocityPIDFCoefficients(p, i, d, f)} call, or {@code null} if never. */
+    public double[] lastVelocityPidf = null;
 
     // ---- What the test wants the motor to report ----
     public int currentPosition = 0;
@@ -143,7 +145,9 @@ public final class FakeDcMotorEx implements DcMotorEx {
     @Override public boolean isMotorEnabled() { return true; }
     @Override public void setPIDCoefficients(RunMode mode, PIDCoefficients pid) {}
     @Override public void setPIDFCoefficients(RunMode mode, PIDFCoefficients pidf) {}
-    @Override public void setVelocityPIDFCoefficients(double p, double i, double d, double f) {}
+    @Override public void setVelocityPIDFCoefficients(double p, double i, double d, double f) {
+        lastVelocityPidf = new double[] {p, i, d, f};
+    }
     @Override public void setPositionPIDFCoefficients(double p) {}
     @Override public PIDCoefficients getPIDCoefficients(RunMode mode) { return null; }
     @Override public PIDFCoefficients getPIDFCoefficients(RunMode mode) { return null; }

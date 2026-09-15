@@ -35,11 +35,14 @@ public class IntakeCommandTest {
         clock = new FakeClock();
         intake = new Intake(motor, clock);
         Intake.ANTI_JAM_ENABLED = true;
+        Intake.REJECT_ENABLED = false;
+        Intake.REJECT_MS = 400;
     }
 
     @After
     public void tearDown() {
         Scheduler.reset();
+        Intake.REJECT_ENABLED = false;
     }
 
     private void tick() {
@@ -200,6 +203,45 @@ public class IntakeCommandTest {
         for (int i = 0; i < 50; i++) tick();
         assertEquals(0, motor.commandedVelocity, EPS);
         assertEquals(0, intake.getUnjamAttempts());
+    }
+
+    @Test
+    public void opponentPieceAtTheEntranceIsThrownBackOutForRejectMs() {
+        // G408 scaffold: while intaking, the reject supplier reverses the roller for REJECT_MS and
+        // the piece is not claimed as captured; then intaking resumes by itself.
+        Intake.REJECT_ENABLED = true;
+        final boolean[] opponent = {false};
+        intake.setRejectSupplier(() -> opponent[0]);
+        intake.setCapturedSupplier(() -> opponent[0]);          // the same sensor sees "a piece"
+        intake.intakeCommand().schedule();
+        tick();
+        assertEquals(Intake.INTAKE_TICKS_PER_SEC, motor.commandedVelocity, EPS);
+
+        opponent[0] = true;
+        long startedAt = clock.nowMs();
+        tick();
+        assertTrue(intake.isRejecting());
+        assertEquals(Intake.EJECT_TICKS_PER_SEC, motor.commandedVelocity, EPS);
+        assertFalse("a rejected piece is not ours", intake.hasPiece());
+        assertEquals(1, intake.getRejections());
+        opponent[0] = false;                                     // it left
+        while (clock.nowMs() < startedAt + Intake.REJECT_MS) {
+            tick();
+            assertEquals("reverses for the whole pulse", Intake.EJECT_TICKS_PER_SEC, motor.commandedVelocity, EPS);
+        }
+        tick();
+        assertFalse(intake.isRejecting());
+        assertEquals("back to intaking on its own", Intake.INTAKE_TICKS_PER_SEC, motor.commandedVelocity, EPS);
+        assertEquals(Intake.Mode.INTAKING, intake.getMode());
+    }
+
+    @Test
+    public void rejectIsInertUntilEnabled() {
+        intake.setRejectSupplier(() -> true);
+        intake.intakeCommand().schedule();
+        for (int i = 0; i < 10; i++) tick();
+        assertFalse(intake.isRejecting());
+        assertEquals(Intake.INTAKE_TICKS_PER_SEC, motor.commandedVelocity, EPS);
     }
 
     @Test

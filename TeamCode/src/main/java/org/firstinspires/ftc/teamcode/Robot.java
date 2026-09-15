@@ -18,6 +18,7 @@ import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.subsystems.Storage;
 import org.firstinspires.ftc.teamcode.subsystems.Transfer;
 import org.firstinspires.ftc.teamcode.util.diagnostics.MatchLogger;
+import org.firstinspires.ftc.teamcode.util.field.Alliance;
 import org.firstinspires.ftc.teamcode.util.field.PoseFusion;
 import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
 import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
@@ -58,6 +59,11 @@ public class Robot {
      * Lynx bulk cache, so each one is its own bus transaction; once every quarter second is plenty.
      */
     public static long VOLTAGE_SAMPLE_MS = 250;
+    /**
+     * A presence sensor with a distance reading says "piece here" within this many inches.
+     * Placeholder: measure the reading with and without a piece in {@code Bench: ColorSensor}.
+     */
+    public static double PRESENCE_DISTANCE_INCHES = 2.0;
 
     public final Drivetrain drivetrain;
     /**
@@ -86,6 +92,8 @@ public class Robot {
 
     private MatchClock matchClock;
     private PieceType blobTarget = PieceType.POLLEN;
+    /** Our alliance, set by the OpMode; {@code null} until known. Drives the G408 reject. */
+    private Alliance alliance = null;
 
     private final Clock clock;
     private final List<LynxModule> hubs;
@@ -187,6 +195,7 @@ public class Robot {
         boolean entrance = storageEntranceSensor.isAvailable();
         intake.setCapturedSupplier(entrance ? this::pieceAtStorageEntrance : null);
         intake.setFullSupplier(storage::isFull);                    // G407: roller held still at 4
+        intake.setRejectSupplier(entrance ? this::opponentNectarAtEntrance : null);   // G408
         storage.setEntranceSupplier(entrance ? this::pieceAtStorageEntrance : null);  // rising edge -> count + 1
         storage.setFullSupplier(this::storageFullSensorSees);       // ORed with count >= CAPACITY
         transfer.setInLiftSupplier(this::pieceInTransfer);
@@ -194,22 +203,53 @@ public class Robot {
         transfer.setAtFeedSupplier(shooterFeedSensor.isAvailable() ? this::pieceAtShooterFeed : null);
     }
 
+    /** Which alliance we are, for the G408 reject. The OpMode sets it whenever it changes. */
+    public void setAlliance(Alliance alliance) {
+        this.alliance = alliance;
+    }
+
+    public Alliance getAlliance() {
+        return alliance;
+    }
+
     // ---- Sensor predicates: the seam between a reserved sensor point and its sensor type ----
 
+    /** The entrance identifies the piece (hue): a piece being thrown back out (G408) is not counted. */
     private boolean pieceAtStorageEntrance() {
-        return PieceType.anyAtSensor(storageEntranceSensor);
+        if (!PieceType.anyAtSensor(storageEntranceSensor)) return false;
+        return !(Intake.REJECT_ENABLED && opponentNectarAtEntrance());
+    }
+
+    private boolean opponentNectarAtEntrance() {
+        if (alliance == null) return false;
+        Alliance seen = PieceType.nectarAllianceAt(storageEntranceSensor);
+        return seen != null && seen != alliance;
     }
 
     private boolean storageFullSensorSees() {
-        return PieceType.anyAtSensor(storageFullSensor);
+        return pieceNear(storageFullSensor);
     }
 
     private boolean pieceInTransfer() {
-        return PieceType.anyAtSensor(transferSensor);
+        return pieceNear(transferSensor);
     }
 
     private boolean pieceAtShooterFeed() {
-        return PieceType.anyAtSensor(shooterFeedSensor);
+        return pieceNear(shooterFeedSensor);
+    }
+
+    /**
+     * "A piece is here" for the three presence points. Distance when the sensor has it (a REV V3
+     * proximity read does not care about lighting or which colour the piece is); the hue match only
+     * as a fallback, because a hue window nobody has measured fails silently to "no piece", which
+     * the interlocks read as "keep going".
+     */
+    private boolean pieceNear(ColorSensor sensor) {
+        if (sensor.hasDistance()) {
+            double inches = sensor.getDistanceInches();
+            return !Double.isNaN(inches) && inches <= PRESENCE_DISTANCE_INCHES;
+        }
+        return PieceType.anyAtSensor(sensor);
     }
 
     // ---- The two loop halves ----

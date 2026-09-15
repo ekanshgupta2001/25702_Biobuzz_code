@@ -41,7 +41,30 @@ public class Shooter {
     public static double SHOOT_RPM = 3000;
     /** Speed to hold between shots; 0 stops the wheel when nothing owns the shooter. */
     public static double IDLE_RPM = 0;
-    public static double AT_SPEED_TOLERANCE_RPM = 100;
+    /**
+     * Second flywheel motor's direction. FORWARD for two wheels on one side turning the same way;
+     * REVERSE for an opposed pair, or the two fight. Only the first wheel's encoder is measured.
+     */
+    public static DcMotorSimple.Direction SECOND_MOTOR_DIRECTION = DcMotorSimple.Direction.FORWARD;
+    /**
+     * At 3000 RPM on a 28-tick encoder (1400 t/s) the hub's velocity estimate wanders more than the
+     * old 100 RPM (47 t/s) band, so the wait always ran to its timeout. 5 % of target, and it must
+     * hold for {@link #AT_SPEED_LOOPS} consecutive loops before the wheel counts as ready.
+     */
+    public static double AT_SPEED_TOLERANCE_RPM = 150;
+    public static int AT_SPEED_LOOPS = 5;
+    /**
+     * Velocity-loop gains for the flywheel motor(s), applied only when {@link #CUSTOM_PIDF} is true.
+     * Off until measured with {@code Bench: Shooter}: the SDK's per-motor-type defaults may well be
+     * better than a guessed F. F = 32767 / max ticks per second (2800 t/s = a 6000 RPM bare motor on
+     * a 28-tick encoder); P is a tenth of F, I a tenth of P, as the SDK's own defaults are shaped.
+     */
+    public static boolean CUSTOM_PIDF = false;
+    public static double MAX_TICKS_PER_SEC = 2800;
+    public static double PIDF_F = 32767.0 / MAX_TICKS_PER_SEC;
+    public static double PIDF_P = 0.1 * PIDF_F;
+    public static double PIDF_I = 0.1 * PIDF_P;
+    public static double PIDF_D = 0;
     /** A spin-up that has not reached speed by then reports done anyway (battery sag, wrong gain). */
     public static long SPINUP_TIMEOUT_MS = 3000;
     /**
@@ -60,6 +83,8 @@ public class Shooter {
     private final VelocityMotor flywheel2;
     private final Clock clock;
     private double targetRpm = 0;
+    /** Consecutive {@link #update()} loops with the measured speed inside the tolerance band. */
+    private int inBandLoops = 0;
 
     public Shooter(HardwareMap hardwareMap) {
         this(hardwareMap, HardwareNames.SHOOTER_MOTOR, HardwareNames.SHOOTER_MOTOR_2, Clock.system());
@@ -75,9 +100,17 @@ public class Shooter {
     public Shooter(DcMotorEx motor, DcMotorEx secondMotor, Clock clock) {
         this.flywheel = new VelocityMotor(motor, DcMotorSimple.Direction.FORWARD,
                 DcMotor.ZeroPowerBehavior.FLOAT);
-        this.flywheel2 = new VelocityMotor(secondMotor, DcMotorSimple.Direction.FORWARD,
+        this.flywheel2 = new VelocityMotor(secondMotor, SECOND_MOTOR_DIRECTION,
                 DcMotor.ZeroPowerBehavior.FLOAT);
         this.clock = clock;
+        applyPidf();
+    }
+
+    /** Writes {@code PIDF_*} to both motors if {@link #CUSTOM_PIDF}; the bench calls it after a toggle. */
+    public void applyPidf() {
+        if (!CUSTOM_PIDF) return;
+        flywheel.setVelocityPidf(PIDF_P, PIDF_I, PIDF_D, PIDF_F);
+        flywheel2.setVelocityPidf(PIDF_P, PIDF_I, PIDF_D, PIDF_F);
     }
 
     public boolean isAvailable() {
@@ -124,8 +157,17 @@ public class Shooter {
         return flywheel.getCurrentAmps() + flywheel2.getCurrentAmps();
     }
 
-    /** True when spinning within {@link #AT_SPEED_TOLERANCE_RPM} of a non-zero target. */
+    /**
+     * True once the measured speed has been within {@link #AT_SPEED_TOLERANCE_RPM} of a non-zero
+     * target for {@link #AT_SPEED_LOOPS} consecutive loops (counted in {@link #update()}), so one
+     * noisy sample through the band cannot release a shot.
+     */
     public boolean atSpeed() {
+        return inBandLoops >= AT_SPEED_LOOPS;
+    }
+
+    /** The raw, single-sample band check; {@link #atSpeed()} is the latched version macros use. */
+    public boolean inBandNow() {
         return flywheel.atSpeed(rpmToTicksPerSec(AT_SPEED_TOLERANCE_RPM));
     }
 
@@ -137,6 +179,7 @@ public class Shooter {
     public void update() {
         flywheel.update();
         flywheel2.update();
+        inBandLoops = inBandNow() ? inBandLoops + 1 : 0;
     }
 
     // ---- Ivy commands ----

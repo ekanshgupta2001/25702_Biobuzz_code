@@ -6,6 +6,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import com.pedropathing.drivetrain.DrivePowers;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.ivy.Command;
 import com.pedropathing.ivy.Scheduler;
@@ -85,6 +86,7 @@ public class AutoRoutineTest {
         AutoRoutine.LEAVE_POWER = 0.3;
         AutoRoutine.LEAVE_MS = 800;
         Macros.SHOOT_ALL_TIMEOUT_MS = 20000;
+        Macros.SENSORLESS_FEED_PULSE_MS = 600;
         Storage.CAPACITY = 4;
         Storage.ADVANCE_TIMEOUT_MS = 2500;
     }
@@ -114,8 +116,12 @@ public class AutoRoutineTest {
         shooterMotor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM);
         AutoRoutine auto = new AutoRoutine(robot);
         final int[] leaveTicks = {0};
+        final DrivePowers[] lastMoving = {null};
         long elapsed = run(auto.build(), () -> {
-            if (motors.moving) leaveTicks[0]++;
+            if (motors.moving) {
+                leaveTicks[0]++;
+                lastMoving[0] = motors.lastPowers;
+            }
         });
 
         assertEquals("done", auto.getPhase());
@@ -123,14 +129,32 @@ public class AutoRoutineTest {
         assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
         assertEquals(0, robot.storage.count());
         assertTrue(auto.getLog().contains("shots 4 : SUCCESS"));
-        assertEquals("leave went backward at LEAVE_POWER", -0.3, motors.lastPowers == null ? 0 : -0.3, EPS);
+        assertEquals("leave went backward at LEAVE_POWER", -0.3, lastMoving[0].forward(), EPS);
+        assertEquals(0, lastMoving[0].strafe(), EPS);
+        assertEquals(0, lastMoving[0].turn(), EPS);
         assertTrue("moved for about LEAVE_MS", Math.abs(leaveTicks[0] - AutoRoutine.LEAVE_MS / 20) <= 2);
         assertFalse("stopped at the end", motors.moving);
         assertTrue(motors.stopCalls >= 1);
         assertEquals(0, shooterMotor.commandedVelocity, EPS);
         assertEquals(0, transferMotor.commandedVelocity, EPS);
         assertEquals(0, intakeMotor.commandedVelocity, EPS);
-        assertTrue("well inside the 30 s period: " + elapsed + " ms", elapsed < 30000);
+        assertTrue("well inside the 30 s period: " + elapsed + " ms", elapsed < 15000);
+    }
+
+    @Test
+    public void storageNeverPushesIntoAStoppedTransferWithoutSensors() {
+        shooterMotor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM);
+        final boolean[] pushed = {false};
+        final int[] advancingTicks = {0};
+        run(new AutoRoutine(robot).build(), () -> {
+            if (robot.storage.getMode() == Storage.Mode.ADVANCING) {
+                advancingTicks[0]++;
+                if (robot.transfer.getMode() != Transfer.Mode.FEEDING) pushed[0] = true;
+            }
+        });
+        assertFalse("fixthese B2: the side wheels only run while the transfer takes the piece", pushed[0]);
+        assertTrue("four metered pulses, not four runs to the 2.5 s timeout: " + advancingTicks[0] * 20 + " ms",
+                advancingTicks[0] * 20 <= 4 * Macros.SENSORLESS_FEED_PULSE_MS + 200);
     }
 
     @Test

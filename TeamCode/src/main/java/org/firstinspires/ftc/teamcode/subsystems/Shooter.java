@@ -44,6 +44,13 @@ public class Shooter {
     public static double AT_SPEED_TOLERANCE_RPM = 100;
     /** A spin-up that has not reached speed by then reports done anyway (battery sag, wrong gain). */
     public static long SPINUP_TIMEOUT_MS = 3000;
+    /**
+     * After a piece goes through the wheel: wait at least this long (so the speed dip has begun)
+     * and then until {@link #atSpeed()} again, or at most {@link #SHOT_RECOVERY_TIMEOUT_MS}. Measure
+     * the dip and the recovery with {@code Bench: Shooter}.
+     */
+    public static long SHOT_RECOVERY_MIN_MS = 150;
+    public static long SHOT_RECOVERY_TIMEOUT_MS = 1500;
     public static int DEFAULT_IDLE_PRIORITY = -1;
 
     /** Derived from the target and the measured speed; see {@link #getMode()}. */
@@ -150,6 +157,20 @@ public class Shooter {
                 .setDone(() -> !isAvailable() || atSpeed()
                         || clock.nowMs() - startedAt[0] >= SPINUP_TIMEOUT_MS)
                 .requiring(this);
+    }
+
+    /**
+     * Finishes once the wheel is at speed, after {@link #SPINUP_TIMEOUT_MS}, or at once when no
+     * shooter is fitted. Requires nothing: it is the wait inside a group in which
+     * {@link #holdSpeedCommand()} owns the shooter and sets the target, so two siblings never both
+     * claim the resource and the last-executed one silently wins (fixthese C7).
+     */
+    public Command waitForSpeedCommand() {
+        final long[] startedAt = new long[1];
+        return Command.build()
+                .setStart(() -> startedAt[0] = clock.nowMs())
+                .setDone(() -> !isAvailable() || atSpeed()
+                        || clock.nowMs() - startedAt[0] >= SPINUP_TIMEOUT_MS);
     }
 
     /** Holds {@link #SHOOT_RPM} until interrupted, then idles. */

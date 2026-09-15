@@ -3,6 +3,7 @@ package org.firstinspires.ftc.teamcode.commands;
 import static com.pedropathing.ivy.commands.Commands.conditional;
 import static com.pedropathing.ivy.commands.Commands.instant;
 import static com.pedropathing.ivy.commands.Commands.lazy;
+import static com.pedropathing.ivy.commands.Commands.onInterrupt;
 import static com.pedropathing.ivy.commands.Commands.waitUntil;
 import static com.pedropathing.ivy.groups.Groups.deadline;
 import static com.pedropathing.ivy.groups.Groups.parallel;
@@ -32,9 +33,12 @@ import java.util.function.Supplier;
  * <ol>
  *   <li><b>Bounded.</b> Every wait is raced against a timeout on the robot's {@code Clock}
  *       ({@link Waits}), so a macro can never hold its subsystems for the rest of the match.</li>
- *   <li><b>Reports an outcome.</b> {@code begin(name)} at the start, {@code finish(...)} at the end,
- *       and success is measured after the fact against a snapshot taken at the start: a perfect
- *       drive that collected nothing is a failure.</li>
+ *   <li><b>Reports an outcome, always.</b> Every macro is built through {@link #reporting}:
+ *       {@code begin(name)} at the start, the outcome measured after the fact against a snapshot
+ *       taken at the start (a perfect drive that collected nothing is a failure), and if the group is
+ *       ended from outside before it gets that far (a {@link Waits#bounded} race, an operator abort,
+ *       {@code Scheduler.cancel}) the outcome is {@link Outcome#CANCELLED}, never left
+ *       {@link Outcome#RUNNING}.</li>
  *   <li><b>Declares its resources through what it composes.</b> Requirements come from the
  *       subsystem commands inside the group, so scheduling a macro suspends the default commands
  *       it needs and ending it restores them. Nothing here touches hardware directly.</li>
@@ -51,18 +55,29 @@ import java.util.function.Supplier;
  * Teleop feeds the same law into {@code Drivetrain.setAimLock} so the driver can hold an aim while
  * translating. {@link #shootOne()} and {@link #shootAll()} never require the drivetrain, so driving
  * and aiming continue through a shot; {@link #aimAndShootAll} does both in sequence for autonomous.
+ *
+ * <p><b>Shooting without sensors</b> (the first-event robot) is metered by time: for each piece the
+ * storage transport and the transfer run <em>together</em> for {@link #SENSORLESS_FEED_PULSE_MS},
+ * then the macro waits for the flywheel to recover before the next piece. The side wheels never push
+ * the queue into a stopped transfer, and {@link #getShotsFired()} is honestly a pulse count.
  */
 public class Macros {
     // ---- Timeouts and tolerances (plain statics; edit and redeploy) ----
     public static long INTAKE_TIMEOUT_MS = 8000;
     /**
-     * Run the storage transport while intaking so pieces move rearward and make room. Whether the
-     * side wheels have to run for the channel to accept a piece is an open mechanism question
-     * (HANDOFF section 10); flip this if the mechanism self-feeds.
+     * Run the storage transport while intaking so pieces move rearward and make room. Off by
+     * default: with the transfer stopped, the side wheels would push every stored piece against it
+     * for the whole intake (fixthese C8). Flip it only once the mechanism proves it needs the help.
      */
-    public static boolean INTAKE_RUNS_STORAGE = true;
+    public static boolean INTAKE_RUNS_STORAGE = false;
     public static long SHOOT_ONE_TIMEOUT_MS = 6000;
     public static long SHOOT_ALL_TIMEOUT_MS = 20000;
+    /**
+     * Per piece, without an exit or feed sensor: how long the storage transport and the transfer
+     * run together to move one piece into the flywheel. Measure with {@code Bench: Storage} and
+     * {@code Bench: Transfer}; too short leaves the piece in the lift, too long feeds two.
+     */
+    public static long SENSORLESS_FEED_PULSE_MS = 600;
     public static long AIM_TIMEOUT_MS = 2500;
     /** The robot counts as aimed within this of the wanted heading. */
     public static double AIM_TOLERANCE_DEGREES = 2.0;
@@ -118,7 +133,11 @@ public class Macros {
         return activeName + " : " + outcome;
     }
 
-    /** Call when an operator aborts a macro, so the reported outcome reflects what happened. */
+    /**
+     * Marks a running macro CANCELLED. Every macro calls this itself when its group is ended from
+     * outside ({@link #reporting}); {@code Robot.abortMacro()} calls it too, harmlessly, after the
+     * follower and pipeline cleanup that Ivy cannot do.
+     */
     public void markCancelled() {
         if (outcome == Outcome.RUNNING) outcome = Outcome.CANCELLED;
         activeName = "idle";
@@ -131,15 +150,29 @@ public class Macros {
 
     // ---- Plumbing shared by every macro ----
 
+    /**
+     * How every macro is built: {@code begin(name)}, the body, then the outcome. If the group is
+     * ended before {@code finishWith} runs (a {@link Waits#bounded} timeout, {@code Scheduler.cancel},
+     * an operator abort), {@code onInterrupt} marks it CANCELLED, so no caller has to remember to.
+     *
+     * <p>{@code deadline(body, onInterrupt(...))}, not {@code setEnd} on the sequential: Ivy's groups
+     * are {@code CommandBuilder}s whose {@code setEnd} <em>replaces</em> the group's own end, the one
+     * that ends its children (docs/01 B.5 trap 12). A natural finish costs one extra tick and fires
+     * the callback too, which is harmless: a terminal outcome is never changed.
+     */
+    private Command reporting(String name, Command body, Supplier<Outcome> result) {
+        return deadline(sequential(begin(name), body, finishWith(result)), onInterrupt(this::markCancelled));
+    }
+
+    private Command reporting(String name, Command body, Outcome success, Outcome failure, BooleanSupplier ok) {
+        return reporting(name, body, () -> ok.getAsBoolean() ? success : failure);
+    }
+
     private Command begin(String name) {
         return instant(() -> {
             activeName = name;
             outcome = Outcome.RUNNING;
         });
-    }
-
-    private Command finish(Outcome success, Outcome failure, BooleanSupplier ok) {
-        return finishWith(() -> ok.getAsBoolean() ? success : failure);
     }
 
     private Command finishWith(Supplier<Outcome> result) {
@@ -164,8 +197,8 @@ public class Macros {
     // ---- Collecting ----
 
     /**
-     * Runs the intake (and, by default, the storage transport) until the storage reports full or
-     * the timeout passes. NO_TARGET when the storage was already full.
+     * Runs the intake (and, if {@link #INTAKE_RUNS_STORAGE}, the storage transport) until the storage
+     * reports full or the timeout passes. NO_TARGET when the storage was already full.
      */
     public Command intakeUntilFull() {
         final int[] countAtStart = new int[1];
@@ -177,15 +210,15 @@ public class Macros {
                 parallel(robot.intake.intakeCommand(), transport),
                 waitUntil(robot.storage::isFull),
                 waitMs(INTAKE_TIMEOUT_MS));
-        return sequential(
-                begin("intake"),
-                instant(() -> {
-                    countAtStart[0] = robot.storage.count();
-                    alreadyFull[0] = robot.storage.isFull();
-                }),
-                conditional(() -> !alreadyFull[0], work, noop()),
-                finishWith(() -> robot.storage.count() > countAtStart[0] ? Outcome.SUCCESS
-                        : alreadyFull[0] ? Outcome.NO_TARGET : Outcome.TIMED_OUT));
+        return reporting("intake",
+                sequential(
+                        instant(() -> {
+                            countAtStart[0] = robot.storage.count();
+                            alreadyFull[0] = robot.storage.isFull();
+                        }),
+                        conditional(() -> !alreadyFull[0], work, noop())),
+                () -> robot.storage.count() > countAtStart[0] ? Outcome.SUCCESS
+                        : alreadyFull[0] ? Outcome.NO_TARGET : Outcome.TIMED_OUT);
     }
 
     /**
@@ -199,69 +232,69 @@ public class Macros {
         final boolean[] hadPieceAtStart = new boolean[1];
         BooleanSupplier capturedNew = () -> robot.storage.count() > countAtStart[0]
                 || (robot.intake.hasPiece() && !hadPieceAtStart[0]);
-        return sequential(
-                begin("collect"),
-                instant(() -> {
-                    countAtStart[0] = robot.storage.count();
-                    hadPieceAtStart[0] = robot.intake.hasPiece();
-                }),
-                instant(robot.limelight::activateBlobPipeline),
-                waitMs(PIPELINE_WARMUP_MS),
-                race(waitUntil(robot.limelight::hasStableBlob), waitMs(SEARCH_TIMEOUT_MS)),
-                // A race, not a deadline: race ends its losers INTERRUPTED, whereas deadline and
-                // parallel forward their own end condition, so a capture command inside a
-                // deadline that finished NATURALLY would be told it captured something.
-                race(
-                        robot.drivetrain.followLazyCommand(this::approachPath, false),
-                        robot.intake.captureCommand(),
-                        waitUntil(capturedNew),
-                        waitMs(APPROACH_TIMEOUT_MS)),
-                instant(robot.limelight::activateAprilTagPipeline),
-                finish(Outcome.SUCCESS, Outcome.TIMED_OUT, capturedNew));
+        return reporting("collect",
+                sequential(
+                        instant(() -> {
+                            countAtStart[0] = robot.storage.count();
+                            hadPieceAtStart[0] = robot.intake.hasPiece();
+                        }),
+                        instant(robot.limelight::activateBlobPipeline),
+                        waitMs(PIPELINE_WARMUP_MS),
+                        race(waitUntil(robot.limelight::hasStableBlob), waitMs(SEARCH_TIMEOUT_MS)),
+                        // A race, not a deadline: race ends its losers INTERRUPTED, whereas deadline and
+                        // parallel forward their own end condition, so a capture command inside a
+                        // deadline that finished NATURALLY would be told it captured something.
+                        race(
+                                robot.drivetrain.followLazyCommand(this::approachPath, false),
+                                robot.intake.captureCommand(),
+                                waitUntil(capturedNew),
+                                waitMs(APPROACH_TIMEOUT_MS)),
+                        instant(robot.limelight::activateAprilTagPipeline)),
+                Outcome.SUCCESS, Outcome.TIMED_OUT, capturedNew);
     }
 
     /**
      * Turns in place to face the seen piece (no path: a zero-length line is degenerate). NO_TARGET
-     * unless a stable blob ends up within {@link #AIM_TX_TOLERANCE_DEGREES} of the crosshair.
+     * unless a stable blob ends up within {@link #ALIGN_TOLERANCE_DEGREES} of the crosshair.
      */
     public Command alignToPiece() {
         Command turn = lazy(() -> {
             double heading = headingToBlob();
             return Double.isNaN(heading) ? null : robot.drivetrain.turnToCommand(heading);
         }).requiring(robot.drivetrain);   // lazy contributes no requirements of its own
-        return sequential(
-                begin("align"),
-                instant(robot.limelight::activateBlobPipeline),
-                waitMs(PIPELINE_WARMUP_MS),
-                race(waitUntil(robot.limelight::hasStableBlob), waitMs(SEARCH_TIMEOUT_MS)),
-                bounded(turn, ALIGN_TIMEOUT_MS),
-                instant(robot.limelight::activateAprilTagPipeline),
-                finish(Outcome.SUCCESS, Outcome.NO_TARGET, this::alignedToBlob));
+        return reporting("align",
+                sequential(
+                        instant(robot.limelight::activateBlobPipeline),
+                        waitMs(PIPELINE_WARMUP_MS),
+                        race(waitUntil(robot.limelight::hasStableBlob), waitMs(SEARCH_TIMEOUT_MS)),
+                        bounded(turn, ALIGN_TIMEOUT_MS),
+                        instant(robot.limelight::activateAprilTagPipeline)),
+                Outcome.SUCCESS, Outcome.NO_TARGET, this::alignedToBlob);
     }
 
     // ---- Shooting ----
 
     /**
-     * Spins up, moves one piece storage → transfer → flywheel, and idles the wheel. Holds the
-     * shooter for the whole feed ({@code holdSpeedCommand}) so the default command cannot wind it
-     * down under the piece. NO_TARGET with nothing on board.
+     * Spins up, moves one piece storage → transfer → flywheel, and idles the wheel. The shooter is
+     * owned by {@code holdSpeedCommand} for the whole cycle so the default command cannot wind it
+     * down under the piece; the spin-up wait itself requires nothing. NO_TARGET with nothing on board.
      */
     public Command shootOne() {
         final int[] shots = new int[1];
         final boolean[] hadPieces = new boolean[1];
         Command work = bounded(deadline(
-                sequential(robot.shooter.spinUpCommand(), feedOneCore(shots)),
+                sequential(robot.shooter.waitForSpeedCommand(), feedOneCore(shots)),
                 robot.shooter.holdSpeedCommand()), SHOOT_ONE_TIMEOUT_MS);
-        return sequential(
-                begin("shootOne"),
-                instant(() -> {
-                    shots[0] = 0;
-                    shotsFired = 0;
-                    hadPieces[0] = piecesOnBoard() > 0;
-                }),
-                conditional(() -> hadPieces[0], work, noop()),
-                finishWith(() -> shots[0] >= 1 ? Outcome.SUCCESS
-                        : hadPieces[0] ? Outcome.TIMED_OUT : Outcome.NO_TARGET));
+        return reporting("shootOne",
+                sequential(
+                        instant(() -> {
+                            shots[0] = 0;
+                            shotsFired = 0;
+                            hadPieces[0] = piecesOnBoard() > 0;
+                        }),
+                        conditional(() -> hadPieces[0], work, noop())),
+                () -> shots[0] >= 1 ? Outcome.SUCCESS
+                        : hadPieces[0] ? Outcome.TIMED_OUT : Outcome.NO_TARGET);
     }
 
     /**
@@ -271,15 +304,15 @@ public class Macros {
     public Command shootAll() {
         final int[] shots = new int[1];
         final int[] onBoard = new int[1];
-        return sequential(
-                begin("shootAll"),
-                instant(() -> {
-                    shots[0] = 0;
-                    shotsFired = 0;
-                    onBoard[0] = piecesOnBoard();
-                }),
-                conditional(() -> onBoard[0] > 0, shootAllCore(shots, onBoard), noop()),
-                finishWith(() -> shootAllOutcome(shots[0], onBoard[0])));
+        return reporting("shootAll",
+                sequential(
+                        instant(() -> {
+                            shots[0] = 0;
+                            shotsFired = 0;
+                            onBoard[0] = piecesOnBoard();
+                        }),
+                        conditional(() -> onBoard[0] > 0, shootAllCore(shots, onBoard), noop())),
+                () -> shootAllOutcome(shots[0], onBoard[0]));
     }
 
     /**
@@ -290,17 +323,17 @@ public class Macros {
     public Command aimAndShootAll(Pose target, int minTagId, int maxTagId) {
         final int[] shots = new int[1];
         final int[] onBoard = new int[1];
-        return sequential(
-                begin("aimShootAll"),
-                instant(() -> {
-                    shots[0] = 0;
-                    shotsFired = 0;
-                    onBoard[0] = piecesOnBoard();
-                }),
-                conditional(() -> onBoard[0] > 0,
-                        sequential(aimCore(target, minTagId, maxTagId), shootAllCore(shots, onBoard)),
-                        noop()),
-                finishWith(() -> shootAllOutcome(shots[0], onBoard[0])));
+        return reporting("aimShootAll",
+                sequential(
+                        instant(() -> {
+                            shots[0] = 0;
+                            shotsFired = 0;
+                            onBoard[0] = piecesOnBoard();
+                        }),
+                        conditional(() -> onBoard[0] > 0,
+                                sequential(aimCore(target, minTagId, maxTagId), shootAllCore(shots, onBoard)),
+                                noop())),
+                () -> shootAllOutcome(shots[0], onBoard[0]));
     }
 
     private Command shootAllCore(int[] shots, int[] onBoard) {
@@ -309,12 +342,13 @@ public class Macros {
         // never-started Repeat, which NPEs on its null command list (docs/01 B.5 trap 8).
         final int[] attempts = new int[1];
         Command[] steps = new Command[Storage.CAPACITY + 1];
-        steps[0] = sequential(instant(() -> attempts[0] = 0), robot.shooter.spinUpCommand());
+        steps[0] = sequential(instant(() -> attempts[0] = 0), robot.shooter.waitForSpeedCommand());
         for (int i = 1; i <= Storage.CAPACITY; i++) {
             steps[i] = conditional(() -> attempts[0] < onBoard[0],
                     sequential(instant(() -> attempts[0]++), feedOneCore(shots)),
                     noop());
         }
+        // holdSpeedCommand is the only child that requires the shooter (fixthese C7).
         return bounded(deadline(sequential(steps), robot.shooter.holdSpeedCommand()), SHOOT_ALL_TIMEOUT_MS);
     }
 
@@ -325,36 +359,73 @@ public class Macros {
     }
 
     /**
-     * The storage → transfer → flywheel hand-off for one piece; requires storage and transfer. The
-     * caller holds the shooter. Every per-shot flag is reset in the leading instant so no step
-     * can inherit a previous piece's state.
+     * The storage → transfer → flywheel hand-off for one piece, then the flywheel's recovery;
+     * requires storage and transfer. The caller holds the shooter. Every per-shot flag is reset in
+     * the leading instant so no step can inherit a previous piece's state.
      *
-     * <p>A shot is counted only when the sensors that exist agree: the exit sensor saw the piece
-     * leave the storage (or a piece was already in the lift), and the feed sensor saw it staged
-     * and then clear. Without an exit sensor the storage count is dead-reckoned down by one so a
-     * bench robot on timed pulses keeps an honest count and the intake interlock releases.
+     * <p>With an exit sensor the advance ends on the edge that says the piece reached the transfer,
+     * and the transfer leg follows. Without one there is no edge to end on, so the advance is a
+     * timed pulse run <em>together</em> with the transfer leg: the side wheels never push the queue
+     * into a stopped transfer for seconds at a time (fixthese B2). Either way the shot is counted
+     * only when the sensors that exist agree, and without an exit sensor the storage count is
+     * dead-reckoned down by one so the intake interlock releases.
      */
     private Command feedOneCore(int[] shots) {
         final int[] exitsAtStart = new int[1];
         final boolean[] preloaded = new boolean[1];
         final boolean[] staged = new boolean[1];
+        Command handoff = robot.storage.hasExitSensor()
+                ? sequential(
+                        conditional(() -> preloaded[0], noop(), robot.storage.advanceOneCommand()),
+                        transferLeg(staged))
+                : parallel(
+                        robot.storage.advanceForMsCommand(SENSORLESS_FEED_PULSE_MS),
+                        transferLeg(staged));
         return sequential(
                 instant(() -> {
                     exitsAtStart[0] = robot.storage.getExitEvents();
                     preloaded[0] = robot.transfer.hasPieceInLift() || robot.transfer.pieceAtFeed();
-                    staged[0] = false;
+                    // Without a feed sensor the timed pulse is taken to have staged the piece; with
+                    // one, the sensed leg records what the sensor saw after the lift.
+                    staged[0] = !robot.transfer.hasFeedSensor();
                 }),
-                // advanceOne ends on the transfer sensor's rising edge (or its own timeout).
-                conditional(() -> preloaded[0], noop(), robot.storage.advanceOneCommand()),
-                robot.transfer.liftOneCommand(),
-                instant(() -> staged[0] = !robot.transfer.hasFeedSensor() || robot.transfer.pieceAtFeed()),
-                robot.transfer.feedCommand(),
+                handoff,
+                flywheelRecovery(),
                 instant(() -> {
                     if (!pieceWasShot(exitsAtStart[0], preloaded[0], staged[0])) return;
                     shots[0]++;
                     shotsFired = shots[0];
                     if (!robot.storage.hasExitSensor()) robot.storage.markExited();
                 }));
+    }
+
+    /**
+     * One piece through the transfer into the flywheel. With a feed sensor: lift until staged, note
+     * it, feed until clear. Without one: a single {@link #SENSORLESS_FEED_PULSE_MS} pulse at feed
+     * speed ("lift" and "feed" are the same motor, so two timed speeds would be theatre). The
+     * sensorless leg is the bare command, not a sequential: a sequential hands off one child per
+     * tick, and the storage must start in the same tick as the transfer, never a loop before it.
+     */
+    private Command transferLeg(boolean[] staged) {
+        if (robot.transfer.hasFeedSensor()) {
+            return sequential(
+                    robot.transfer.liftOneCommand(),
+                    instant(() -> staged[0] = robot.transfer.pieceAtFeed()),
+                    robot.transfer.feedCommand());
+        }
+        return robot.transfer.feedForMsCommand(SENSORLESS_FEED_PULSE_MS);
+    }
+
+    /**
+     * After a piece has gone through the wheel: a short minimum so the speed dip has begun, then
+     * wait for the wheel to come back up, bounded. A second piece fed into a slowed wheel is a short
+     * shot. Nothing to wait for without a shooter.
+     */
+    private Command flywheelRecovery() {
+        if (!robot.shooter.isAvailable()) return noop();
+        return sequential(
+                waitMs(Shooter.SHOT_RECOVERY_MIN_MS),
+                race(waitUntil(robot.shooter::atSpeed), waitMs(Shooter.SHOT_RECOVERY_TIMEOUT_MS)));
     }
 
     private boolean pieceWasShot(int exitsAtStart, boolean preloaded, boolean staged) {
@@ -393,10 +464,9 @@ public class Macros {
      * {@link #AIM_TIMEOUT_MS}, or when no pose is available.
      */
     public Command aimAt(Pose target, int minTagId, int maxTagId) {
-        return sequential(
-                begin("aim"),
+        return reporting("aim",
                 bounded(aimCore(target, minTagId, maxTagId), AIM_TIMEOUT_MS),
-                finish(Outcome.SUCCESS, Outcome.TIMED_OUT, () -> aimed(target, minTagId, maxTagId)));
+                Outcome.SUCCESS, Outcome.TIMED_OUT, () -> aimed(target, minTagId, maxTagId));
     }
 
     /**
@@ -446,29 +516,28 @@ public class Macros {
      */
     public Command relocalize() {
         final boolean[] fixed = new boolean[1];
-        return sequential(
-                begin("relocalize"),
-                instant(() -> {
-                    fixed[0] = false;
-                    robot.limelight.activateAprilTagPipeline();
-                }),
-                waitMs(PIPELINE_WARMUP_MS),
-                race(waitUntil(() -> robot.limelight.getBotposeAsPedroPose() != null),
-                        waitMs(RELOCALIZE_TIMEOUT_MS)),
-                // The only explicit requirement in this class: nothing else here drives, and a
-                // pose write must not race the driver-control default command.
-                instant(() -> fixed[0] = robot.tryLocalizeFromAprilTag()).requiring(robot.drivetrain),
-                finish(Outcome.SUCCESS, Outcome.NO_TARGET, () -> fixed[0]));
+        return reporting("relocalize",
+                sequential(
+                        instant(() -> {
+                            fixed[0] = false;
+                            robot.limelight.activateAprilTagPipeline();
+                        }),
+                        waitMs(PIPELINE_WARMUP_MS),
+                        race(waitUntil(() -> robot.limelight.getBotposeAsPedroPose() != null),
+                                waitMs(RELOCALIZE_TIMEOUT_MS)),
+                        // The only explicit requirement in this class: nothing else here drives, and a
+                        // pose write must not race the driver-control default command.
+                        instant(() -> fixed[0] = robot.tryLocalizeFromAprilTag()).requiring(robot.drivetrain)),
+                Outcome.SUCCESS, Outcome.NO_TARGET, () -> fixed[0]);
     }
 
     /** Turns in place to an absolute heading; hands the follower back either way. */
     public Command snapToHeading(double headingRadians) {
         String name = String.format(Locale.US, "snapTo %.0f",
                 Math.toDegrees(Angles.normalizeAngle(headingRadians)));
-        return sequential(
-                begin(name),
+        return reporting(name,
                 bounded(robot.drivetrain.turnToCommand(headingRadians), SNAP_TIMEOUT_MS),
-                finish(Outcome.SUCCESS, Outcome.TIMED_OUT, () -> atHeading(headingRadians)));
+                Outcome.SUCCESS, Outcome.TIMED_OUT, () -> atHeading(headingRadians));
     }
 
     /**
@@ -479,11 +548,10 @@ public class Macros {
      * next leg follows.
      */
     public Command driveTo(Pose target) {
-        return sequential(
-                begin("driveTo"),
+        return reporting("driveTo",
                 bounded(robot.drivetrain.followLazyCommand(() -> lineTo(target), false), DRIVE_TO_TIMEOUT_MS),
-                finish(Outcome.SUCCESS, Outcome.TIMED_OUT, () -> robot.drivetrain.atPose(
-                        target, DRIVE_TO_TOLERANCE_INCHES, DRIVE_TO_TOLERANCE_INCHES)));
+                Outcome.SUCCESS, Outcome.TIMED_OUT, () -> robot.drivetrain.atPose(
+                        target, DRIVE_TO_TOLERANCE_INCHES, DRIVE_TO_TOLERANCE_INCHES));
     }
 
     // ---- Private geometry helpers ----

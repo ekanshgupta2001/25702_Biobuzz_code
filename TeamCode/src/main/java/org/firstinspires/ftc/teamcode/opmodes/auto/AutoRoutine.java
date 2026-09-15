@@ -62,10 +62,8 @@ public final class AutoRoutine {
                     robot.storage.setCount(Field.PRELOADED_POLLEN_PER_ROBOT);
                 }),
                 Waits.bounded(robot.getClock(), robot.macros.shootAll(), SHOOT_BUDGET_MS),
-                instant(() -> {
-                    if (robot.macros.isRunning()) robot.macros.markCancelled();   // the budget cut it
-                    log.add("shots " + robot.macros.getShotsFired() + " : " + robot.macros.getOutcome());
-                }),
+                // If the budget cut the macro, the macro itself reports CANCELLED (Macros.reporting).
+                instant(() -> log.add("shots " + robot.macros.getShotsFired() + " : " + robot.macros.getOutcome())),
                 Waits.waitMs(robot.getClock(), SETTLE_MS),
                 instant(() -> setPhase("leave")),
                 leaveCommand(leave),

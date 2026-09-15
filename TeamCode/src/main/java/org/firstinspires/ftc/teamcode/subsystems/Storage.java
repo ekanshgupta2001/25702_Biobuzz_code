@@ -241,6 +241,15 @@ public class Storage {
                 () -> exitsAtStart[0] = exitEvents, () -> !hasPiece());
     }
 
+    /**
+     * Runs the transport rearward for {@code ms} on the injected clock. The sensorless per-shot
+     * advance: without an exit sensor there is no edge to end on, so {@code Macros} meters the feed
+     * by time and runs this together with the transfer, never into a stopped one.
+     */
+    public Command advanceForMsCommand(long ms) {
+        return advanceUntilCommand(() -> false, ms);
+    }
+
     /** Advances until {@code stop} is true or {@code timeoutMs} passes on the injected clock. */
     public Command advanceUntilCommand(BooleanSupplier stop, long timeoutMs) {
         return advanceUntilCommand(stop, timeoutMs, () -> { }, () -> false);

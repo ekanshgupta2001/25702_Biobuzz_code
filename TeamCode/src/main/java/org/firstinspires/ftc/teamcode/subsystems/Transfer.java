@@ -191,6 +191,22 @@ public class Transfer {
                 .requiring(this);
     }
 
+    /**
+     * Runs at feed speed for {@code ms} on the injected clock, sensors ignored: the metered
+     * sensorless feed ({@code Macros.SENSORLESS_FEED_PULSE_MS}). Finishes at once when not fitted.
+     */
+    public Command feedForMsCommand(long ms) {
+        final long[] startedAt = new long[1];
+        return Command.build()
+                .setStart(() -> {
+                    startedAt[0] = clock.nowMs();
+                    if (isAvailable()) feed();
+                })
+                .setDone(() -> !isAvailable() || clock.nowMs() - startedAt[0] >= ms)
+                .setEnd(ec -> stop())
+                .requiring(this);
+    }
+
     /** Runs the lift upward until interrupted. */
     public Command liftCommand() {
         return Command.build()

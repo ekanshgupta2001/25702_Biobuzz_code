@@ -84,9 +84,12 @@ public class MacrosTest {
 
     private static void resetTunables() {
         Macros.INTAKE_TIMEOUT_MS = 8000;
-        Macros.INTAKE_RUNS_STORAGE = true;
+        Macros.INTAKE_RUNS_STORAGE = false;
         Macros.SHOOT_ONE_TIMEOUT_MS = 6000;
         Macros.SHOOT_ALL_TIMEOUT_MS = 20000;
+        Macros.SENSORLESS_FEED_PULSE_MS = 600;
+        Shooter.SHOT_RECOVERY_MIN_MS = 150;
+        Shooter.SHOT_RECOVERY_TIMEOUT_MS = 1500;
         Macros.AIM_TIMEOUT_MS = 2500;
         Macros.AIM_TOLERANCE_DEGREES = 2.0;
         Macros.AIM_REISSUE_DEGREES = 1.0;
@@ -164,7 +167,7 @@ public class MacrosTest {
         assertEquals(1, robot.macros.getShotsFired());
         assertEquals("no exit sensor: the count is dead-reckoned down", 1, robot.storage.count());
         assertEquals(Storage.ADVANCE_TICKS_PER_SEC, storageMotor.maxCommandedVelocity, EPS);
-        assertEquals("lift then feed ran", Transfer.FEED_TICKS_PER_SEC, transferMotor.maxCommandedVelocity, EPS);
+        assertEquals("the timed feed ran at feed speed", Transfer.FEED_TICKS_PER_SEC, transferMotor.maxCommandedVelocity, EPS);
         assertEquals("shooter held at speed during the feed",
                 Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM), shooterMotor.maxCommandedVelocity, EPS);
         assertEquals("everything stopped afterwards", 0, shooterMotor.commandedVelocity, EPS);
@@ -250,6 +253,60 @@ public class MacrosTest {
         assertEquals(Macros.Outcome.NO_TARGET, robot.macros.getOutcome());
     }
 
+    @Test
+    public void sensorlessShootAllOfFourFinishesInsideThirteenSeconds() {
+        // fixthese B2 / C9: four pre-loads on timed pulses used to cost ~16.6 s, most of it the storage
+        // running to its 2.5 s timeout against a stopped transfer.
+        robot.storage.setCount(4);
+        shooterAtSpeed();
+        final boolean[] pushedIntoStoppedTransfer = {false};
+        int ticks = runToCompletion(robot.macros.shootAll(), () -> {
+            if (robot.storage.getMode() == Storage.Mode.ADVANCING
+                    && robot.transfer.getMode() != Transfer.Mode.FEEDING) {
+                pushedIntoStoppedTransfer[0] = true;
+            }
+        });
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        assertEquals(4, robot.macros.getShotsFired());
+        assertEquals(0, robot.storage.count());
+        assertTrue("four pieces in " + ticks * 20 + " ms", ticks * 20 < 13000);
+        assertFalse("the storage never ran into a stopped transfer", pushedIntoStoppedTransfer[0]);
+    }
+
+    @Test
+    public void feedSensorWithoutExitSensorStillAdvancesOnATimer() {
+        // fixthese B2, the mixed case: a feed sensor but no transfer sensor. The advance has no edge
+        // to end on, so it is the timed pulse, run together with the sensed lift.
+        final boolean[] atFeed = {false};
+        final int[] feedTicks = {0};
+        final int[] advancingTicks = {0};
+        robot.transfer.setAtFeedSupplier(() -> atFeed[0]);
+        robot.storage.setCount(2);
+        shooterAtSpeed();
+        runToCompletion(robot.macros.shootOne(), () -> {
+            if (robot.storage.getMode() == Storage.Mode.ADVANCING) advancingTicks[0]++;
+            if (robot.transfer.getMode() == Transfer.Mode.LIFTING) atFeed[0] = true;       // the lift stages it
+            if (robot.transfer.getMode() == Transfer.Mode.FEEDING && ++feedTicks[0] > 2) atFeed[0] = false;
+        });
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        assertEquals(1, robot.macros.getShotsFired());
+        assertEquals("dead-reckoned down without an exit sensor", 1, robot.storage.count());
+        assertTrue("the advance was the timed pulse, not a run to the 2.5 s timeout: " + advancingTicks[0] * 20 + " ms",
+                advancingTicks[0] * 20 <= Macros.SENSORLESS_FEED_PULSE_MS + 60);
+    }
+
+    @Test
+    public void boundedTimeoutLeavesATerminalOutcome() {
+        // fixthese C6: a caller that bounds a macro used to leave its outcome RUNNING for good.
+        robot.storage.setCount(2);                      // and the wheel never comes up to speed
+        Command cut = Waits.bounded(clock, robot.macros.shootAll(), 200);
+        runToCompletion(cut);
+        assertEquals(Macros.Outcome.CANCELLED, robot.macros.getOutcome());
+        assertEquals("idle", robot.macros.getActiveName());
+        assertFalse(robot.macros.isRunning());
+        assertEquals("the flywheel was let go", 0, shooterMotor.commandedVelocity, EPS);
+    }
+
     // ---- Collecting ----
 
     @Test
@@ -258,8 +315,16 @@ public class MacrosTest {
         assertEquals(Macros.Outcome.TIMED_OUT, robot.macros.getOutcome());
         assertTrue("ran for the whole timeout", ticks >= Macros.INTAKE_TIMEOUT_MS / 20);
         assertEquals(Intake.INTAKE_TICKS_PER_SEC, intakeMotor.maxCommandedVelocity, EPS);
-        assertEquals(Storage.ADVANCE_TICKS_PER_SEC, storageMotor.maxCommandedVelocity, EPS);
+        assertEquals("the transport stays still by default (fixthese C8)", 0, storageMotor.maxCommandedVelocity, EPS);
         assertEquals(0, intakeMotor.commandedVelocity, EPS);
+        assertEquals(0, storageMotor.commandedVelocity, EPS);
+    }
+
+    @Test
+    public void intakeUntilFullRunsTheTransportWhenEnabled() {
+        Macros.INTAKE_RUNS_STORAGE = true;
+        runToCompletion(robot.macros.intakeUntilFull());
+        assertEquals(Storage.ADVANCE_TICKS_PER_SEC, storageMotor.maxCommandedVelocity, EPS);
         assertEquals(0, storageMotor.commandedVelocity, EPS);
     }
 

@@ -254,7 +254,8 @@ public class Teleop extends MatchOpMode {
 
     private void handleOperator(Controls.Snapshot in) {
         // A direct mechanism command while a macro owns that mechanism would interrupt the macro
-        // mid-group and leave its outcome stuck on RUNNING: abort it properly first.
+        // mid-group; it would report CANCELLED by itself, but the follower and camera pipeline need
+        // abortMacro's cleanup too, so abort it properly first.
         if (in.pressed(Controls.INTAKE)) {
             abortIfMacroOwns(robot.intake);
             robot.intake.intakeCommand().schedule();

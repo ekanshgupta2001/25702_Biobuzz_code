@@ -38,7 +38,8 @@ public class Storage {
     public static double REVERSE_TICKS_PER_SEC = -1000;
     /**
      * Second transport motor's direction. The side wheels face each other across the channel, so
-     * two motors driving them from opposite sides usually need one REVERSE, or they fight.
+     * two motors driving them from opposite sides usually need one REVERSE, or they fight. Applied
+     * live by {@link #update()}, so {@code Bench: Storage} can flip it and watch.
      */
     public static DcMotorSimple.Direction SECOND_MOTOR_DIRECTION = DcMotorSimple.Direction.FORWARD;
     /** An advance that has not delivered a piece by then gives up (empty channel, or a jam). */
@@ -225,6 +226,15 @@ public class Storage {
         return transport.getCurrentAmps() + transport2.getCurrentAmps();
     }
 
+    public boolean hasSecondMotor() {
+        return transport2.isAvailable();
+    }
+
+    /** Measured speed of the second transport motor, or 0 when not fitted. */
+    public double getSecondVelocityTicksPerSec() {
+        return transport2.getVelocity();
+    }
+
     /**
      * Counts edges and writes the motors. Edge detection runs regardless of mode, because a piece
      * can enter while the intake pushes and the transport is idle.
@@ -238,6 +248,7 @@ public class Storage {
         if (exit && !lastExit) markExited();
         lastExit = exit;
 
+        transport2.setDirection(SECOND_MOTOR_DIRECTION);   // no-op unless it changed (fixthese R2-A9)
         transport.write(targetVelocity);
         transport2.write(targetVelocity);
     }

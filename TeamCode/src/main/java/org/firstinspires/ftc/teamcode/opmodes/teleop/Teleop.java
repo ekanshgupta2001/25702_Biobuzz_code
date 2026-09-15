@@ -170,6 +170,7 @@ public class Teleop extends MatchOpMode {
         }
 
         reportMissingHardware();
+        reportBuildWarnings();
         if (robot.drivetrain.isAvailable() && !robot.drivetrain.isLocalizerSettled()) {
             telemetry.addLine("!! Localizer calibrating: wait a second before START");
         }

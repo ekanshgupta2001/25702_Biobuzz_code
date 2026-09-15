@@ -25,6 +25,7 @@ import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.subsystems.Storage;
 import org.firstinspires.ftc.teamcode.subsystems.Transfer;
 import org.firstinspires.ftc.teamcode.util.diagnostics.MatchLogger;
+import org.firstinspires.ftc.teamcode.util.diagnostics.Tunables;
 import org.firstinspires.ftc.teamcode.util.field.Alliance;
 import org.firstinspires.ftc.teamcode.util.field.FieldConstants;
 import org.firstinspires.ftc.teamcode.util.field.PoseStorage;
@@ -65,6 +66,7 @@ public class MainAutoTest {
     @Before
     public void setUp() {
         Scheduler.reset();
+        Tunables.resetForTests();
         Hardware.reset();
         PoseStorage.clear();
         MatchClock.AUTONOMOUS_MS = 30_000;
@@ -94,6 +96,7 @@ public class MainAutoTest {
     @After
     public void tearDown() {
         Scheduler.reset();
+        Tunables.resetForTests();
         Hardware.reset();
         PoseStorage.clear();
         MatchClock.AUTONOMOUS_MS = 30_000;

@@ -37,6 +37,8 @@ public final class FakeDcMotorEx implements DcMotorEx {
     public double[] lastVelocityPidf = null;
 
     // ---- What the test wants the motor to report ----
+    /** What the hub holds for RUN_USING_ENCODER; starts as a stand-in for the SDK's per-motor default. */
+    public PIDFCoefficients pidf = new PIDFCoefficients(10, 3, 0, 12);
     public int currentPosition = 0;
     public double measuredVelocity = 0;
     public double currentAmps = 0;
@@ -147,13 +149,14 @@ public final class FakeDcMotorEx implements DcMotorEx {
     @Override public void setMotorDisable() {}
     @Override public boolean isMotorEnabled() { return true; }
     @Override public void setPIDCoefficients(RunMode mode, PIDCoefficients pid) {}
-    @Override public void setPIDFCoefficients(RunMode mode, PIDFCoefficients pidf) {}
+    @Override public void setPIDFCoefficients(RunMode mode, PIDFCoefficients pidf) { this.pidf = pidf; }
     @Override public void setVelocityPIDFCoefficients(double p, double i, double d, double f) {
         lastVelocityPidf = new double[] {p, i, d, f};
+        pidf = new PIDFCoefficients(p, i, d, f);
     }
     @Override public void setPositionPIDFCoefficients(double p) {}
     @Override public PIDCoefficients getPIDCoefficients(RunMode mode) { return null; }
-    @Override public PIDFCoefficients getPIDFCoefficients(RunMode mode) { return null; }
+    @Override public PIDFCoefficients getPIDFCoefficients(RunMode mode) { return pidf; }
     @Override public double getCurrentAlert(CurrentUnit unit) { return 0; }
     @Override public void setCurrentAlert(double current, CurrentUnit unit) {}
     @Override public boolean isOverCurrent() { return false; }

@@ -5,8 +5,11 @@ import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.Robot;
+import org.firstinspires.ftc.teamcode.opmodes.RobotTunables;
 import org.firstinspires.ftc.teamcode.util.diagnostics.LoopTimer;
+import org.firstinspires.ftc.teamcode.util.diagnostics.Tunables;
 
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -22,6 +25,11 @@ import java.util.Locale;
  *
  * <p>Registered under the "Bench" group so they sort together on the Driver Station, away from the
  * match OpModes. {@link #buildRobot()} is the same JVM seam {@code MatchOpMode} has.
+ *
+ * <p>A value a bench changes is a {@code public static} and lives until the app restarts, so it is
+ * what the next Teleop runs with. That is the pit workflow (tune, then try it on the practice
+ * field), so nothing here restores anything on stop; instead every card lists what differs from
+ * the compiled defaults, and BACK on gamepad 1 restores them all (fixthese R2-A5).
  */
 public abstract class BenchOpMode extends OpMode {
     public static int TELEMETRY_INTERVAL_MS = 50;
@@ -44,6 +52,7 @@ public abstract class BenchOpMode extends OpMode {
     /** Runs after readSensors() on every init loop; the default shows the controls. */
     protected void onBenchInitLoop() {
         for (String line : controls()) telemetry.addLine(line);
+        telemetry.addLine("BACK: restore every tunable to its compiled default");
     }
 
     /** The bench's button card. */
@@ -56,6 +65,7 @@ public abstract class BenchOpMode extends OpMode {
 
     @Override
     public final void init() {
+        RobotTunables.snapshot();     // first: the defaults must be on record before this bench edits any
         Scheduler.reset();
         robot = buildRobot();
         telemetry.setMsTransmissionInterval(TELEMETRY_INTERVAL_MS);
@@ -89,6 +99,7 @@ public abstract class BenchOpMode extends OpMode {
 
         robot.readSensors();
         telemetry.addLine(title());
+        if (gamepad1.backWasPressed()) Tunables.restoreDefaults();
         onBench();
         robot.writeActuators();
         footer();
@@ -110,6 +121,11 @@ public abstract class BenchOpMode extends OpMode {
         telemetry.addData("Loop", loopStats.getStatus());
         telemetry.addData("Sensors", robot.sensingSummary());
         missingHardware();
+        List<String> tuned = Tunables.changed();
+        if (!tuned.isEmpty()) {
+            telemetry.addLine("TUNED THIS SESSION (Teleop will run with these; BACK restores):");
+            for (String line : tuned) telemetry.addLine("  " + line);
+        }
     }
 
     private void missingHardware() {

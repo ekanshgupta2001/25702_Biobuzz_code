@@ -52,6 +52,7 @@ public class MainAuto extends MatchOpMode {
         selector.poll(gamepad1);
         robot.setAlliance(selector.getAlliance());      // G408: which NECTAR is the opponent's
         reportMissingHardware();
+        reportBuildWarnings();
         if (robot.drivetrain.isAvailable() && !robot.drivetrain.isLocalizerSettled()) {
             telemetry.addLine("!! Localizer calibrating: wait a second before START");
         }

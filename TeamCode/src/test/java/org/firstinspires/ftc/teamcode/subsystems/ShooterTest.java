@@ -8,6 +8,7 @@ import com.pedropathing.ivy.Command;
 import com.pedropathing.ivy.Scheduler;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
+import com.qualcomm.robotcore.hardware.PIDFCoefficients;
 
 import org.firstinspires.ftc.teamcode.util.time.FakeClock;
 import org.junit.After;
@@ -142,6 +143,46 @@ public class ShooterTest {
         assertEquals(Shooter.PIDF_I, tuned.lastVelocityPidf[1], EPS);
         assertEquals(Shooter.PIDF_D, tuned.lastVelocityPidf[2], EPS);
         assertEquals("F = 32767 / max ticks per second", 32767.0 / Shooter.MAX_TICKS_PER_SEC, tuned.lastVelocityPidf[3], EPS);
+    }
+
+    @Test
+    public void turningCustomPidfOffRestoresTheSdkCoefficients() {
+        // fixthese R2-A6: the bench's X used to flip the flag and leave the custom gains in the hub
+        // while the card said "SDK default".
+        FakeDcMotorEx m = new FakeDcMotorEx();
+        PIDFCoefficients sdk = m.pidf;
+        Shooter s = new Shooter(m, null, clock);
+        assertTrue("off at construction: the hub keeps its own", sdk == m.pidf);
+
+        Shooter.CUSTOM_PIDF = true;
+        s.applyPidf();
+        assertEquals(Shooter.PIDF_P, m.pidf.p, EPS);
+        assertEquals(Shooter.PIDF_F, m.pidf.f, EPS);
+
+        Shooter.CUSTOM_PIDF = false;
+        s.applyPidf();
+        assertEquals("the SDK's own coefficients are back", sdk.p, m.pidf.p, EPS);
+        assertEquals(sdk.i, m.pidf.i, EPS);
+        assertEquals(sdk.f, m.pidf.f, EPS);
+        assertEquals(sdk.p, s.readFlywheelPidf().p, EPS);
+    }
+
+    @Test
+    public void secondFlywheelDirectionFollowsTheStaticAtRuntime() {
+        // fixthese R2-A9: the direction used to be read once in the constructor, so a bench flip
+        // did nothing until re-INIT.
+        FakeDcMotorEx first = new FakeDcMotorEx();
+        FakeDcMotorEx second = new FakeDcMotorEx();
+        Shooter pair = new Shooter(first, second, clock);
+        assertTrue(pair.hasSecondMotor());
+        pair.update();
+        assertEquals(DcMotorSimple.Direction.FORWARD, second.direction);
+        Shooter.SECOND_MOTOR_DIRECTION = DcMotorSimple.Direction.REVERSE;
+        pair.update();
+        assertEquals("applied on the next loop", DcMotorSimple.Direction.REVERSE, second.direction);
+        assertEquals("the first is never touched", DcMotorSimple.Direction.FORWARD, first.direction);
+        second.measuredVelocity = -700;
+        assertEquals(-700, pair.getSecondVelocityTicksPerSec(), EPS);
     }
 
     @Test

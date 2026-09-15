@@ -14,6 +14,7 @@ import org.firstinspires.ftc.teamcode.commands.Macros;
 import org.firstinspires.ftc.teamcode.game.Field;
 import org.firstinspires.ftc.teamcode.game.FieldPoses;
 import org.firstinspires.ftc.teamcode.opmodes.FakeTelemetry;
+import org.firstinspires.ftc.teamcode.opmodes.RobotTunables;
 import org.firstinspires.ftc.teamcode.subsystems.ColorSensor;
 import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
 import org.firstinspires.ftc.teamcode.subsystems.FakeDcMotorEx;
@@ -27,6 +28,7 @@ import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.subsystems.Storage;
 import org.firstinspires.ftc.teamcode.subsystems.Transfer;
 import org.firstinspires.ftc.teamcode.util.diagnostics.MatchLogger;
+import org.firstinspires.ftc.teamcode.util.diagnostics.Tunables;
 import org.firstinspires.ftc.teamcode.util.field.Alliance;
 import org.firstinspires.ftc.teamcode.util.field.PoseStorage;
 import org.firstinspires.ftc.teamcode.util.field.StartPosition;
@@ -79,6 +81,7 @@ public class TeleopTest {
         Scheduler.reset();
         Hardware.reset();
         PoseStorage.clear();
+        Tunables.resetForTests();
         Teleop.DEBUG_TELEMETRY = false;
         Storage.CAPACITY = 4;
         Drivetrain.MIN_PATH_MS = 60;
@@ -113,6 +116,7 @@ public class TeleopTest {
         Scheduler.reset();
         Hardware.reset();
         PoseStorage.clear();
+        Tunables.resetForTests();
         Teleop.DEBUG_TELEMETRY = false;
         Limelight.MOUNT_CALIBRATED = false;
     }
@@ -499,6 +503,21 @@ public class TeleopTest {
         assertEquals(Math.PI, follower.pose.heading(), EPS);
         assertTrue(telemetry.contains("RED (from auto)"));
         assertTrue("red starts on the audience-side CELL", telemetry.contains("tags 34-37"));
+    }
+
+    @Test
+    public void initCardListsValuesTunedOnABench() {
+        // fixthese R2-A5: a static bumped on a bench is what this OpMode runs with. The card says so.
+        RobotTunables.snapshot();                  // what the bench's own init recorded
+        Shooter.SHOOT_RPM = 3100;                  // what its dpad then did
+        try {
+            op.init();
+            op.init_loop();
+            assertTrue(telemetry.joined(), telemetry.contains("TUNED THIS SESSION"));
+            assertTrue(telemetry.contains("Shooter.SHOOT_RPM = 3100.0 (default 3000.0)"));
+        } finally {
+            Shooter.SHOOT_RPM = 3000;
+        }
     }
 
     @Test

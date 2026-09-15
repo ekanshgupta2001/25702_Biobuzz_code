@@ -1,6 +1,7 @@
 package org.firstinspires.ftc.teamcode.opmodes.test;
 
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
+import com.qualcomm.robotcore.hardware.DcMotorSimple;
 
 import org.firstinspires.ftc.teamcode.commands.Macros;
 import org.firstinspires.ftc.teamcode.game.PieceType;
@@ -20,7 +21,7 @@ public class StorageBench extends BenchOpMode {
     private static final String[] CONTROLS = {
             "hold A advance / B reverse; release = stop",
             "X: one SENSORLESS_FEED_PULSE_MS advance pulse;  LB/RB: pulse -/+ 50 ms",
-            "dpad up/down: count +/- 1",
+            "dpad up/down: count +/- 1      dpad right: flip the second transport motor's direction (live)",
     };
 
     private long pulseUntilMs = -1;
@@ -45,6 +46,10 @@ public class StorageBench extends BenchOpMode {
                 gamepad1.rightBumperWasPressed(), gamepad1.leftBumperWasPressed(), 50, 100, 3000);
         if (gamepad1.dpadUpWasPressed()) storage.setCount(storage.count() + 1);
         if (gamepad1.dpadDownWasPressed()) storage.setCount(storage.count() - 1);
+        if (gamepad1.dpadRightWasPressed()) {
+            Storage.SECOND_MOTOR_DIRECTION = Storage.SECOND_MOTOR_DIRECTION == DcMotorSimple.Direction.FORWARD
+                    ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD;
+        }
         if (gamepad1.xWasPressed()) pulseUntilMs = nowMs + Macros.SENSORLESS_FEED_PULSE_MS;
 
         boolean pulsing = pulseUntilMs >= 0 && nowMs < pulseUntilMs;
@@ -68,6 +73,10 @@ public class StorageBench extends BenchOpMode {
         telemetry.addData("Pulse", "%d ms  (LB/RB; paste into Macros.SENSORLESS_FEED_PULSE_MS)", Macros.SENSORLESS_FEED_PULSE_MS);
         telemetry.addData("Velocity", "target %.0f  measured %.0f t/s   %.2f A",
                 storage.getTargetVelocity(), storage.getVelocityTicksPerSec(), storage.getCurrentAmps());
+        telemetry.addData("Second motor", storage.hasSecondMotor()
+                ? fmt("%s  measured %.0f t/s  (dpad right flips; opposite sign to the first = fighting)",
+                        Storage.SECOND_MOTOR_DIRECTION, storage.getSecondVelocityTicksPerSec())
+                : "not fitted");
         telemetry.addData("Entrance", sensorLine(robot.storageEntranceSensor));
         telemetry.addData("Full", sensorLine(robot.storageFullSensor));
         telemetry.addData("Transfer (exit)", sensorLine(robot.transferSensor));

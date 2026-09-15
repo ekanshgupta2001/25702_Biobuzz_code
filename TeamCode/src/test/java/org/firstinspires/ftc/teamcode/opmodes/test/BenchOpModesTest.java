@@ -6,6 +6,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import com.pedropathing.ivy.Scheduler;
+import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.Gamepad;
 
 import org.firstinspires.ftc.teamcode.Robot;
@@ -22,6 +23,7 @@ import org.firstinspires.ftc.teamcode.subsystems.PathFollower;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.subsystems.Storage;
 import org.firstinspires.ftc.teamcode.subsystems.Transfer;
+import org.firstinspires.ftc.teamcode.util.diagnostics.Tunables;
 import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
 import org.firstinspires.ftc.teamcode.util.time.FakeClock;
 import org.junit.After;
@@ -53,6 +55,7 @@ public class BenchOpModesTest {
     public void setUp() {
         Scheduler.reset();
         Hardware.reset();
+        Tunables.resetForTests();
         clock = new FakeClock();
         motors = new FakePedroDrivetrain();
         intakeMotor = new FakeDcMotorEx();
@@ -74,6 +77,7 @@ public class BenchOpModesTest {
         Macros.SENSORLESS_FEED_PULSE_MS = 600;
         Shooter.SHOOT_RPM = 3000;
         Shooter.CUSTOM_PIDF = false;
+        Shooter.SECOND_MOTOR_DIRECTION = DcMotorSimple.Direction.FORWARD;
         Intake.ANTI_JAM_ENABLED = true;
     }
 
@@ -81,9 +85,11 @@ public class BenchOpModesTest {
     public void tearDown() {
         Scheduler.reset();
         Hardware.reset();
+        Tunables.resetForTests();
         Macros.SENSORLESS_FEED_PULSE_MS = 600;
         Shooter.SHOOT_RPM = 3000;
         Shooter.CUSTOM_PIDF = false;
+        Shooter.SECOND_MOTOR_DIRECTION = DcMotorSimple.Direction.FORWARD;
         Intake.ANTI_JAM_ENABLED = true;
     }
 
@@ -226,6 +232,57 @@ public class BenchOpModesTest {
         press(op.gamepad1, g -> g.a = true);
         loop(op);
         assertEquals("A again stops it", 0, shooterMotor.commandedVelocity, EPS);
+    }
+
+    @Test
+    public void shooterBenchFlipsTheSecondMotorLiveAndTogglesPidfBothWays() {
+        // fixthese R2-A9 / R2-A6.
+        FakeDcMotorEx second = new FakeDcMotorEx();
+        robot = new Robot(
+                new Drivetrain((PathFollower) null, clock),
+                new OpenLoopDrive(motors, clock),
+                new Intake(intakeMotor, clock),
+                new Storage(storageMotor, null, clock),
+                new Transfer(transferMotor, clock),
+                new Shooter(shooterMotor, second, clock),
+                new Limelight(null),
+                new ColorSensor(null), new ColorSensor(null),
+                new ColorSensor(null), new ColorSensor(null),
+                clock);
+        ShooterBench op = started(new TestShooterBench());
+        press(op.gamepad1, g -> g.dpad_right = true);
+        loop(op);
+        assertEquals(DcMotorSimple.Direction.REVERSE, Shooter.SECOND_MOTOR_DIRECTION);
+        assertEquals("applied to the motor the same loop", DcMotorSimple.Direction.REVERSE, second.direction);
+        assertEquals(DcMotorSimple.Direction.FORWARD, shooterMotor.direction);
+        assertTrue(telemetry.joined(), telemetry.contains("Second motor: REVERSE"));
+
+        double sdkP = shooterMotor.pidf.p;
+        press(op.gamepad1, g -> g.x = true);
+        loop(op);
+        assertTrue(Shooter.CUSTOM_PIDF);
+        assertEquals(Shooter.PIDF_P, shooterMotor.pidf.p, EPS);
+        press(op.gamepad1, g -> { });                 // release, so the next press is a new edge
+        loop(op);
+        press(op.gamepad1, g -> g.x = true);
+        loop(op);
+        assertFalse(Shooter.CUSTOM_PIDF);
+        assertEquals("off really puts the SDK's back", sdkP, shooterMotor.pidf.p, EPS);
+        assertTrue(telemetry.contains("SDK default  hub holds P 10.000"));
+    }
+
+    @Test
+    public void benchBackRestoresTheTunablesAndTheCardListsThem() {
+        // fixthese R2-A5: a bench edit lives for the app process; the card says so and BACK undoes it.
+        ShooterBench op = started(new TestShooterBench());
+        press(op.gamepad1, g -> g.dpad_up = true);
+        loop(op);
+        assertEquals(3100, Shooter.SHOOT_RPM, EPS);
+        assertTrue(telemetry.joined(), telemetry.contains("Shooter.SHOOT_RPM = 3100.0 (default 3000.0)"));
+        press(op.gamepad1, g -> g.back = true);
+        loop(op);
+        assertEquals("BACK restores the compiled default", 3000, Shooter.SHOOT_RPM, EPS);
+        assertTrue(Tunables.changed().isEmpty());
     }
 
     @Test

@@ -1,6 +1,8 @@
 package org.firstinspires.ftc.teamcode.opmodes.test;
 
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
+import com.qualcomm.robotcore.hardware.DcMotorSimple;
+import com.qualcomm.robotcore.hardware.PIDFCoefficients;
 
 import org.firstinspires.ftc.teamcode.commands.Macros;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
@@ -11,14 +13,18 @@ import org.firstinspires.ftc.teamcode.subsystems.Shooter;
  * up-CELL from the wall), {@code AT_SPEED_TOLERANCE_RPM} (how much the reading wanders once
  * settled), the spin-up time, and {@code SHOT_RECOVERY_MIN_MS} / {@code SHOT_RECOVERY_TIMEOUT_MS}
  * (Y fires one piece through with the real storage+transfer pulse and records how far the speed
- * dipped and how long it took to come back). X toggles the custom velocity PIDF live.
+ * dipped and how long it took to come back). X toggles the custom velocity PIDF live (off puts the
+ * SDK's own coefficients back, and the card shows what the hub actually holds); dpad right flips the
+ * second flywheel motor's direction while it spins, so an opposed pair that fights is seen here and
+ * not at the first match.
  */
 @TeleOp(name = "Bench: Shooter", group = "Bench")
 public class ShooterBench extends BenchOpMode {
     private static final String[] CONTROLS = {
             "A: flywheel on/off      dpad up/down: target +/- 100 rpm",
             "Y: fire one (storage + transfer pulse) while spinning; records the dip and recovery",
-            "X: custom PIDF on/off (re-applied at once)      B: reset peaks",
+            "X: custom PIDF on/off (applied at once; off restores the SDK's)      B: reset peaks",
+            "dpad right: flip the second flywheel's direction (live; watch whether the pair fights)",
     };
 
     private boolean spinning = false;
@@ -30,6 +36,13 @@ public class ShooterBench extends BenchOpMode {
     private long recoveryMs = -1;
     private final Peak rpmWhileReady = new Peak();
     private final Peak amps = new Peak();
+    /** What the hub holds, re-read after every toggle rather than every loop (it is a bus read). */
+    private PIDFCoefficients heldPidf = null;
+
+    @Override
+    protected void onBenchInit() {
+        heldPidf = robot.shooter.readFlywheelPidf();
+    }
 
     @Override
     protected String title() {
@@ -54,6 +67,11 @@ public class ShooterBench extends BenchOpMode {
         if (gamepad1.xWasPressed()) {
             Shooter.CUSTOM_PIDF = !Shooter.CUSTOM_PIDF;
             shooter.applyPidf();
+            heldPidf = shooter.readFlywheelPidf();
+        }
+        if (gamepad1.dpadRightWasPressed()) {
+            Shooter.SECOND_MOTOR_DIRECTION = Shooter.SECOND_MOTOR_DIRECTION == DcMotorSimple.Direction.FORWARD
+                    ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD;
         }
         if (gamepad1.bWasPressed()) {
             rpmWhileReady.reset();
@@ -102,8 +120,17 @@ public class ShooterBench extends BenchOpMode {
         telemetry.addData("Last shot", "dip to %s rpm   recovery %s   (-> SHOT_RECOVERY_MIN_MS / TIMEOUT_MS)",
                 num(dipRpm, "%.0f"), recoveryMs >= 0 ? fmt("%d ms", recoveryMs) : (shotAtMs >= 0 ? "..." : "n/a"));
         telemetry.addData("Current", "%.2f A  peak %s", shooter.getCurrentAmps(), amps.status("%.2f"));
-        telemetry.addData("PIDF", "%s  P %.3f I %.4f D %.1f F %.2f  (X toggles)",
-                Shooter.CUSTOM_PIDF ? "CUSTOM" : "SDK default", Shooter.PIDF_P, Shooter.PIDF_I, Shooter.PIDF_D, Shooter.PIDF_F);
+        telemetry.addData("PIDF", "%s  hub holds %s  (X toggles; custom would be P %.3f I %.4f D %.1f F %.2f)",
+                Shooter.CUSTOM_PIDF ? "CUSTOM" : "SDK default", pidfText(heldPidf),
+                Shooter.PIDF_P, Shooter.PIDF_I, Shooter.PIDF_D, Shooter.PIDF_F);
+        telemetry.addData("Second motor", shooter.hasSecondMotor()
+                ? fmt("%s  measured %.0f t/s vs first %.0f  (dpad right flips; opposite signs = fighting)",
+                        Shooter.SECOND_MOTOR_DIRECTION, shooter.getSecondVelocityTicksPerSec(), shooter.getVelocityTicksPerSec())
+                : "not fitted");
+    }
+
+    static String pidfText(PIDFCoefficients c) {
+        return c == null ? "n/a" : fmt("P %.3f I %.4f D %.1f F %.2f", c.p, c.i, c.d, c.f);
     }
 
     /** Milliseconds from the last Y shot until the wheel read at speed again, or -1 if not yet. */

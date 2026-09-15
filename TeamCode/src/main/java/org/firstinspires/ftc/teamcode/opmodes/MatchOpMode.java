@@ -5,8 +5,10 @@ import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.Robot;
+import org.firstinspires.ftc.teamcode.util.diagnostics.BuildFlavor;
 import org.firstinspires.ftc.teamcode.util.diagnostics.LoopTimer;
 import org.firstinspires.ftc.teamcode.util.diagnostics.MatchLogger;
+import org.firstinspires.ftc.teamcode.util.diagnostics.Tunables;
 import org.firstinspires.ftc.teamcode.util.time.MatchClock;
 
 import java.io.IOException;
@@ -107,6 +109,8 @@ public abstract class MatchOpMode extends OpMode {
 
     @Override
     public final void init() {
+        // First, so the compiled defaults are on record before any bench edits them.
+        RobotTunables.snapshot();
         // The scheduler is static and survives OpMode restarts: clear it before anything schedules.
         Scheduler.reset();
         robot = buildRobot();
@@ -123,6 +127,7 @@ public abstract class MatchOpMode extends OpMode {
 
         onInit();
         reportMissingHardware();
+        reportBuildWarnings();
     }
 
     @Override
@@ -168,6 +173,19 @@ public abstract class MatchOpMode extends OpMode {
         Scheduler.reset();
         if (robot != null) robot.stop();
         if (logger != null) logger.close();
+    }
+
+    /**
+     * Two things a driver must know before START and cannot otherwise see: that this APK carries the
+     * AutoTune web server (not match legal, R704), and any tunable edited on a bench since the app
+     * started, which is what this OpMode will run with (fixthese R2-A5, R2-A7).
+     */
+    protected void reportBuildWarnings() {
+        if (BuildFlavor.isTuningBuild()) telemetry.addLine(BuildFlavor.TUNING_WARNING);
+        List<String> tuned = Tunables.changed();
+        if (tuned.isEmpty()) return;
+        telemetry.addLine("!! TUNED THIS SESSION (a bench changed these; restart the app to undo):");
+        for (String line : tuned) telemetry.addLine("  " + line);
     }
 
     /** Lists any configuration name that could not be resolved. Empty output means all present. */

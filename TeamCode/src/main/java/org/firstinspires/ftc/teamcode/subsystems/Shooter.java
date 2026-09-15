@@ -7,6 +7,7 @@ import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
+import com.qualcomm.robotcore.hardware.PIDFCoefficients;
 
 import org.firstinspires.ftc.teamcode.subsystems.templates.VelocityMotor;
 import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
@@ -43,7 +44,8 @@ public class Shooter {
     public static double IDLE_RPM = 0;
     /**
      * Second flywheel motor's direction. FORWARD for two wheels on one side turning the same way;
-     * REVERSE for an opposed pair, or the two fight. Only the first wheel's encoder is measured.
+     * REVERSE for an opposed pair, or the two fight. Applied live by {@link #update()}, so
+     * {@code Bench: Shooter} can flip it while the pair spins and show whether they fight.
      */
     public static DcMotorSimple.Direction SECOND_MOTOR_DIRECTION = DcMotorSimple.Direction.FORWARD;
     /**
@@ -103,14 +105,40 @@ public class Shooter {
         this.flywheel2 = new VelocityMotor(secondMotor, SECOND_MOTOR_DIRECTION,
                 DcMotor.ZeroPowerBehavior.FLOAT);
         this.clock = clock;
-        applyPidf();
+        if (CUSTOM_PIDF) applyPidf();     // off: the hub keeps its own, nothing to write
     }
 
-    /** Writes {@code PIDF_*} to both motors if {@link #CUSTOM_PIDF}; the bench calls it after a toggle. */
+    /**
+     * Writes {@code PIDF_*} to both motors when {@link #CUSTOM_PIDF}, and puts the SDK's own
+     * coefficients back when it is off, so the bench's toggle really toggles (fixthese R2-A6).
+     */
     public void applyPidf() {
-        if (!CUSTOM_PIDF) return;
-        flywheel.setVelocityPidf(PIDF_P, PIDF_I, PIDF_D, PIDF_F);
-        flywheel2.setVelocityPidf(PIDF_P, PIDF_I, PIDF_D, PIDF_F);
+        if (CUSTOM_PIDF) {
+            flywheel.setVelocityPidf(PIDF_P, PIDF_I, PIDF_D, PIDF_F);
+            flywheel2.setVelocityPidf(PIDF_P, PIDF_I, PIDF_D, PIDF_F);
+        } else {
+            flywheel.restoreSdkPidf();
+            flywheel2.restoreSdkPidf();
+        }
+    }
+
+    /** The coefficients the hub holds for the first flywheel right now (a bus read; bench cards only). */
+    public PIDFCoefficients readFlywheelPidf() {
+        return flywheel.readPidf();
+    }
+
+    public boolean hasSecondMotor() {
+        return flywheel2.isAvailable();
+    }
+
+    /** Measured speed of the second flywheel motor, or 0 when not fitted. */
+    public double getSecondVelocityTicksPerSec() {
+        return flywheel2.getVelocity();
+    }
+
+    /** Measured speed of the first flywheel motor in ticks per second. */
+    public double getVelocityTicksPerSec() {
+        return flywheel.getVelocity();
     }
 
     public boolean isAvailable() {
@@ -177,6 +205,7 @@ public class Shooter {
     }
 
     public void update() {
+        flywheel2.setDirection(SECOND_MOTOR_DIRECTION);   // no-op unless it changed (fixthese R2-A9)
         flywheel.update();
         flywheel2.update();
         inBandLoops = inBandNow() ? inBandLoops + 1 : 0;

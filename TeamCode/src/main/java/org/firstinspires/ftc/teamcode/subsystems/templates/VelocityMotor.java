@@ -4,6 +4,7 @@ import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
+import com.qualcomm.robotcore.hardware.PIDFCoefficients;
 
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
@@ -43,6 +44,9 @@ public final class VelocityMotor {
     public static int REFRESH_EVERY_N_WRITES = 12;
 
     private final DcMotorEx motor;
+    /** The hub's own velocity-loop coefficients, read once at construction; {@code null} if unknown. */
+    private final PIDFCoefficients sdkPidf;
+    private DcMotorSimple.Direction direction;
     private double target = 0;
     private double lastWritten = Double.NaN;
     private int writesSinceSent = 0;
@@ -62,11 +66,28 @@ public final class VelocityMotor {
     public VelocityMotor(DcMotorEx motor, DcMotorSimple.Direction direction,
                          DcMotor.ZeroPowerBehavior zeroPower) {
         this.motor = motor;
-        if (motor == null) return;
+        this.direction = direction;
+        if (motor == null) {
+            sdkPidf = null;
+            return;
+        }
         motor.setDirection(direction);
         motor.setZeroPowerBehavior(zeroPower);
         motor.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
         motor.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        // So custom gains can be switched off again without a restart (fixthese R2-A6).
+        sdkPidf = motor.getPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER);
+    }
+
+    /** Re-points the motor. A no-op unless the direction actually changes, so it is safe every loop. */
+    public void setDirection(DcMotorSimple.Direction newDirection) {
+        if (motor == null || newDirection == null || newDirection == direction) return;
+        direction = newDirection;
+        motor.setDirection(newDirection);
+    }
+
+    public DcMotorSimple.Direction getDirection() {
+        return direction;
     }
 
     /** False when the motor is missing from the robot configuration. All calls then no-op. */
@@ -130,5 +151,20 @@ public final class VelocityMotor {
      */
     public void setVelocityPidf(double p, double i, double d, double f) {
         if (motor != null) motor.setVelocityPIDFCoefficients(p, i, d, f);
+    }
+
+    /** Puts back the coefficients the hub had at construction, if they were readable. */
+    public void restoreSdkPidf() {
+        if (motor != null && sdkPidf != null) motor.setPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER, sdkPidf);
+    }
+
+    /** The coefficients read at construction, or {@code null}. */
+    public PIDFCoefficients getSdkPidf() {
+        return sdkPidf;
+    }
+
+    /** What the hub holds right now: a bus read, for a bench card, not for the loop. */
+    public PIDFCoefficients readPidf() {
+        return motor == null ? null : motor.getPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER);
     }
 }

@@ -15,6 +15,32 @@ and what to do about it.
 
 ---
 
+## Status (2026-09-14, after the fixes)
+
+Every code-level item below is done and committed with a JVM test unless this table says otherwise;
+HANDOFF §8.1 maps each item to its change and its test. Items that need the robot are listed with the
+bench that measures them.
+
+| Item | Status |
+|---|---|
+| A1, A2, A3, A4 | done (commits `3613b9e`, `a5e7124`, `e18cba0`) |
+| B1, B3, B4, B6, B7 | done (`86752e4`) |
+| B2, C6, C7, C8, C9, D1 | done (`2c206ba`) |
+| B5 | done (`3613b9e`) |
+| C1, C2, C3, C5, C10, C11 | done (`0fb0ab7`); C2 and C3 ship **off** (`Intake.REJECT_ENABLED`, `Shooter.CUSTOM_PIDF`) until measured |
+| C4 | numbers changed to 7 A / 300 ms; **measure** with `Bench: Intake` |
+| C12 | done (`86752e4`) |
+| C13 | **deferred**: SDK 12.0 is its own task |
+| D2, D3, D4, D8 | done (this commit) |
+| D5 | done (`9f791de`): `opmodes/test/SelfTest` on `BenchOpMode`; `ConceptCommands` deleted |
+| D6 | **on the robot**: TestHardware or the Mecanum Tuner, then `Constants.drivetrainConfig` |
+| D7, D11, D12 | done |
+| D9, D10, D15 | known, no action; noted in HANDOFF §7 |
+| D13, D14 | **on the robot / CAD**: HANDOFF §9 |
+| G1–G8 (below) | done (`0c53dc9`) |
+
+---
+
 ## A. BLOCKERS
 
 ### A1. Teleop cannot drive until Pedro is fully tuned
@@ -356,3 +382,58 @@ and what to do about it.
 8. B3, B7 when `Constants.create()` becomes real.
 9. C1–C5 as the sensors and motors are fitted and measured.
 10. Everything in D as time allows.
+
+---
+
+## G. Found reviewing the plan against the code (2026-09-14)
+
+Practical issues the original list missed, found by reading every subsystem, macro and OpMode against
+how the robot is actually used. All fixed in `0c53dc9` unless noted.
+
+### G1. Teleop could not shoot on a sensorless robot
+- **Where:** `Macros.piecesOnBoard()`; `Storage.count()`; `Teleop.onInit()`.
+- **Cause:** the count only rose on a storage-entrance sensor edge or `setCount`, which only auto
+  called. `shootOne`/`shootAll` gate on `piecesOnBoard() > 0`, so with no entrance sensor the
+  operator's buttons reported `NO_TARGET` and never ran the transfer. The first-event robot is that robot.
+- **Fix:** `Storage.hasEntranceSensor()`; without one a zero count is "unknown" and `piecesOnBoard()`
+  returns `CAPACITY`: Shoot One fires one pulse, Shoot All fires four (X stops early). The card shows `?`.
+
+### G2. The storage count was not handed from auto to teleop
+- **Fix:** `PoseStorage.save(pose, alliance, start, pieceCount)`; `MainAuto` writes it every loop,
+  `Teleop.onInit` applies it. A cut auto no longer starts teleop believing the robot is empty.
+
+### G3. The heading hold fought small deliberate turns
+- **Cause:** `HEADING_HOLD_STICK_DEADBAND = 0.05` was compared against the stick *after*
+  `DriveScaling.shape` (0.07 deadband, square expo): raw deflections up to ~0.28 (0.45 in slow mode)
+  were discarded and replaced by the hold's correction.
+- **Fix:** 0.001; the shaped stick is already noise-free, so any non-zero value is intent.
+
+### G4. `aimAndShootAll` had no timeout
+- **Cause:** it called `aimCore` raw; every other caller wraps it in `bounded`. It is the planned
+  Pedro-auto opener. **Fix:** `bounded(aimCore, AIM_TIMEOUT_MS)`; after the timeout it shoots anyway.
+
+### G5. A 5th piece made `shootAll` report failure
+- **Cause:** `shootAllCore` built `CAPACITY` feed steps but `piecesOnBoard()` can be 5 (4 stored + 1
+  in the lift). **Fix:** `CAPACITY + 1` steps.
+
+### G6. The flywheel-recovery wait ran after the last shot
+- **Cause:** `flywheelRecovery()` was a fixed step of `feedOneCore`: up to 1.65 s of held resources
+  doing nothing after every `shootOne` and at the end of every `shootAll`.
+- **Fix:** `afterShot(morePieces)`: full recovery only when another piece follows, a 150 ms dwell after the last.
+
+### G7. Second motors were hard-wired FORWARD
+- **Fix:** `Shooter.SECOND_MOTOR_DIRECTION`, `Storage.SECOND_MOTOR_DIRECTION` (REVERSE for an opposed pair).
+
+### G8. `markCancelled()` blanked the active name outside its guard
+- **Fix:** both writes inside `if (outcome == RUNNING)`.
+
+### Noted, not code (HANDOFF §7, docs/03 §20)
+- Camera facing decides whether tag-aiming exists (front camera = odometry aim).
+- `followLazyCommand` reports "arrived" the moment anything else changes the follower's mode.
+- `Macros.SENSORLESS_FEED_PULSE_MS` is the pulse the robot uses; `Transfer.*_PULSE_MS` are not.
+- `INTAKE_RUNS_STORAGE = true` is an unprotected stall (no storage jam detection).
+- Shot counts and `SUCCESS` are pulse counts without sensors.
+- Four fitted colour sensors ≈ four to eight I2C transactions per loop; watch the loop time.
+- Entrance edge counting samples at loop rate; `Bench: Storage` shows the in-view loop count.
+- `AutoSelector`'s A never gated START; the card now says "lock".
+- The SDK's TestHardware utility covers wiring checks with no code; `DriveBench` was therefore not built.

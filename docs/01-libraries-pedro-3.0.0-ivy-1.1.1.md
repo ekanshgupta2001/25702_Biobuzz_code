@@ -479,6 +479,16 @@ Every tuner OpMode: construct → `setPose(zero)` → `Thread.sleep(1000)` → `
 `setPose(zero)` → `update()` → `follow(...)` → loop `update()`; chain on `atParametricEnd()`.
 
 To remove AutoTune for competition, drop the `tuning` dependency (there is no runtime off switch).
+In this repo that is a Gradle property: `./gradlew -Ptuning :TeamCode:assembleDebug` builds the
+tuning APK; plain `assembleDebug` builds the competition APK without the dependency, and
+`TeamCode/build.gradle` excludes `pedro/Tuning.java` and `pedro/procedures/**` from that build so the
+sources that import it still compile.
+
+**`@Tuner` factories run at Robot Controller start-up** (`TunerScanner` invokes every one to list
+it), so they must be `public static`, zero-arg, declared to return exactly `Procedure`, and must
+never throw: a factory whose config is not filled in yet returns a `Procedure` that aborts with a
+message when run (`Tuning.NotReady`), not `null` and not an NPE. `Tests(drivetrain, null, null)` is
+legal and exposes only the Driving test; `ForesightTuner` NPEs on a null localizer function.
 
 ## A.8 2.x → 3.0.0 migration table
 
@@ -697,6 +707,12 @@ Schedule it exactly once, after `Scheduler.reset()`, in `init()`. Unchanged in 1
     station-keeping with no owner. Our `Drivetrain.holdCommand()` keeps the resource.
 11. **`PedroCommands.follow` has no `setEnd` and no requirements.** An interrupted follow leaves the
     follower in `FOLLOW`, still driving. Never schedule it bare.
+12. **`setEnd` on a group replaces the group's own end.** `sequential`, `parallel`, `race` and
+    `deadline` are `CommandBuilder`s whose `setEnd` is the code that ends their children; chaining
+    your own `setEnd` onto one throws that away and the children are never ended. To run something
+    when a group is interrupted, make it a child: `deadline(body, onInterrupt(callback))`
+    (`Macros.reporting`). A natural finish fires the callback too, so the callback must be a no-op
+    once the work is done.
 
 ## B.6 Using Ivy with Pedro 3.0.0 in this codebase
 

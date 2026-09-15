@@ -7,6 +7,7 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.Locale;
 
@@ -52,6 +53,11 @@ public class MatchLogger {
 
     /** Rows between disk flushes. Without this the tail of the match is lost on a crash. */
     public static final int FLUSH_EVERY_ROWS = 50;
+    /**
+     * Logs kept in the directory. Opening a new one deletes the oldest beyond this, so a season of
+     * practice does not leave thousands of files on the Control Hub (fixthese D8).
+     */
+    public static int KEEP_NEWEST = 40;
 
     /**
      * The column set {@code Robot} supplies for BIOBUZZ, in order. Shared with any analysis script
@@ -95,6 +101,7 @@ public class MatchLogger {
         if (!dir.exists() && !dir.mkdirs()) {
             throw new IOException("could not create " + dir);
         }
+        pruneOldest(dir, Math.max(0, KEEP_NEWEST - 1));     // leave room for this one
         String stamp = new SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(new Date());
         file = new File(dir, tag + "_" + stamp + ".csv");
         writer = new BufferedWriter(new FileWriter(file));
@@ -105,6 +112,20 @@ public class MatchLogger {
 
     public File getFile() {
         return file;
+    }
+
+    /** Deletes the oldest {@code .csv} files in {@code dir} until {@code keep} remain. */
+    static void pruneOldest(File dir, int keep) {
+        File[] logs = dir.listFiles((d, name) -> name.endsWith(".csv"));
+        if (logs == null || logs.length <= keep) return;
+        Arrays.sort(logs, (a, b) -> {
+            int byTime = Long.compare(a.lastModified(), b.lastModified());
+            return byTime != 0 ? byTime : a.getName().compareTo(b.getName());
+        });
+        for (int i = 0; i < logs.length - keep; i++) {
+            //noinspection ResultOfMethodCallIgnored
+            logs[i].delete();
+        }
     }
 
     /** Milliseconds since the log was opened, for the {@code t_ms} column. */

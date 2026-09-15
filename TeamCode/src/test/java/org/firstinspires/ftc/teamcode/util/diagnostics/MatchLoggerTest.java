@@ -27,6 +27,7 @@ public class MatchLoggerTest {
     @Before
     public void setUp() throws IOException {
         dir = Files.createTempDirectory("matchlogger").toFile();
+        MatchLogger.KEEP_NEWEST = 40;
     }
 
     @After
@@ -48,6 +49,29 @@ public class MatchLoggerTest {
         assertEquals(1, lines.size());
         assertEquals("a,b,c", lines.get(0));
         assertEquals(3, logger.getColumnCount());
+    }
+
+    @Test
+    public void openingALogPrunesTheOldestBeyondKeepNewest() throws IOException {
+        // fixthese D8: one CSV per OpMode run, forever, is thousands of files by mid-season.
+        MatchLogger.KEEP_NEWEST = 3;
+        for (int i = 0; i < 5; i++) {
+            File old = new File(dir, "teleop_2026010" + i + "_000000.csv");
+            Files.write(old.toPath(), ("old " + i).getBytes(StandardCharsets.UTF_8));
+            assertTrue(old.setLastModified(1_000_000L * (i + 1)));      // i = 0 is the oldest
+        }
+        File other = new File(dir, "notes.txt");
+        Files.write(other.toPath(), "keep".getBytes(StandardCharsets.UTF_8));
+
+        MatchLogger logger = new MatchLogger(dir, "auto", "a");
+        logger.close();
+
+        File[] csvs = dir.listFiles((d, name) -> name.endsWith(".csv"));
+        assertEquals("two oldest gone, two kept, plus the new one", 3, csvs.length);
+        assertTrue(!new File(dir, "teleop_20260100_000000.csv").exists());
+        assertTrue(!new File(dir, "teleop_20260101_000000.csv").exists());
+        assertTrue(new File(dir, "teleop_20260104_000000.csv").exists());
+        assertTrue("only logs are touched", other.exists());
     }
 
     @Test

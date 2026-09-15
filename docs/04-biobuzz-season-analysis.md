@@ -208,7 +208,7 @@ the cap gifts the points; cap late.
 | **R503** | **max 8 DC motors and 8 servos** across all configurations | V1 needs 8–10 motors: drivetrain 4, intake, storage (1–2), transfer, shooter (1–2). **A single flywheel and a single storage motor fit exactly**; otherwise storage + transfer must share a motor |
 | R701 | one Control Hub (or phone + Expansion Hub) plus at most one Expansion Hub | ✓ |
 | **R702** | **Limelight 3A is the only permitted programmable vision coprocessor**; Limelight 3G, OAK-1, OpenMV banned | ✓ Limelight 3A |
-| **R704** | no continuous video stream; **FTC Dashboard, FTControl Panels and similar streaming tools are prohibited during matches** | we ship no Panels; **drop the AutoTune `tuning` dependency from competition builds** (its web server is always on) |
+| **R704** | no continuous video stream; **FTC Dashboard, FTControl Panels and similar streaming tools are prohibited during matches** | we ship no Panels; the AutoTune `tuning` dependency (its web server is always on) is only in the build when `-Ptuning` is passed: `./gradlew :TeamCode:assembleDebug` is the competition APK |
 | R708 | single-sensor UVC webcams only; no stereo | — |
 | R801 | no pneumatics, blowers, vacuums; flywheels/rollers fine | ✓ |
 | SDK | **v12.0** (2026-09-12), Android Studio Narwhal 3 Feature Drop+; no minimum version mandated for inspection | repo is on SDK 11.2.1 via the Pedro Quickstart; upgrade needed for AprilTag clusters |

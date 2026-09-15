@@ -31,7 +31,7 @@ public class AutoSelectorTest {
         assertEquals(Alliance.BLUE, selector.getAlliance());
         assertEquals(StartPosition.FACING_HIVE, selector.getStart());
         assertFalse(selector.isConfirmed());
-        assertTrue(selector.status().contains("A to confirm"));
+        assertTrue(selector.status().contains("A to lock"));
     }
 
     @Test
@@ -53,7 +53,7 @@ public class AutoSelectorTest {
         press(g -> g.dpad_left = true);
         press(g -> g.a = true);
         assertTrue(selector.isConfirmed());
-        assertTrue(selector.status().contains("CONFIRMED"));
+        assertTrue(selector.status().contains("LOCKED"));
 
         press(g -> g.dpad_left = true);           // ignored while locked, and consumed
         assertEquals(Alliance.RED, selector.getAlliance());

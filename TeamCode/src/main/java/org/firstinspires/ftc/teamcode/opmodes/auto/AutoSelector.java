@@ -55,9 +55,12 @@ public class AutoSelector {
         confirmed = false;
     }
 
-    /** One line for the init card. */
+    /**
+     * One line for the init card. "Locked" is exactly that: A stops the dpad changing the menu by
+     * accident, and nothing more. START runs the auto with whatever is shown, locked or not.
+     */
     public String status() {
         return alliance + " / " + start.label()
-                + (confirmed ? "   CONFIRMED (B to change)" : "   dpad to change, A to confirm");
+                + (confirmed ? "   LOCKED (B to change; START runs this)" : "   dpad to change, A to lock");
     }
 }

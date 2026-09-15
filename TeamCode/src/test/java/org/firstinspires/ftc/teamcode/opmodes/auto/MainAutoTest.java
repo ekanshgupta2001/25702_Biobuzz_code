@@ -129,7 +129,7 @@ public class MainAutoTest {
         assertTrue(telemetry.contains("open loop (Pedro not tuned)"));
         press(op.gamepad1, g -> g.a = true);
         op.init_loop();
-        assertTrue(telemetry.contains("CONFIRMED"));
+        assertTrue(telemetry.contains("LOCKED"));
     }
 
     @Test

@@ -7,8 +7,8 @@ no code here. The structure is the FTC_Guide reference architecture
 Pedro Pathing 3.0.0 and Ivy 1.1.1 with no Panels dependency, and re-shaped around the mechanisms in
 `02-robot-physical-architecture.md`. Library facts are in `01-libraries-pedro-3.0.0-ivy-1.1.1.md`.
 
-The tree below exists as Javadoc-only stubs. Each stub's header states the contract this document
-expands on. Nothing here is implemented yet.
+Everything in the tree below is implemented and JVM-tested (HANDOFF section 2 has the numbers); the
+Javadoc header of each class is its contract and this document is the map.
 
 ---
 
@@ -56,8 +56,15 @@ only: the SDK rejects motor writes from an iterative OpMode's `stop()`.
 Robot.java                     composition root; readSensors()/writeActuators(); supplier wiring
 opmodes/
   MatchOpMode.java             abstract base (extends OpMode); final lifecycle; read → decide → execute → write
-  SelfTest.java                LinearOpMode diagnostics; per-subsystem pass/fail
-  ConceptCommands.java         teaching OpMode for Ivy concepts and traps
+  test/
+    BenchOpMode.java           abstract base for the pit benches: same Robot, no Ivy; readSensors → onBench → writeActuators
+    IntakeBench.java           "Bench: Intake": free speed, stall amps, anti-jam, reject
+    StorageBench.java          "Bench: Storage": count, sensors, the SENSORLESS_FEED_PULSE_MS pulse, edge sampling
+    TransferBench.java         "Bench: Transfer": lift/feed, the same pulse
+    ShooterBench.java          "Bench: Shooter": ticks/rev, rpm, spin-up, shot dip and recovery, PIDF
+    ColorSensorBench.java      "Bench: Color sensors": HSV, windows, alliance, presence distance
+    LimelightBench.java        "Bench: Limelight": pipelines, tags, blob, mount check
+    SelfTest.java              "SelfTest": PASS / FAIL / SKIP per subsystem; run first at every event
   teleop/
     Controls.java              enum of every gamepad binding + generated help card; one Snapshot per loop
     Teleop.java                match TeleOp; driving is an Ivy default command over Pedro's manual mode
@@ -108,6 +115,7 @@ per command-aware subsystem, for `Macros`, `AutoRoutine` and `FieldPoses`.
 ```
 opmodes ─────► Robot, subsystems, commands, game, util, Pedro, Ivy, SDK
 opmodes.auto / opmodes.teleop ─► opmodes.MatchOpMode (never each other)
+opmodes.test ─► opmodes.test.BenchOpMode (never MatchOpMode, never Ivy commands)
 Robot ───────► subsystems, commands.Macros, game.PieceType, util.*, Pedro math.Pose, SDK
 commands ────► Robot (back-reference), subsystems, util.math, Pedro paths/math, Ivy
 subsystems ──► util.*, pedro.Constants (Drivetrain only), Pedro, Ivy, SDK hardware
@@ -136,8 +144,10 @@ place a `Follower` is built; `HardwareNames` is the only place a config string a
 - Cross-subsystem wiring is **supplier injection in `Robot`'s constructor**, e.g.
   `intake.setCapturedSupplier(() -> storage.entranceSeesPiece())`, `intake.setFullSupplier(storage::isFull)`,
   `shooter.setFeedSupplier(transfer::pieceAtFeed)`. A subsystem never imports another subsystem.
-- `updateLocalization()` blends any absolute fix into `poseFusion` every loop and **writes the
-  returned pose back** to the drivetrain. **BIOBUZZ: AprilTags move with the HIVE and cannot localise
+- `updateLocalization()` blends any absolute fix into `poseFusion` every loop and writes the
+  returned pose back to the drivetrain **only when `PoseFusion` reports `ACCEPTED`**: an unconditional
+  write-back released the heading hold and re-wrote the Pinpoint over I2C every loop (fixthese B1).
+  **BIOBUZZ: AprilTags move with the HIVE and cannot localise
   the robot (docs/04 §3), so this runs odometry-only until a static reference exists;**
   `tryLocalizeFromAprilTag()` and the relocalize macro stay wired but are expected to report no fix.
   `abortMacro()` is the shared cancel path (cancel drivetrain path, restore the AprilTag pipeline,
@@ -170,11 +180,15 @@ heading, abort, aim lock (hold R-trigger), collect / align, Pedro paths to the s
 park, snap headings. Operator pad: intake / outtake / eject / stop-or-cancel, intake-until-full,
 shoot one / all, flywheel arm, TIP counted, debug toggle.
 
-**`Teleop`** — `onInit()` schedules the default commands (`drivetrain.driverControlCommand(fwd,
-strafe, turn)` with `DriveScaling.shape(...) * slowScale()` and every mechanism's
-`defaultIdleCommand()`) and inherits the pose and alliance from `PoseStorage`. `onInitLoop()`
-lets the driver pick the alliance on the dpad when auto did not run, retries
-`tryLocalizeFromAprilTag()`, and shows the help card. `onDecide()` reads one `Controls.Snapshot`,
+**`Teleop`** — `onInit()` schedules exactly one drive default (`drivetrain.driverControlCommand(fwd,
+strafe, turn)` with `DriveScaling.shape(...) * slowScale()` when Pedro is tuned, else
+`openLoopDrive.driverControlCommand(...)`: robot-centric, no heading hold, drive macros off) and every
+mechanism's `defaultIdleCommand()`, and inherits the pose, alliance and **piece count** from
+`PoseStorage`. `onInitLoop()` lets the driver flip the alliance on the dpad (it always wins over what
+auto left), retries `tryLocalizeFromAprilTag()`, and shows the help card. The collect/align macros
+are refused with the failure rumble until `Limelight.MOUNT_CALIBRATED` is set.
+Without a storage-entrance sensor the count is unknowable, so the "Pieces" line shows `?` and the
+shoot buttons fire blind (`Macros.piecesOnBoard()`). `onDecide()` reads one `Controls.Snapshot`,
 handles driver then operator input, holds or releases the drivetrain aim lock from the right
 trigger (`Drivetrain.setAimLock` fed by `Macros.aimHeading` on the current up-CELL from
 `game/Field`), then re-schedules the flywheel hold if a macro preempted it. The
@@ -211,16 +225,21 @@ scoring block via `skipIfAnyLegMissed(cmd)` = `conditional(() -> missed == 0, cm
 `addParametricCallback` are now `race(follow, waitUntil(() -> follower.parametricCompletion() > t))`
 followed by the action, or a `parallel` with a `waitUntil`-gated command.
 
-**`AutoSelector`** — dpad cycles alliance / start, A confirms, B unlocks; reads every edge each poll.
+**`AutoSelector`** — dpad cycles alliance / start, A locks the menu against accidental dpad presses,
+B unlocks; reads every edge each poll. START runs whatever is shown, locked or not.
 
-**`SelfTest`** — `LinearOpMode`; `setAutoClear(false)`; battery, drivetrain pose, Limelight
-(`LLStatus.getFps() > 0`), each colour sensor (value or saturation above noise), then each
-velocity mechanism: command → `writeActuators()` → settle → `readSensors()` → sample, in a
-`try/finally` that stops everything and calls `writeActuators()`. Ends with a push-the-robot
-odometry readout.
-
-**`ConceptCommands`** — one button per Ivy concept; every demo that moves a mechanism goes through its
-command factory. Demos 8 and 9 are the `unless()` and default-command traps.
+**`opmodes/test/`: the benches and `SelfTest`** — iterative OpModes on `BenchOpMode`, group "Bench".
+They build the real `Robot` (same config names, directions, velocity code and sensor predicates as the
+match OpModes) and drive one subsystem through its intent setters with no Ivy: each loop is
+`readSensors()` → the bench's buttons → `writeActuators()`. They exist because the code is otherwise
+proven only against fakes, and because every "measure this" constant in HANDOFF section 9 needs a
+tool: each bench's card names the constants it feeds and shows the value to paste. `SelfTest` is a
+clock-stepped state machine (config names, battery, each velocity mechanism at a low speed with the
+sign of the measured velocity checked, colour sensors, Limelight fps, drive layer, localizer settled)
+that leaves a PASS / FAIL / SKIP table on the screen; SKIP means not fitted. `BenchOpModesTest` runs
+every one of them through `init / init_loop / start / loop` on the fakes. Wheel directions are not a
+bench: the SDK's **TestHardware** utility OpMode (11.2+) spins any motor by config name, and the
+Mecanum Tuner on a `-Ptuning` build does the same with a web UI.
 
 ## 6. Subsystems
 
@@ -338,7 +357,9 @@ version (`git show 20768b3:.../pedro/Constants.java`). Motor and Pinpoint names 
 `drivetrainConfig` is filled (names from `HardwareNames`, left REVERSE / right FORWARD; verify with
 the Mecanum Tuner); `OpenLoopDrive` drives through it before tuning. Until the localizer and
 Foresight configs exist and `create()` returns a follower, Pedro cannot follow a path; `Drivetrain`
-fails soft and everything else still runs.
+fails soft, `Robot` builds `OpenLoopDrive` on the real motors instead (never both), the sticks drive
+robot-centric through it, and the drive macros, snap turns and aim lock are off. Intake, storage,
+transfer, shooter and the hardcoded auto run as normal.
 
 ## 12. `util/`
 
@@ -569,6 +590,41 @@ swatches. `SensorColor.java` is the right reference for this wrapper.
 - A pattern nothing uses is a pattern nobody trusts: wire `Shooter` into `Robot` and
   `Teleop` before the hardware exists; `isAvailable()` keeps them inert.
 - Code comments state the rule; a lessons-learned doc keeps the story. Documentation is tracked.
+
+## 20. Practical notes from the 2026-09-14 review
+
+Things that are correct in the code but will surprise someone on the robot:
+
+- **Camera facing decides whether tag-aiming exists.** The shooter fires out the rear. A front camera
+  only sees the HIVE tags while the robot is *not* aimed, so `Macros.aimHeading` silently falls back
+  to odometry and the tag branch never runs; only piece detection benefits. A rear camera makes
+  tag-refined aiming real: set `Limelight.CAMERA_YAW_OFFSET_DEGREES = 180` and the same maths works
+  (blob approach paths then face the piece by turning around first). Undecided at the time of writing.
+- **`followLazyCommand` reports "arrived" the moment anything else changes the follower's mode**
+  (`atParametricEnd()` is true whenever the follower is not in FOLLOW). A `hold` or `manual` issued
+  by another command while a path runs ends the path command after `MIN_PATH_MS`, holding at an end
+  pose it never reached. Keep paths and turns sequential, never parallel, in the Pedro auto.
+- **The sensorless pulse is `Macros.SENSORLESS_FEED_PULSE_MS`.** `Transfer.LIFT_PULSE_MS` and
+  `FEED_PULSE_MS` only apply to a direct `liftOneCommand()` / `feedCommand()`, which the shooting
+  macros no longer use without sensors. Tune the Macros one (the storage and transfer benches show
+  it).
+- **`Macros.INTAKE_RUNS_STORAGE = true` is an unprotected stall.** `Storage` has no jam detection;
+  with the transfer stopped, the side wheels would push the queue against it at full velocity
+  authority for up to `INTAKE_TIMEOUT_MS`. Leave it off unless the bench shows the channel will not
+  accept a piece otherwise, and add a storage `JamDetector` first if so.
+- **Shot counts and `SUCCESS` are pulse counts without sensors.** `pieceWasShot` degrades to `true`
+  for every sensor that is absent. The auto log's `shots 4 : SUCCESS` means four pulses ran.
+- **The storage count has three states.** Known from a sensor edge or `setCount`; unknown (no
+  entrance sensor, nothing on record: shoot buttons fire blind, the interlock cannot fire, the card
+  shows `?`); handed over from auto (`PoseStorage`), which is the dead-reckoned remainder.
+- **Four fitted colour sensors are four to eight I2C transactions per loop** (colour, plus distance
+  where the device has it), none of them bulk-cached. Watch `Loop` in the debug telemetry; if p95
+  climbs, drop a sensor from the presence set before touching anything else.
+- **Entrance edge counting samples at loop rate.** A piece that crosses the entrance sensor in under
+  two loops is missed. `Bench: Storage` shows the longest in-view run; if it is one, slow the
+  intake hand-off or move the sensor.
+- **Wiring checks need no code**: the SDK Utility menu's TestHardware spins any motor and shows any
+  sensor by config name. Use it before the benches at every event.
 
 ## 19. Build and run
 

@@ -261,6 +261,12 @@ public class Limelight {
         return hasTarget() ? tagDetections.size() : 0;
     }
 
+    /** Every tag in the fresh frame (read-only; empty when stale or on the blob pipeline). */
+    public List<LLResultTypes.FiducialResult> getTags() {
+        return hasTarget() ? Collections.unmodifiableList(tagDetections)
+                : Collections.<LLResultTypes.FiducialResult>emptyList();
+    }
+
     public Pose3D getBotpose() {
         return hasTarget() ? latestResult.getBotpose() : null;
     }
@@ -347,6 +353,11 @@ public class Limelight {
 
     public double getBlobSpreadDegrees() {
         return Math.max(txFilter.spread(), tyFilter.spread());
+    }
+
+    /** The largest blob's area as a percentage of the image, or NaN with none. */
+    public double getBlobArea() {
+        return primaryBlob == null ? Double.NaN : primaryBlob.getTargetArea();
     }
 
     /** Ground distance to the blob along the robot's forward axis, or NaN with no usable detection. */

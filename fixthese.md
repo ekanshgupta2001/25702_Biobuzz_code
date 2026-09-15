@@ -449,6 +449,32 @@ tests pass on the current source; the plain `assembleDebug` APK builds without `
 (so the R704 exclusion works). All eight round-1 fix commits hold up: A1, A2, A4, B1, B2, B3, B4,
 B7 are correctly fixed and tested. Nothing below is a regression; these are the next layer.
 
+## Round 2 status (2026-09-15, after the fixes)
+
+Every claim below was checked against the code at line level before anything changed. Where the
+review was partly wrong, the verdict says so and why; the body of each item is left as written.
+368 JVM tests, 0 failures; both APK variants build.
+
+| Item | Verdict on the claim | Change | Proof |
+|---|---|---|---|
+| R2-A1 | confirmed (also: the intake current was read even when anti-jam was ineligible; MainAuto never showed loop stats) | `Intake` samples current once per `update()`; `VelocityMotor.write` sends only on change, refreshing an unchanged value every `REFRESH_EVERY_N_WRITES` (12) loops so a reset hub recovers; `Robot.readSensors` reads the entrance every loop and the fitted presence sensors one per loop in rotation; loop stats on the auto card | `IntakeCommandTest.currentIsReadOnceALoop`, `VelocityMotorTest.anUnchangedVelocityIsNotResentEveryLoop`, `RobotTest.presenceSensorsAreReadInRotationAndTheEntranceEveryLoop`, `MainAutoTest.runsTheRoutineAndHandsTheAllianceToTeleop` (commit `213770d`) |
+| R2-A2 | partly: `isFull()` also ORs the storage-full sensor, so the exposure is "no entrance **and** no full sensor" | `Storage.hasFullSensor()` / `canDetectFull()`; the full supplier is null when unfitted; operator dpad up = count 4 (holds the roller), dpad left = count 0; HANDOFF §8.2 step 0 fits the full sensor first | `RobotTest.aFullSensorIsKnownToTheStorage`, `StorageTest.fullSensorFittedIsRecorded`, `TeleopTest.operatorCanMarkTheRobotFullWithoutASensor` (`06e0566`) |
+| R2-A3 | conclusion right, mechanism wrong: the assume-4 fallback existed but was keyed on config presence, and the entrance predicate was hue-only | the entrance counts by presence (`Robot.pieceEnteringStorage` via `pieceNear`: distance first); `PieceType.HUES_CALIBRATED = false`; `Robot.wireSuppliers` trusts a hue-only entrance sensor, and wires the G408 reject, only once the hues are measured | `RobotTest.entranceCountsByDistanceBeforeTheHuesAreMeasured`, `aHueOnlyEntranceSensorIsNotTrustedUntilCalibrated` (`06e0566`) |
+| R2-A4 | confirmed, and worse: even a full sensor that ended the run correctly reported TIMED_OUT | outcome is SUCCESS when full or the count rose; on a robot that cannot detect full the timer ending is SUCCESS under the name `intake (timed)`; TIMED_OUT only when a sensor could have seen a piece | `MacrosTest.intakeUntilFullIsATimedRunWithNoWayToKnowFull`, `intakeUntilFullSucceedsWhenTheFullSensorTrips`, `intakeUntilFullTimesOutAndStopsEverything` (`06e0566`) |
+| R2-A5 | partly: four statics at five sites (`ANTI_JAM_ENABLED`, `SENSORLESS_FEED_PULSE_MS` twice, `SHOOT_RPM`, `CUSTOM_PIDF`); `STALL_CURRENT_AMPS` was never written and sensor gain is instance state | `util/diagnostics/Tunables` snapshots every tunable (class list in `opmodes/RobotTunables`) at the first init; Teleop and Auto init cards list what differs; bench footers list it and BACK restores. Deliberately no restore on stop: tune-then-drive is the pit workflow | `TunablesTest` (2), `TeleopTest.initCardListsValuesTunedOnABench`, `BenchOpModesTest.benchBackRestoresTheTunablesAndTheCardListsThem` (`aaeb3ce`) |
+| R2-A6 | confirmed | `VelocityMotor` reads the hub's PIDF at construction; `Shooter.applyPidf()` restores it when custom is off; the bench card shows what the hub holds | `ShooterTest.turningCustomPidfOffRestoresTheSdkCoefficients`, `BenchOpModesTest.shooterBenchFlipsTheSecondMotorLiveAndTogglesPidfBothWays` (`aaeb3ce`) |
+| R2-A7 | confirmed | `util/diagnostics/BuildFlavor.isTuningBuild()` looks for the AutoTune `Tuner` class; every match init card leads with the R704 warning | `BuildFlavorTest` (`aaeb3ce`) |
+| R2-A8 | confirmed, and deliberate | kept: START still runs unlocked (this routine is alliance-safe); the init card blinks `NOT LOCKED`, the running card says `started UNLOCKED`; `AutoRoutine` Javadoc sets the rule that the path auto drives only when confirmed | `MainAutoTest.startingUnlockedWarnsButRuns` (`c1179ce`) |
+| R2-A9 | confirmed | `VelocityMotor.setDirection` (writes only on change); `Shooter.update()` / `Storage.update()` apply `SECOND_MOTOR_DIRECTION` live; both benches flip it on dpad right and show both motors' velocities | `ShooterTest.secondFlywheelDirectionFollowsTheStaticAtRuntime`, `BenchOpModesTest.shooterBenchFlipsTheSecondMotorLiveAndTogglesPidfBothWays` (`aaeb3ce`) |
+| R2-A10 | mostly refuted: `piecesLine()` already printed `?` for exactly the assume-4 case, never `4/4`. What was real: in the R2-A3 configuration the card showed `0/4` as fact | fixed through R2-A3 (that configuration no longer exists) and the operator count buttons; the `?` line now says `assumes 4` and names the button | `TeleopTest.operatorCanMarkTheRobotFullWithoutASensor` (`06e0566`) |
+| R2-B1 | confirmed | the trust decision now lives in `Robot.wireSuppliers()` alone, with the policy in its Javadoc, and `Robot.sensingSummary()` prints the outcome on every init card and bench footer. No `SensorSet` object: the subsystems' `has*Sensor()` already say what is wired, and a second object would be a second truth | `RobotTest.transferFallsBackToTimedPulsesWithoutAFeedSensor` (summary string) (`06e0566`) |
+| R2-B2 | confirmed | `Macros.ASSUME_FULL_WHEN_UNCOUNTED = true`, on the card as "assumes 4" | `MacrosTest.assumeFullCanBeTurnedOffByName` (`06e0566`) |
+| R2-B3 | confirmed | **deferred** (no field effect): extract a shared `RobotOpMode` after the first event | — |
+| R2-B4 | confirmed | `Controls.Needs { NOTHING, DRIVETRAIN, CAMERA }`; `Teleop` gates with `Snapshot.anyPressed(Controls::requiresDrivetrain / requiresCamera)`; the camera card line is built from the enum | `TeleopTest.everyDriveMacroIsRefusedWithoutAFollower` (table-driven over the enum) (`c1179ce`) |
+| R2-B5 | confirmed | **deferred** with B3 | — |
+| R2-B6 | confirmed | `pieceAtStorageEntrance` renamed `pieceEnteringStorage`: presence first, then classification | via R2-A3 tests |
+| extra | "storage full" and "final seconds" were both two blips on both pads | final seconds is one 600 ms rumble | `TeleopTest.finalSecondsGiveOneLongRumbleOnBothPads` (`c1179ce`) |
+
 ## R2-A. Will it perform on the robot
 
 ### R2-A1. Loop time with sensors fitted (RISK, measure first)

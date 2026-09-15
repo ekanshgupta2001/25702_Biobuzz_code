@@ -56,6 +56,7 @@ only: the SDK rejects motor writes from an iterative OpMode's `stop()`.
 Robot.java                     composition root; readSensors()/writeActuators(); supplier wiring
 opmodes/
   MatchOpMode.java             abstract base (extends OpMode); final lifecycle; read → decide → execute → write
+  RobotTunables.java           the classes whose public statics are tunables; snapshot() first in every init
   test/
     BenchOpMode.java           abstract base for the pit benches: same Robot, no Ivy; readSensors → onBench → writeActuators
     IntakeBench.java           "Bench: Intake": free speed, stall amps, anti-jam, reject
@@ -99,7 +100,7 @@ pedro/
   procedures/*.java            Quickstart AutoTune procedures (Mecanum, Pinpoint, Foresight, Tests, …)
 util/
   control/JamDetector.java
-  diagnostics/LoopTimer.java, MatchLogger.java, RateLimiter.java
+  diagnostics/LoopTimer.java, MatchLogger.java, RateLimiter.java, Tunables.java, BuildFlavor.java
   field/Alliance.java, FieldConstants.java, PoseFusion.java, PoseStorage.java, StartPosition.java
   hardware/Hardware.java, HardwareNames.java
   math/Angles.java, ColorMath.java, DriveScaling.java, MedianFilter.java, VisionMath.java
@@ -115,7 +116,8 @@ per command-aware subsystem, for `Macros`, `AutoRoutine` and `FieldPoses`.
 ```
 opmodes ─────► Robot, subsystems, commands, game, util, Pedro, Ivy, SDK
 opmodes.auto / opmodes.teleop ─► opmodes.MatchOpMode (never each other)
-opmodes.test ─► opmodes.test.BenchOpMode (never MatchOpMode, never Ivy commands)
+opmodes.test ─► opmodes.test.BenchOpMode, opmodes.RobotTunables (never MatchOpMode, never Ivy commands)
+util.diagnostics.Tunables ─► java.lang.reflect only (the class list lives in opmodes.RobotTunables, so util never imports a subsystem)
 Robot ───────► subsystems, commands.Macros, game.PieceType, util.*, Pedro math.Pose, SDK
 commands ────► Robot (back-reference), subsystems, util.math, Pedro paths/math, Ivy
 subsystems ──► util.*, pedro.Constants (Drivetrain only), Pedro, Ivy, SDK hardware
@@ -137,13 +139,23 @@ place a `Follower` is built; `HardwareNames` is the only place a config string a
 - Construction: `Hardware.reset()` → every `LynxModule` to `BulkCachingMode.MANUAL` → collect
   voltage sensors once → build subsystems with the injected `Clock` → wire suppliers → `new Macros(this)`.
 - `readSensors()`: clear every hub's bulk cache, push `PieceType` target heights into the Limelight,
-  `limelight.update()`, each `ColorSensor.update()`, tick `MatchClock`, sample battery every
-  `VOLTAGE_SAMPLE_MS` (voltage is not bulk-cached; report the **lowest** sensor).
+  `limelight.update()`, the storage-entrance `ColorSensor.update()` every loop (an edge must not be
+  missed), then **one** of the fitted presence sensors (full, transfer, feed) per loop in rotation
+  (each is two I2C transactions; three fitted means each is up to ~60 ms old, fine for pieces that
+  sit), tick `MatchClock`, sample battery every `VOLTAGE_SAMPLE_MS` (voltage is not bulk-cached;
+  report the **lowest** sensor).
 - `writeActuators()`: `intake`, `storage`, `transfer`, `shooter`, `openLoopDrive`, then
   `drivetrain.update()`.
-- Cross-subsystem wiring is **supplier injection in `Robot`'s constructor**, e.g.
-  `intake.setCapturedSupplier(() -> storage.entranceSeesPiece())`, `intake.setFullSupplier(storage::isFull)`,
-  `shooter.setFeedSupplier(transfer::pieceAtFeed)`. A subsystem never imports another subsystem.
+- Cross-subsystem wiring is **supplier injection in `Robot.wireSuppliers()`**, e.g.
+  `storage.setEntranceSupplier(this::pieceEnteringStorage)`, `intake.setFullSupplier(storage::isFull)`,
+  `transfer.setAtFeedSupplier(this::pieceAtShooterFeed)`. A subsystem never imports another subsystem.
+- **`wireSuppliers()` is also the one place that decides which sensor is trusted** (fixthese R2-A3,
+  R2-B1). A `null` supplier means "no sensor" and every fallback follows from it (unknown count and
+  blind shooting, dead-reckoned exits, timed pulses, no self-detected full). Every point judges
+  presence with `pieceNear` (distance when the device has it, else hue). The entrance is wired only
+  when it has distance or `PieceType.HUES_CALIBRATED`; the G408 reject only when the hues are
+  measured. `Robot.sensingSummary()` prints the result on every init card and bench footer. A sensor
+  is trusted because it was measured, not because it is in the configuration.
 - `updateLocalization()` blends any absolute fix into `poseFusion` every loop and writes the
   returned pose back to the drivetrain **only when `PoseFusion` reports `ACCEPTED`**: an unconditional
   write-back released the heading hold and re-wrote the Pinpoint over I2C every loop (fixthese B1).
@@ -167,7 +179,11 @@ Subsystem conventions:
 - **Arbitration is Ivy's job, not a flag's.** Default commands sit at priority −1 with
   `InterruptedBehavior.SUSPEND` and `BlockedBehavior.QUEUE`; anything requiring the subsystem preempts
   and they resume automatically. Default-command logic lives in `setExecute` (resume skips `start()`).
-- Tunables are plain `public static` fields (no Panels `@Configurable`); edit and redeploy.
+- Tunables are plain `public static` fields (no Panels `@Configurable`); edit and redeploy, or nudge
+  one on a bench. A static lives until the Robot Controller app restarts, so `util/diagnostics/Tunables`
+  snapshots the compiled values at the first OpMode init and every match init card lists what differs.
+- `VelocityMotor.write` reaches the bus only when the value changes (and every
+  `REFRESH_EVERY_N_WRITES` loops regardless); `Intake` samples motor current once per `update()`.
 
 ## 5. OpModes
 
@@ -175,10 +191,14 @@ Subsystem conventions:
 function)`. `wasPressed(gp1, gp2)`, `axis(gp1, gp2)` (the SDK's stick-up-is-negative sign applied
 here only), `helpLines()` renders the init card. The SDK's `*WasPressed()` consumes on read, so
 `Controls.read(gp1, gp2)` takes one immutable `Snapshot` per loop and `Teleop` decides from it.
-Adding a control is one entry. Driver pad: drive axes, slow mode, drive-frame toggle, reset
+Adding a control is one entry, and a control that steers the robot declares it:
+`Needs.DRIVETRAIN` or `Needs.CAMERA` (camera implies drivetrain). `Teleop` refuses those generically
+(`Snapshot.anyPressed(Controls::requiresDrivetrain)` without a follower,
+`anyPressed(Controls::requiresCamera)` until `Limelight.MOUNT_CALIBRATED`), so a new macro cannot slip
+past the gate. Driver pad: drive axes, slow mode, drive-frame toggle, reset
 heading, abort, aim lock (hold R-trigger), collect / align, Pedro paths to the shooting spot and
 park, snap headings. Operator pad: intake / outtake / eject / stop-or-cancel, intake-until-full,
-shoot one / all, flywheel arm, TIP counted, debug toggle.
+shoot one / all, flywheel arm, TIP counted, count = 4 / count = 0 (dpad up / left), debug toggle.
 
 **`Teleop`** — `onInit()` schedules exactly one drive default (`drivetrain.driverControlCommand(fwd,
 strafe, turn)` with `DriveScaling.shape(...) * slowScale()` when Pedro is tuned, else
@@ -187,13 +207,16 @@ mechanism's `defaultIdleCommand()`, and inherits the pose, alliance and **piece 
 `PoseStorage`. `onInitLoop()` lets the driver flip the alliance on the dpad (it always wins over what
 auto left), retries `tryLocalizeFromAprilTag()`, and shows the help card. The collect/align macros
 are refused with the failure rumble until `Limelight.MOUNT_CALIBRATED` is set.
-Without a storage-entrance sensor the count is unknowable, so the "Pieces" line shows `?` and the
-shoot buttons fire blind (`Macros.piecesOnBoard()`). `onDecide()` reads one `Controls.Snapshot`,
+Without a trusted storage-entrance sensor the count is unknowable, so the "Pieces" line shows
+`?  (assumes 4 ...)` and the shoot buttons fire blind (`Macros.piecesOnBoard()`, governed by
+`Macros.ASSUME_FULL_WHEN_UNCOUNTED`); the operator's dpad up sets it to 4, which also holds the
+intake roller. `onDecide()` reads one `Controls.Snapshot`,
 handles driver then operator input, holds or releases the drivetrain aim lock from the right
 trigger (`Drivetrain.setAimLock` fed by `Macros.aimHeading` on the current up-CELL from
 `game/Field`), then re-schedules the flywheel hold if a macro preempted it. The
 sticks abort only a macro that owns the drivetrain; operator X cancels any macro. Haptics rumble
-on **transitions** (macro success/failure, a piece in, storage full, final 20 s).
+on **transitions** (macro success/failure, a piece in, storage full as two blips, final 20 s as one
+long buzz so the two cannot be confused).
 `matchTelemetry()` shows time, pieces, macro state, drive frame, aim and flywheel state, and
 faults only when present; `debugTelemetry()` adds the engineering readout.
 
@@ -226,7 +249,14 @@ scoring block via `skipIfAnyLegMissed(cmd)` = `conditional(() -> missed == 0, cm
 followed by the action, or a `parallel` with a `waitUntil`-gated command.
 
 **`AutoSelector`** — dpad cycles alliance / start, A locks the menu against accidental dpad presses,
-B unlocks; reads every edge each poll. START runs whatever is shown, locked or not.
+B unlocks; reads every edge each poll. START runs whatever is shown, locked or not: `MainAuto` blinks
+`NOT LOCKED` on the init card and reports `started UNLOCKED` while running. That is safe only because
+the hardcoded routine is alliance-safe; **the Pedro-path auto must schedule its drive legs only when
+`selector.isConfirmed()`** and otherwise fall back to shooting in place.
+
+**Init-card warnings (every match OpMode)** — `MatchOpMode.reportBuildWarnings()`: a first line
+`!! TUNING BUILD` when `BuildFlavor.isTuningBuild()` finds the AutoTune library in the APK (R704), and
+`!! TUNED THIS SESSION` followed by every tunable whose value differs from the compiled default.
 
 **`opmodes/test/`: the benches and `SelfTest`** — iterative OpModes on `BenchOpMode`, group "Bench".
 They build the real `Robot` (same config names, directions, velocity code and sensor predicates as the
@@ -236,7 +266,10 @@ proven only against fakes, and because every "measure this" constant in HANDOFF 
 tool: each bench's card names the constants it feeds and shows the value to paste. `SelfTest` is a
 clock-stepped state machine (config names, battery, each velocity mechanism at a low speed with the
 sign of the measured velocity checked, colour sensors, Limelight fps, drive layer, localizer settled)
-that leaves a PASS / FAIL / SKIP table on the screen; SKIP means not fitted. `BenchOpModesTest` runs
+that leaves a PASS / FAIL / SKIP table on the screen; SKIP means not fitted. Every bench footer shows
+the loop stats, `Robot.sensingSummary()` and the tunables changed this session; BACK on gamepad 1
+restores them all. Nothing is restored on stop (tune on the bench, then drive it, is the pit
+workflow). `Bench: Shooter` and `Bench: Storage` flip `SECOND_MOTOR_DIRECTION` live on dpad right. `BenchOpModesTest` runs
 every one of them through `init / init_loop / start / loop` on the fakes. Wheel directions are not a
 bench: the SDK's **TestHardware** utility OpMode (11.2+) spins any motor by config name, and the
 Mecanum Tuner on a `-Ptuning` build does the same with a web UI.
@@ -369,6 +402,8 @@ transfer, shooter and the hardcoded auto run as normal.
 | `diagnostics/LoopTimer` | p95 / max / spikes in a fixed histogram | `getStatus()` one-liner for telemetry |
 | `diagnostics/MatchLogger` | CSV per loop under `/sdcard/FIRST/data/` | knows nothing about the robot: header in the constructor, cells in `logRow(Object...)`; `Robot` supplies `BIOBUZZ_COLUMNS` (27 columns incl. storage count, transfer state, heading hold / aim lock, shooter target vs actual); `NaN` for follower cells without a follower; flush every 50 rows; catches `Exception`; `MatchLogger(File, tag, header)` for JVM tests |
 | `diagnostics/RateLimiter` | at most every N ms; `ready(now)` claims the slot | telemetry / expensive reads |
+| `diagnostics/Tunables` | snapshot every `public static` non-final field of given classes; `changed()`, `restoreDefaults()` | first snapshot of a class wins; the class list is `opmodes/RobotTunables` |
+| `diagnostics/BuildFlavor` | `isTuningBuild()`: is `com.pedropathing.tuning.autotune.Tuner` on the classpath | the runtime half of the `-Ptuning` guard (R704) |
 | `field/FieldConstants` | `FIELD_SIZE_INCHES = 144`, `Symmetry {MIRROR_X, MIRROR_Y, ROTATE_180}` + `SYMMETRY`, `forAlliance`, `mirrorAcrossX/Y`, `rotate180` (heading transformed too), `isInsideField` | the one source of field size, used by `PoseFusion` and `Limelight`; `SYMMETRY = ROTATE_180` per `docs/04` §2.5 |
 | `field/PoseFusion` | X/Y Kalman blend of odometry + AprilTag; heading passes through | `controllers.filters.KalmanFilter(model, data)`; gates: field bounds, `MAX_JUMP_INCHES`; latency back-dating; **caller writes the pose back** |
 | `field/PoseStorage`, `Alliance`, `StartPosition` | auto → teleop handoff; enums (`StartPosition` carries a driver-facing `label()`) | survives OpMode switch, not RC restart |
@@ -380,8 +415,7 @@ transfer, shooter and the hardcoded auto run as normal.
 | `math/VisionMath` | ray / ground-plane intersection, `Mount` model | pitch positive **downward** |
 | `time/Clock`, `SystemClock`, `MatchClock` | injectable monotonic time; BIOBUZZ periods (30 s AUTO, 8 s transition, 120 s TELEOP), `isFlowerUnlocked()` for the 1:00 NECTAR-into-FLOWER window, `isFinalSeconds()` at 0:20 | `hasTimeFor()` true before the clock starts; `ENDGAME` phase = the FLOWER window |
 
-Also planned in `util` once needed: a `Clock`-based `waitMs` command so command trees are
-deterministic under test (doc 01 §B.5).
+The `Clock`-based `waitMs` / `bounded` commands live in `commands/Waits` (doc 01 §B.5).
 
 ## 13. Testing
 
@@ -427,11 +461,13 @@ Pedro core reach the test classpath transitively.
 ```
 Robot.readSensors()
   limelight.update()      → one LLResult cached; largest blob picked; tx/ty into MedianFilters
-  colorSensor*.update()   → one NormalizedRGBA each → ColorMath.toHsv → hsv[3]
-Robot suppliers
-  intake.captured  ← storageEntrance.matchesHue(PieceType...)   (or a distance/beam-break read)
-  intake.full      ← storage.isFull()  ← storage-full sensor
-  transfer.atFeed  ← shooterFeed sensor
+  entrance.update()       → every loop: NormalizedRGBA → hsv[3], plus distance on a V3
+  presence.update()       → one of the fitted full / transfer / feed sensors per loop, in rotation
+Robot suppliers (wired by wireSuppliers; null = not fitted or not trusted)
+  storage.entrance / intake.captured ← pieceNear(entrance) and not an opponent NECTAR being rejected
+  intake.reject    ← opponent NECTAR hue at the entrance (only once HUES_CALIBRATED)
+  intake.full      ← storage.isFull()  ← count >= 4 OR pieceNear(storage-full sensor)
+  transfer.atFeed  ← pieceNear(shooterFeed sensor)
 Scheduler.execute()        commands read the cached values
 Robot.writeActuators()     mechanisms apply intent
 ```
@@ -615,11 +651,18 @@ Things that are correct in the code but will surprise someone on the robot:
 - **Shot counts and `SUCCESS` are pulse counts without sensors.** `pieceWasShot` degrades to `true`
   for every sensor that is absent. The auto log's `shots 4 : SUCCESS` means four pulses ran.
 - **The storage count has three states.** Known from a sensor edge or `setCount`; unknown (no
-  entrance sensor, nothing on record: shoot buttons fire blind, the interlock cannot fire, the card
-  shows `?`); handed over from auto (`PoseStorage`), which is the dead-reckoned remainder.
-- **Four fitted colour sensors are four to eight I2C transactions per loop** (colour, plus distance
-  where the device has it), none of them bulk-cached. Watch `Loop` in the debug telemetry; if p95
-  climbs, drop a sensor from the presence set before touching anything else.
+  trusted entrance sensor, nothing on record: shoot buttons fire blind, the card shows `?`); handed
+  over from auto (`PoseStorage`), which is the dead-reckoned remainder. On the sensorless robot the
+  operator sets it (dpad up = 4, dpad left = 0), and count 4 is the only thing that holds the roller
+  unless `sensor_storage_full` is fitted. Fit that sensor first.
+- **Plugging in a sensor does not make it trusted** (2026-09-15). A hue-only entrance sensor is
+  ignored for counting until `PieceType.HUES_CALIBRATED`; a V3 counts by distance at once. Read the
+  `Sensors:` line on the init card.
+- **Colour sensors are two I2C transactions each, none bulk-cached.** The entrance is read every loop,
+  the fitted presence sensors one per loop in rotation. Watch `Loop` on any bench footer; the
+  anti-jam window wants at least ten samples (`STALL_TIMEOUT_MS / p95`).
+- **A bench edit outlives the bench.** Statics last until the app restarts; the match init card lists
+  every changed tunable. Clear it by restarting the Robot Controller app, or BACK on a bench.
 - **Entrance edge counting samples at loop rate.** A piece that crosses the entrance sensor in under
   two loops is missed. `Bench: Storage` shows the longest in-view run; if it is one, slow the
   intake hand-off or move the sensor.

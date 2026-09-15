@@ -1,6 +1,6 @@
 # HANDOFF — FTC Team 25702 BIOBUZZ Robot Code
 
-State as of **2026-09-14 (evening)**. Read this first; it tells you what exists, what does not, why
+State as of **2026-09-15**. Read this first; it tells you what exists, what does not, why
 things are the way they are, and what to do next. Everything here is backed by a file in the repo.
 
 ---
@@ -30,18 +30,18 @@ things are the way they are, and what to do next. Everything here is backed by a
 |---|---|---|
 | `util/**` (18 classes) | **implemented**; `MatchLogger` prunes to `KEEP_NEWEST`; `JamDetector` forgives attempts only after healthy current | 135 |
 | `subsystems/**` (10 classes + 4 templates) | **implemented**; `OpenLoopDrive` is the untuned-drivetrain layer; `ColorSensor` caches distance; `Shooter` has a latched at-speed and optional PIDF; `Intake` has the G408 reject scaffold | 92 |
-| `Robot.java` | **implemented**: composition, supplier wiring (presence by distance, entrance by hue, reject by alliance), loop halves, localization write-back only on `ACCEPTED`, `logCells` | 14 |
-| `commands/Macros.java`, `commands/Waits.java` | **implemented**: every macro through `reporting()` (never left RUNNING); metered sensorless feed; blind shooting when the count is unknowable; aim bounded; recovery only between pieces | 35 + 2 |
+| `Robot.java` | **implemented**: composition, supplier wiring and the sensor-trust decision (every point by presence, distance first; the entrance trusted by distance or measured hues; the reject only with measured hues), `sensingSummary()`, presence sensors read in rotation, loop halves, localization write-back only on `ACCEPTED`, `logCells` | 18 |
+| `commands/Macros.java`, `commands/Waits.java` | **implemented**: every macro through `reporting()` (never left RUNNING); metered sensorless feed; blind shooting when the count is unknowable (`ASSUME_FULL_WHEN_UNCOUNTED`); a timed intake on a robot that cannot detect full is SUCCESS; aim bounded; recovery only between pieces | 38 + 2 |
 | `game/Field.java`, `Scoring.java`, `FieldPoses.java`, `PieceType.java` | **implemented**; `PieceType` hue windows are placeholders, `nectarAllianceAt` for G408 | 18 (+ via ColorSensorTest) |
-| `opmodes/MatchOpMode.java` | **implemented**: extends `OpMode`, final lifecycle, `buildRobot()` / `openLogger()` seams | via `TeleopTest` |
-| `opmodes/teleop/Teleop.java`, `Controls.java` | **implemented**: `@TeleOp "Teleop"`; one drive default (Pedro or open loop); count, pose and alliance from auto; camera macros gated on `Limelight.MOUNT_CALIBRATED` | 22 + 6 |
-| `opmodes/auto/MainAuto.java`, `AutoRoutine.java`, `AutoSelector.java` | **implemented**: `@Autonomous "Auto: shoot 4 + leave"`, hardcoded and open-loop for the first event; hands alliance and piece count to teleop | 5 + 7 + 3 |
-| `opmodes/test/*` (`BenchOpMode` + 6 benches + `SelfTest`) | **implemented**: pit tools that measure §9's constants on the real robot; group "Bench" on the Driver Station | 7 |
+| `opmodes/MatchOpMode.java`, `RobotTunables.java` | **implemented**: extends `OpMode`, final lifecycle, `buildRobot()` / `openLogger()` seams; snapshots the tunables first in `init()`; tuning-build and tuned-this-session warnings on the init card | via `TeleopTest` |
+| `opmodes/teleop/Teleop.java`, `Controls.java` | **implemented**: `@TeleOp "Teleop"`; one drive default (Pedro or open loop); count, pose and alliance from auto; operator count buttons; drive and camera macros gated on each control's declared `Needs` | 26 + 6 |
+| `opmodes/auto/MainAuto.java`, `AutoRoutine.java`, `AutoSelector.java` | **implemented**: `@Autonomous "Auto: shoot 4 + leave"`, hardcoded and open-loop for the first event; hands alliance and piece count to teleop; warns loudly when started unlocked | 6 + 7 + 3 |
+| `opmodes/test/*` (`BenchOpMode` + 6 benches + `SelfTest`) | **implemented**: pit tools that measure §9's constants on the real robot; group "Bench" on the Driver Station; every footer lists tunables changed this session (BACK restores them) | 9 |
 | `pedro/Constants.java`, `pedro/Tuning.java` | `drivetrainConfig` filled (names + directions); `localizerConfig` / `foresightConfig` `null` until AutoTune, so `create()` returns `null` and `Drivetrain` fails soft; four `@Tuner` factories registered (tuning build only) | — |
 | `pedro/procedures/*` | Quickstart AutoTune procedures, untouched, tuning build only | — |
 | `docs/01..04`, `docs/specs/*` | written and kept current | — |
 
-`./gradlew :TeamCode:testDebugUnitTest` → **346 tests, 0 failures**. `:TeamCode:assembleDebug`
+`./gradlew :TeamCode:testDebugUnitTest` → **368 tests, 0 failures**. `:TeamCode:assembleDebug`
 builds the competition APK (no AutoTune) with `Teleop`, `Auto: shoot 4 + leave`, six `Bench: …`
 OpModes and `SelfTest` registered.
 
@@ -66,6 +66,20 @@ OpModes and `SelfTest` registered.
    directions, camera macros and botpose gated (C1–C5, C10, C11).
 8. `opmodes/test/`: the benches and `SelfTest`; the empty `SelfTest` / `ConceptCommands` stubs removed (D5).
 9. This document, `fixthese.md`'s status, docs, log pruning (D2, D3, D4, D8).
+
+**What was done on 2026-09-15** (Round 2 of `fixthese.md`: a review of the fixed code; §8.1 has the table):
+1. Sensors are trusted because they were measured, not because they are in the configuration: the
+   entrance counts by distance, a hue-only entrance sensor waits for `PieceType.HUES_CALIBRATED`,
+   `Storage` knows whether a full sensor exists, a timed intake is a success, the operator can set
+   the count on the dpad, and every init card prints what each sensor point is doing (R2-A2, A3, A4,
+   A10, B1, B2, B6).
+2. Loop budget: one intake current read per loop, velocity writes only on change, presence sensors
+   read in rotation, loop stats on the auto card (R2-A1).
+3. Pit edits are visible: tunables changed on a bench are listed on every card (BACK restores them on
+   a bench), a `-Ptuning` APK announces itself, custom PIDF off really restores the SDK's, and the
+   second motor's direction applies live (R2-A5, A6, A7, A9).
+4. Match-day guards: an unlocked auto warns but runs, controls declare what they need and Teleop
+   gates generically, and the final-seconds rumble feels different from "full" (R2-A8, B4).
 
 ## 3. Read these first
 
@@ -108,9 +122,12 @@ Expect `BUILD SUCCESSFUL` plus javac warnings about Java 8 source level (harmles
 Robot.java                     impl  composition root: readSensors()/writeActuators(), supplier wiring, alliance, logCells()
 opmodes/
   MatchOpMode.java             impl  abstract base (extends OpMode); final lifecycle read→decide→execute→write;
-                                     buildRobot()/openLogger() seams let tests run the real lifecycle on the JVM
+                                     buildRobot()/openLogger() seams let tests run the real lifecycle on the JVM;
+                                     init card warns on a tuning build and lists tunables changed this session
+  RobotTunables.java           impl  the classes whose public statics are tunables (for util/diagnostics/Tunables)
   teleop/
-    Controls.java              impl  enum of every gamepad binding + help card; read() takes one Snapshot per loop
+    Controls.java              impl  enum of every gamepad binding + help card + what each needs (Needs);
+                                     read() takes one Snapshot per loop
     Teleop.java                impl  @TeleOp "Teleop": one drive default (Pedro or open loop), macros, aim lock on
                                      R-trigger, flywheel toggle, haptics, telemetry; count/pose/alliance from auto
   auto/
@@ -119,11 +136,13 @@ opmodes/
     AutoRoutine.java           impl  hardcoded first-competition routine: shootAll, settle, timed leave (JVM-tested)
     AutoSelector.java          impl  dpad alliance / start-position menu, A locks, B unlocks (START runs regardless)
   test/
-    BenchOpMode.java           impl  base for the pit benches: same Robot, no Ivy, readSensors → onBench → writeActuators
+    BenchOpMode.java           impl  base for the pit benches: same Robot, no Ivy, readSensors → onBench → writeActuators;
+                                     footer shows loop, sensing summary, tunables changed; BACK restores defaults
     IntakeBench.java           impl  "Bench: Intake": free speed, stall amps, anti-jam toggle, reject readout
     StorageBench.java          impl  "Bench: Storage": count, sensors, SENSORLESS_FEED_PULSE_MS pulse, edge sampling
     TransferBench.java         impl  "Bench: Transfer": lift/feed, the same pulse
     ShooterBench.java          impl  "Bench: Shooter": ticks/rev, rpm, spin-up, shot dip + recovery, PIDF toggle
+                                     (shows what the hub holds), live second-motor direction flip
     ColorSensorBench.java      impl  "Bench: Color sensors": HSV, hue windows, NECTAR alliance, presence distance
     LimelightBench.java        impl  "Bench: Limelight": pipelines, tags, blob, mount check
     SelfTest.java              impl  "SelfTest": PASS / FAIL / SKIP per subsystem; run first at every event
@@ -135,7 +154,7 @@ subsystems/
   OpenLoopDrive.java           impl  open-loop driving through Pedro's Mecanum (names + directions only); built only
                                      when there is no follower; writes on intent change only
   Intake.java                  impl  velocity roller, anti-jam, full-storage interlock, capture command, G408 reject (off)
-  Storage.java                 impl  edge-counted 4-piece queue; hasEntranceSensor/hasExitSensor; advance commands
+  Storage.java                 impl  edge-counted 4-piece queue; has{Entrance,Exit,Full}Sensor, canDetectFull; advance commands
   Transfer.java                impl  liftOne / feed (sensor-or-pulse) and feedForMs commands
   Shooter.java                 impl  RPM flywheel; latched atSpeed; waitForSpeed / holdSpeed / idle; optional PIDF;
                                      fixed, fires out the rear (HEADING_OFFSET_RAD)
@@ -153,7 +172,8 @@ pedro/Tuning.java              impl  @Tuner factories (tuning build only)
 pedro/procedures/*.java        impl  Quickstart tuners (tuning build only)
 util/
   control/JamDetector          impl  current-based stall detection, healthy-current window before attempts reset
-  diagnostics/LoopTimer, MatchLogger (KEEP_NEWEST prune), RateLimiter
+  diagnostics/LoopTimer, MatchLogger (KEEP_NEWEST prune), RateLimiter, Tunables (snapshot / changed / restore),
+             BuildFlavor (is AutoTune in this APK?)
   field/Alliance, FieldConstants (SYMMETRY = ROTATE_180), PoseFusion, PoseStorage (+ piece count), StartPosition
   hardware/Hardware (fail-soft lookup), HardwareNames (every config name, V1 + 5 sensor points)
   math/Angles, ColorMath, DriveScaling, MedianFilter, VisionMath
@@ -181,8 +201,9 @@ JVM with real `Gamepad`s driven by `copy()`; `AutoRoutineTest` runs the whole au
 | driver | B / RB | Pedro path to the shooting spot / to park (Pedro tuned only) |
 | driver | dpad | snap to 90 / 0 / 270 / 180° (Pedro tuned only) |
 | operator | RB / LB / B / X | intake / outtake / eject / stop intake (X also cancels any macro) |
-| operator | Y | intake until the storage is full (needs an entrance sensor to ever succeed) |
-| operator | R-trigger / A | shoot one / shoot all. **Without an entrance sensor the count is unknown: shoot one = one pulse, shoot all = 4 pulses (X stops early)** |
+| operator | Y | intake until the storage is full; with no entrance or full sensor it is a timed run (`intake (timed)`, SUCCESS when the timer ends) |
+| operator | R-trigger / A | shoot one / shoot all. **Without a trusted entrance sensor the count is unknown: shoot one = one pulse, shoot all = 4 pulses (X stops early)** |
+| operator | dpad up / dpad left | **count = 4** (holds the intake roller, shoot all fires exactly four) / count = 0, back to unknown. The sensorless robot's entrance sensor is the operator |
 | operator | L-trigger | flywheel armed on/off (comes back by itself after a shot macro) |
 | operator | dpad down | "our HIVE tipped": the aim target flips to the other CELL |
 | operator | BACK | debug telemetry |
@@ -190,7 +211,7 @@ JVM with real `Gamepad`s driven by `copy()`; `AutoRoutineTest` runs the whole au
 **Auto at a glance** (`Auto: shoot 4 + leave`, hardcoded for the first event, no Pedro tuning; it
 pre-selects `Teleop` on the Driver Station): place the robot touching its wall with the **rear
 (shooter) toward the up-facing CELL**, pick the alliance on gamepad 1's dpad during init (A locks the
-menu; START runs whatever is shown). On start: `storage.setCount(4)` → `shootAll()` (one spin-up,
+menu; START runs whatever is shown, and the card blinks `NOT LOCKED` until A is pressed). On start: `storage.setCount(4)` → `shootAll()` (one spin-up,
 four metered storage+transfer pulses with the flywheel recovering between them, `SHOOT_BUDGET_MS`
 20 s cap) → `SETTLE_MS` → drive `LEAVE_DIRECTION` (default BACKWARD, away from the wall) at
 `LEAVE_POWER` for `LEAVE_MS` → stop. Alliance, start and the remaining piece count go to teleop
@@ -214,7 +235,13 @@ running is cancelled and every mechanism stopped (G403).
 | `VelocityMotor` template | Four mechanisms are velocity rollers/flywheels; intent-then-write, ticks/rev and the PIDF hook live in one place. |
 | Default commands: priority −1, `SUSPEND`, `BlockedBehavior.QUEUE`, logic in `setExecute` | Ivy resumes a suspended command without calling `start()`; `CANCEL` would drop it for the whole match. |
 | Storage hard-stops the intake at 4 | BIOBUZZ G407: at most 4 controlled scoring elements. `Intake.setFullSupplier(storage::isFull)`. |
-| Presence sensors (full, transfer, feed) judge by distance when the device has it; the entrance judges by hue | A hue window nobody has measured fails silently to "no piece", which the interlocks read as "keep going". A REV V3 proximity read does not care about colour or lighting. |
+| Every sensor point judges presence by distance when the device has it; hue only classifies (G408), and only once `PieceType.HUES_CALIBRATED` | A hue window nobody has measured fails silently to "no piece", which the interlocks read as "keep going" and the count reads as "nothing ever entered". A REV V3 proximity read does not care about colour or lighting. |
+| A sensor is trusted when measured, not when configured; `Robot.wireSuppliers()` is the only place that decides | Plugging in an entrance sensor with unmeasured hues used to turn a robot that shot blind into one that reported NO_TARGET (fixthese R2-A3). `Robot.sensingSummary()` prints the decision on every card. |
+| A timed intake on a robot that cannot detect full is SUCCESS, named `intake (timed)` | Eight seconds of intake followed by three failure blips reads as "broken" to an operator; the timer ending is the whole job. |
+| Operator dpad up / left set the count to 4 / 0 | On the sensorless robot the operator is the only entrance sensor; count 4 is what holds the roller (G407) and makes shoot all fire exactly four. |
+| Bench tunable edits are shown on every card, not restored on stop | Tune on the bench, then try it on the practice field, is the pit workflow; the danger was only that nothing showed the diverged value. BACK on a bench restores. |
+| The unlocked auto still runs | Refusing to run when someone forgets A costs more than the default route; this routine is alliance-safe. The path auto must drive only when `isConfirmed()`. |
+| `VelocityMotor.write` sends only on change, refreshed every 12 loops; presence sensors read in rotation | Six unchanged `setVelocity` calls and eight colour I2C reads per loop were the avoidable cost; the refresh recovers a hub that reset mid-match. |
 | Every macro is built through `Macros.reporting()` = `deadline(sequential(begin, body, finish), onInterrupt(markCancelled))` | A `Waits.bounded` timeout or an abort used to leave the outcome RUNNING for good. Ivy groups are `CommandBuilder`s whose `setEnd` replaces the group's own end, so the callback has to be a child, not a `setEnd`. |
 | Sensorless feed = storage and transfer run together for `SENSORLESS_FEED_PULSE_MS` | The old cycle ran the storage for 2.5 s into a stopped transfer per shot (a jam machine) and "lift" then "feed" were the same motor at two speeds. |
 | Only `holdSpeedCommand` requires the shooter; the spin-up wait (`waitForSpeedCommand`) requires nothing | Two siblings requiring the same resource inside a group both set the target and the last-executed one silently wins. |
@@ -270,7 +297,7 @@ running is cancelled and every mechanism stopped (G403).
 **Game and robot rules** (docs/04)
 - G407 max 4 pieces; G408 never control opponent NECTAR (colour sensing at the storage entrance; `Intake.REJECT_ENABLED` once the hues are measured).
 - R503 **8 motors and 8 servos max**: V1 needs 8–10 (drive 4, intake, storage 1–2, transfer, shooter 1–2). A single flywheel and a single storage motor fit exactly; otherwise storage and transfer share a motor. `HardwareNames` keeps the optional second-motor names; `Shooter.SECOND_MOTOR_DIRECTION` / `Storage.SECOND_MOTOR_DIRECTION` for an opposed pair.
-- R704: no dashboard/streaming tools in matches. **The competition APK is plain `assembleDebug`; never deploy a `-Ptuning` build at an event.**
+- R704: no dashboard/streaming tools in matches. **The competition APK is plain `assembleDebug`; never deploy a `-Ptuning` build at an event.** A tuning APK now says so as the first line of every match init card.
 - Season SDK is **v12.0** (AprilTag cluster API); this repo is on 11.2.1.
 - AUTO 30 s → 8 s no-motion transition (G403: do not INIT a twitchy TeleOp early) → TELEOP 120 s; no endgame; FLOWER unlock at 1:00.
 
@@ -278,7 +305,9 @@ running is cancelled and every mechanism stopped (G403).
 - Camera facing decides whether tag-aiming exists: a front camera only sees the tags while the robot is *not* aimed, so `aimHeading` runs on odometry; a rear camera needs `CAMERA_YAW_OFFSET_DEGREES = 180`.
 - `Macros.SENSORLESS_FEED_PULSE_MS` is the pulse the robot uses; `Transfer.*_PULSE_MS` only apply to direct `liftOne/feed` commands.
 - Shot counts and `SUCCESS` are pulse counts without sensors.
-- Four fitted colour sensors are four to eight I2C transactions per loop; watch `Loop` in the debug telemetry.
+- Colour sensors are I2C outside the bulk read. The entrance is read every loop; the fitted presence sensors (full, transfer, feed) one per loop in rotation, so with three fitted each is up to ~60 ms old. Watch `Loop` on any bench footer.
+- **Tunables are `public static` and live until the Robot Controller app restarts.** A value changed on a bench is what Teleop runs with; the init card lists every such value (`!! TUNED THIS SESSION`). BACK on a bench restores them all.
+- `SECOND_MOTOR_DIRECTION` applies live; `PieceType.HUES_CALIBRATED` and `Limelight.MOUNT_CALIBRATED` are read when the robot is built, so change them and re-INIT.
 - Entrance edge counting samples at loop rate; `Bench: Storage` shows whether a passing piece is in view for two or more loops.
 
 ## 8. Next steps, in order
@@ -325,8 +354,31 @@ running is cancelled and every mechanism stopped (G403).
 | G7 | `Shooter.SECOND_MOTOR_DIRECTION`, `Storage.SECOND_MOTOR_DIRECTION` | `ShooterTest.secondFlywheelTakesItsOwnDirection` |
 | G8 | `markCancelled` guard | `MacrosTest.markCancelledLeavesAFinishedMacroAlone` |
 
+**Round 2** (2026-09-15; the full verdict for each claim, including the parts that were wrong, is in `fixthese.md` "Round 2 status"):
+
+| Item | Change | Proof |
+|---|---|---|
+| R2-A1 | one intake current read per loop; `VelocityMotor.write` on change only (refresh every 12); presence sensors in rotation; loop stats on the auto card | `IntakeCommandTest.currentIsReadOnceALoop`, `VelocityMotorTest.anUnchangedVelocityIsNotResentEveryLoop`, `RobotTest.presenceSensorsAreReadInRotationAndTheEntranceEveryLoop` |
+| R2-A2 | `Storage.hasFullSensor` / `canDetectFull`; operator count buttons; §8.2 step 0 | `RobotTest.aFullSensorIsKnownToTheStorage`, `TeleopTest.operatorCanMarkTheRobotFullWithoutASensor` |
+| R2-A3, B6 | entrance counts by presence (`pieceEnteringStorage`); `PieceType.HUES_CALIBRATED` gates hue trust and the reject | `RobotTest.entranceCountsByDistanceBeforeTheHuesAreMeasured`, `aHueOnlyEntranceSensorIsNotTrustedUntilCalibrated` |
+| R2-A4 | `intakeUntilFull` outcome by what the robot can know | `MacrosTest.intakeUntilFullIsATimedRunWithNoWayToKnowFull`, `intakeUntilFullSucceedsWhenTheFullSensorTrips` |
+| R2-A5 | `Tunables` + `RobotTunables`; card lists; bench BACK | `TunablesTest`, `TeleopTest.initCardListsValuesTunedOnABench`, `BenchOpModesTest.benchBackRestoresTheTunablesAndTheCardListsThem` |
+| R2-A6 | SDK PIDF read at construction and restored | `ShooterTest.turningCustomPidfOffRestoresTheSdkCoefficients` |
+| R2-A7 | `BuildFlavor.isTuningBuild()` on every match init card | `BuildFlavorTest` |
+| R2-A8 | unlocked warning; path-auto rule in `AutoRoutine` | `MainAutoTest.startingUnlockedWarnsButRuns` |
+| R2-A9 | live second-motor direction; bench dpad right | `ShooterTest.secondFlywheelDirectionFollowsTheStaticAtRuntime`, `BenchOpModesTest.shooterBenchFlipsTheSecondMotorLiveAndTogglesPidfBothWays` |
+| R2-A10 | via R2-A3 and the count buttons | as above |
+| R2-B1, B2 | trust decided once in `wireSuppliers`; `sensingSummary()`; `Macros.ASSUME_FULL_WHEN_UNCOUNTED` | `MacrosTest.assumeFullCanBeTurnedOffByName` |
+| R2-B4 | `Controls.Needs`, generic gates | `TeleopTest.everyDriveMacroIsRefusedWithoutAFollower` |
+| R2-B3, B5 | **deferred**: structure only, no field effect; after the first event | — |
+| rumble | final seconds = one 600 ms buzz, distinct from full | `TeleopTest.finalSecondsGiveOneLongRumbleOnBothPads` |
+
 ### 8.2 Before the first event, on the real robot, in this order
 
+0. **Fit `sensor_storage_full` first** (a REV Color Sensor V3 at the fourth slot). It is one config
+   name, the G407 interlock already exists, and it needs only `Robot.PRESENCE_DISTANCE_INCHES`. Until
+   it is fitted the operator sets the count by hand (dpad up = 4). Every init card's `Sensors:` line
+   says what each point is doing.
 1. **Robot Controller configuration** names must equal `HardwareNames` (`front_left_drive`,
    `front_right_drive`, `back_left_drive`, `back_right_drive`, `intake`, `storage`, `transfer`,
    `shooter`, optional `storage_2` / `shooter_2`, `limelight`, `sensor_*`). Every OpMode's init
@@ -342,14 +394,19 @@ running is cancelled and every mechanism stopped (G403).
 6. **`Bench: Intake`**: free speed → `MOTOR_FREE_SPEED_TICKS_PER_SEC`; clean-capture amps and a
    deliberate jam → `STALL_CURRENT_AMPS` / `STALL_TIMEOUT_MS`.
 7. **`Bench: Color sensors`** with real POLLEN and NECTAR under venue lighting: hue windows and
-   floors into `PieceType`; distance with and without a piece into `Robot.PRESENCE_DISTANCE_INCHES`;
-   then consider `Intake.REJECT_ENABLED` (and whether the roller alone can eject from the entrance).
+   floors into `PieceType`, then `PieceType.HUES_CALIBRATED = true`; distance with and without a
+   piece into `Robot.PRESENCE_DISTANCE_INCHES`; then consider `Intake.REJECT_ENABLED` (and whether
+   the roller alone can eject from the entrance). Read the footer's loop p95 with 0, 1 and all
+   sensors fitted: the anti-jam window needs `STALL_TIMEOUT_MS / p95` of at least 10 samples.
 8. **`Bench: Limelight`** if fitted: fps, tag tx, and the mount check against a tape measure; then
    `Limelight.MOUNT_CALIBRATED = true`. Decide the facing (§10).
 9. Set `AutoRoutine.LEAVE_DIRECTION` / `LEAVE_POWER` / `LEAVE_MS` for the real placement: the robot
    must clearly stop touching the wall and never reach the HIVE structure.
 10. Run `Auto: shoot 4 + leave` once on the practice field with the 30 s clock, then `Teleop`: the
-    operator fires Shoot One on the sensorless robot and sees one pulse.
+    operator fires Shoot One on the sensorless robot and sees one pulse, then presses dpad up, sees
+    the intake roller hold, and Shoot All fires four.
+11. **Before every match**: the init card must show no `!! TUNING BUILD` line and no
+    `!! TUNED THIS SESSION` list you did not mean (restart the Robot Controller app to clear it).
 
 ### 8.3 Then
 
@@ -369,10 +426,11 @@ running is cancelled and every mechanism stopped (G403).
 | `Intake` | `REJECT_MS`, `REJECT_ENABLED` | `Bench: Color sensors` for the hues first, then a piece of the other colour at the entrance in `Bench: Intake` |
 | `Storage`, `Transfer`, `Macros` | `ADVANCE_TICKS_PER_SEC`, `LIFT/FEED_TICKS_PER_SEC`, **`SENSORLESS_FEED_PULSE_MS`** | `Bench: Storage` / `Bench: Transfer`: one pulse moves exactly one piece |
 | `Shooter` | `TICKS_PER_REV`, `SHOOT_RPM`, `AT_SPEED_TOLERANCE_RPM`, `SHOT_RECOVERY_MIN_MS`, `SHOT_RECOVERY_TIMEOUT_MS`, `CUSTOM_PIDF` + `PIDF_*` | `Bench: Shooter` |
-| `Shooter`, `Storage` | `SECOND_MOTOR_DIRECTION` | `SelfTest` sign check with the second motor fitted |
+| `Shooter`, `Storage` | `SECOND_MOTOR_DIRECTION` | `Bench: Shooter` / `Bench: Storage` dpad right flips it live; opposite measured signs = fighting |
 | `Shooter` | `HEADING_OFFSET_RAD` | which way the flywheel fires relative to the intake (π = out the rear); confirm on the built robot |
 | `Robot` | `PRESENCE_DISTANCE_INCHES` | `Bench: Color sensors`: distance with and without a piece at the full/transfer/feed points |
-| `game/PieceType` | hue windows (`POLLEN`, `NECTAR_RED_HUE_DEGREES`, `NECTAR_BLUE_HUE_DEGREES`), `HUE_TOLERANCE_DEGREES`, `MIN_SATURATION`, `MIN_VALUE` | `Bench: Color sensors` on real pieces under match lighting (hold Y for min/max) |
+| `game/PieceType` | hue windows (`POLLEN`, `NECTAR_RED_HUE_DEGREES`, `NECTAR_BLUE_HUE_DEGREES`), `HUE_TOLERANCE_DEGREES`, `MIN_SATURATION`, `MIN_VALUE`, then **`HUES_CALIBRATED`** | `Bench: Color sensors` on real pieces under match lighting (hold Y for min/max) |
+| `Macros` | `ASSUME_FULL_WHEN_UNCOUNTED`, `INTAKE_TIMEOUT_MS` | a strategy call, not a measurement: `true` shoots blind when nothing can count; the timer is how long a sensorless intake runs |
 | `Limelight` | `CAMERA_HEIGHT_INCHES`, `CAMERA_PITCH_DEGREES` (positive down), offsets, `CAMERA_YAW_OFFSET_DEGREES`, then `MOUNT_CALIBRATED` | tape measure after the mount is final; `Bench: Limelight` estimate vs tape |
 | `Drivetrain` | `HEADING_HOLD_P/I/D` (also the aim lock's gains) | on the field with the drivetrain tuned |
 | `Macros` | `AIM_TOLERANCE_DEGREES`, the `*_TIMEOUT_MS` values | on the field; a shot that misses wide is the aim tolerance, a shot that never fires is a timeout |

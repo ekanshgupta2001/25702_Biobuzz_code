@@ -63,6 +63,7 @@ public class Storage {
     private BooleanSupplier exitSupplier = () -> false;
     private boolean exitSensorFitted = false;
     private boolean entranceSensorFitted = false;
+    private boolean fullSensorFitted = false;
     private boolean lastEntrance = false;
     private boolean lastExit = false;
 
@@ -111,9 +112,27 @@ public class Storage {
         return entranceSensorFitted;
     }
 
-    /** "The last slot is occupied." Makes {@link #isFull()} true regardless of the count. */
+    /**
+     * "The last slot is occupied." Makes {@link #isFull()} true regardless of the count.
+     * {@code null} means no full sensor is fitted: only the count (or a manual {@link #setCount})
+     * can then say full (see {@link #canDetectFull()}).
+     */
     public void setFullSupplier(BooleanSupplier supplier) {
+        this.fullSensorFitted = supplier != null;
         this.fullSupplier = supplier == null ? () -> false : supplier;
+    }
+
+    public boolean hasFullSensor() {
+        return fullSensorFitted;
+    }
+
+    /**
+     * Whether anything on this robot can report "full" by itself: an entrance sensor counts to
+     * {@link #CAPACITY}, a full sensor sees the last slot. False on the sensorless robot, where an
+     * "intake until full" is only ever a timed run and the operator sets the count by hand.
+     */
+    public boolean canDetectFull() {
+        return entranceSensorFitted || fullSensorFitted;
     }
 
     /**

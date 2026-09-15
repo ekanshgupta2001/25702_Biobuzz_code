@@ -58,6 +58,7 @@ public class MainAuto extends MatchOpMode {
         telemetry.addData("Setup", selector.status());
         telemetry.addLine("Place the robot touching the wall, REAR (shooter) toward the up CELL.");
         telemetry.addData("Pre-loads", robot.storage.count() + " POLLEN");
+        telemetry.addData("Sensors", robot.sensingSummary());
         telemetry.addData("Plan", "shoot all, settle, leave " + AutoRoutine.LEAVE_DIRECTION
                 + " for " + AutoRoutine.LEAVE_MS + " ms at " + AutoRoutine.LEAVE_POWER);
         telemetry.addData("Drive", robot.drivetrain.isAvailable() ? "Pedro follower"

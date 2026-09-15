@@ -14,13 +14,24 @@ import org.firstinspires.ftc.teamcode.util.field.Alliance;
  * (never control the opponent's NECTAR) is a separate, alliance-aware question.
  *
  * <p><b>Every number here is a placeholder</b> until measured on real pieces under match lighting
- * (HANDOFF section 9).
+ * (HANDOFF section 9), and {@link #HUES_CALIBRATED} says whether that has happened. Until it has,
+ * {@code Robot} does not let a hue match count pieces or drive the G408 reject.
  */
 public enum PieceType {
     /** Yellow, neutral, about 2.8 in. Forty on the field. */
     POLLEN("Pollen", 2.8, new float[] {55f}),
     /** Red or blue, alliance-specific, about 3.6 in. Eight of each colour. */
     NECTAR("Nectar", 3.6, new float[] {0f, 220f});
+
+    /**
+     * True once the hue windows below have been measured on real POLLEN and NECTAR under venue
+     * lighting ({@code Bench: Color sensors}). Until then a hue match is not trusted to count pieces
+     * (a hue-only entrance sensor is treated as not fitted, and one with a distance reading counts
+     * by distance) or to drive the G408 reject. Same pattern as {@code Limelight.MOUNT_CALIBRATED}:
+     * a sensor is trusted because it was measured, not because it is in the configuration
+     * (fixthese R2-A3).
+     */
+    public static boolean HUES_CALIBRATED = false;
 
     /** NECTAR's two colours, one hue centre each; {@link #NECTAR} matches either (G408 needs both). */
     public static float NECTAR_RED_HUE_DEGREES = 0f;

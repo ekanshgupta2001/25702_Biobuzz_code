@@ -85,6 +85,7 @@ public class MacrosTest {
     private static void resetTunables() {
         Macros.INTAKE_TIMEOUT_MS = 8000;
         Macros.INTAKE_RUNS_STORAGE = false;
+        Macros.ASSUME_FULL_WHEN_UNCOUNTED = true;
         Macros.SHOOT_ONE_TIMEOUT_MS = 6000;
         Macros.SHOOT_ALL_TIMEOUT_MS = 20000;
         Macros.SENSORLESS_FEED_PULSE_MS = 600;
@@ -398,7 +399,13 @@ public class MacrosTest {
 
     @Test
     public void intakeUntilFullTimesOutAndStopsEverything() {
-        int ticks = runToCompletion(robot.macros.intakeUntilFull());
+        // An entrance sensor that could have seen a piece and saw none: that is a real timeout.
+        robot.storage.setEntranceSupplier(() -> false);
+        final String[] name = new String[1];
+        int ticks = runToCompletion(robot.macros.intakeUntilFull(), () -> {
+            if (robot.macros.isRunning()) name[0] = robot.macros.getActiveName();
+        });
+        assertEquals("intake", name[0]);
         assertEquals(Macros.Outcome.TIMED_OUT, robot.macros.getOutcome());
         assertTrue("ran for the whole timeout", ticks >= Macros.INTAKE_TIMEOUT_MS / 20);
         assertEquals(Intake.INTAKE_TICKS_PER_SEC, intakeMotor.maxCommandedVelocity, EPS);
@@ -427,6 +434,51 @@ public class MacrosTest {
         assertEquals(4, robot.storage.count());
         assertTrue(robot.storage.isFull());
         assertEquals(0, intakeMotor.commandedVelocity, EPS);
+    }
+
+    @Test
+    public void intakeUntilFullIsATimedRunWithNoWayToKnowFull() {
+        // fixthese R2-A4: the first-event robot has no entrance and no full sensor. Eight seconds of
+        // intake followed by three failure blips reads as "broken"; the timer ending is the job.
+        assertFalse(robot.storage.canDetectFull());
+        final String[] name = new String[1];
+        int ticks = runToCompletion(robot.macros.intakeUntilFull(), () -> {
+            if (robot.macros.isRunning()) name[0] = robot.macros.getActiveName();
+        });
+        assertEquals("the card says what it is", "intake (timed)", name[0]);
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        assertTrue("ran for the whole timer", ticks >= Macros.INTAKE_TIMEOUT_MS / 20);
+        assertEquals(Intake.INTAKE_TICKS_PER_SEC, intakeMotor.maxCommandedVelocity, EPS);
+        assertEquals(0, intakeMotor.commandedVelocity, EPS);
+    }
+
+    @Test
+    public void intakeUntilFullSucceedsWhenTheFullSensorTrips() {
+        // A full sensor without an entrance sensor: the count stays 0 but the run ends at "full",
+        // and that is success, not a timeout (the old outcome only looked at the count).
+        final boolean[] full = {false};
+        robot.storage.setFullSupplier(() -> full[0]);
+        assertTrue(robot.storage.canDetectFull());
+        int ticks = runToCompletion(robot.macros.intakeUntilFull(), () -> {
+            if (clock.nowMs() >= 1000) full[0] = true;
+        });
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        assertTrue("ended at the sensor, not the timer: " + ticks + " ticks", ticks < 100);
+        assertEquals(0, robot.storage.count());
+        assertEquals(0, intakeMotor.commandedVelocity, EPS);
+    }
+
+    @Test
+    public void assumeFullCanBeTurnedOffByName() {
+        // fixthese R2-B2: "shoot blind when nothing can count" is a game decision with a name.
+        assertTrue(Macros.ASSUME_FULL_WHEN_UNCOUNTED);
+        Macros.ASSUME_FULL_WHEN_UNCOUNTED = false;
+        assertFalse(robot.macros.isCountKnown());
+        assertEquals(0, robot.macros.piecesOnBoard());
+        shooterAtSpeed();
+        runToCompletion(robot.macros.shootOne());
+        assertEquals("a robot that cannot count refuses to shoot", Macros.Outcome.NO_TARGET, robot.macros.getOutcome());
+        assertEquals(0, transferMotor.maxCommandedVelocity, EPS);
     }
 
     @Test
@@ -593,7 +645,7 @@ public class MacrosTest {
         tick();
         tick();
         assertEquals(Macros.Outcome.RUNNING, robot.macros.getOutcome());
-        assertEquals("intake", robot.macros.getActiveName());
+        assertEquals("intake (timed)", robot.macros.getActiveName());   // the sensorless fixture
         assertTrue(intakeMotor.commandedVelocity > 0);
 
         Scheduler.cancel(macro);

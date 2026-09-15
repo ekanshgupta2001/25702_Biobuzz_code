@@ -437,3 +437,142 @@ how the robot is actually used. All fixed in `0c53dc9` unless noted.
 - Entrance edge counting samples at loop rate; `Bench: Storage` shows the in-view loop count.
 - `AutoSelector`'s A never gated START; the card now says "lock".
 - The SDK's TestHardware utility covers wiring checks with no code; `DriveBench` was therefore not built.
+
+---
+
+# Round 2 — review of the fixed code (2026-09-15)
+
+Read: every changed file in commits `e18cba0..5662182` (Drivetrain, Robot, Macros, Shooter, Storage,
+Transfer, Intake, VelocityMotor, JamDetector, ColorSensor, PieceType, Teleop, MatchOpMode, MainAuto,
+AutoRoutine, OpenLoopDrive, Constants, Tuning, build files, all `opmodes/test/*`). Verified: 346 JVM
+tests pass on the current source; the plain `assembleDebug` APK builds without `Tuning.class`
+(so the R704 exclusion works). All eight round-1 fix commits hold up: A1, A2, A4, B1, B2, B3, B4,
+B7 are correctly fixed and tested. Nothing below is a regression; these are the next layer.
+
+## R2-A. Will it perform on the robot
+
+### R2-A1. Loop time with sensors fitted (RISK, measure first)
+- **Where:** `ColorSensor.update()` (colour + distance = 2 I2C reads per fitted sensor);
+  `Intake.update()` and `Robot.logCells()` each call `getCurrentAmps()` (a `LynxGetADCCommand`,
+  **not** in the bulk cache) — two ADC round-trips per loop; `VelocityMotor.update()` sends
+  `setVelocity` every loop for every velocity motor (up to 6) whether or not the target changed.
+- **Impact:** with four colour sensors fitted that is ~8 I2C reads (2–4 ms each on a Control Hub)
+  plus ~8 bus writes/reads per loop. Expect 25–40 ms loops, i.e. the anti-jam 300 ms window is
+  ~8 samples and the aim lock's D term is noise.
+- **Fix:** (1) `Intake` reads current once per loop into a field; `logCells` reads that field.
+  (2) `VelocityMotor.write` skips the bus when the value equals the last written one (keep the
+  anti-jam path unconditional). (3) `Robot.readSensors()` round-robins the colour sensors (one or
+  two per loop) — the presence interlocks tolerate 40 ms latency, the loop does not. Confirm
+  with `loopStats` in `Bench: Color sensors` before and after.
+
+### R2-A2. Sensorless robot has no G407 protection at all (RISK)
+- **Where:** `Storage.isFull()` (count never rises without an entrance sensor), `Robot.wireSuppliers`.
+- **Impact:** the intake never stops at four; the only guard is mechanical. G407 explicitly asks
+  for "systems to prevent active pickup of more than 4".
+- **Fix:** the storage-full distance sensor is the first sensor to fit — it is one config name and
+  the interlock already exists. Say so in HANDOFF §8.2 as step 0.
+
+### R2-A3. A fitted-but-uncalibrated entrance sensor makes the robot refuse to shoot (BUG-in-waiting)
+- **Where:** `Robot.wireSuppliers` (`entrance = storageEntranceSensor.isAvailable()`),
+  `Storage.hasEntranceSensor()`, `Macros.piecesOnBoard()`.
+- **Cause:** plugging the entrance sensor in flips `hasEntranceSensor()` to true. Until the hue
+  windows in `PieceType` are measured, no edge is ever counted, `count` stays 0, `piecesOnBoard()`
+  returns 0 (the "assume 4" fallback is off because a sensor "exists"), and `shootOne`/`shootAll`
+  report NO_TARGET without firing. A sensor is trusted because it is in the config, not because
+  it works.
+- **Fix:** `PieceType.HUES_CALIBRATED = false` (same pattern as `Limelight.MOUNT_CALIBRATED`);
+  `Robot` wires the entrance supplier only when calibrated, and the init card says why. Also give
+  the operator a "count = 4 / count = 0" control for the sensorless weeks.
+
+### R2-A4. `intakeUntilFull` on a sensorless robot is an 8-second timer that rumbles "failure"
+- **Where:** `Macros.intakeUntilFull()` outcome, `Teleop.updateHaptics()`.
+- **Impact:** operator presses Y, intake runs 8 s, three failure blips. They will report it as broken.
+- **Fix:** when `!storage.hasEntranceSensor() && !fullSupplier`, report `SUCCESS` after the timer
+  (or hide the binding via the help card), and shorten the timer.
+
+### R2-A5. Bench edits to `public static` tunables silently carry into the match OpModes (TRAP)
+- **Where:** every `Bench: *` OpMode adjusts `Shooter.SHOOT_RPM`, `Intake.STALL_CURRENT_AMPS`, etc.
+  Statics live for the RC app process, so a value bumped on the bench is what Teleop runs with
+  until the app restarts, and nothing shows the divergence.
+- **Fix:** each bench restores the values it touched in `stop()` unless the user pressed a "keep"
+  button; and/or `MatchOpMode.init()` prints any tunable that differs from its compiled default
+  (snapshot the defaults in a static initializer).
+
+### R2-A6. `ShooterBench` "custom PIDF off" does not restore the SDK PIDF
+- **Where:** `ShooterBench` X toggle → `Shooter.applyPidf()` returns early when `CUSTOM_PIDF` is
+  false; the motor keeps the custom coefficients. The card then says "SDK default" — false.
+- **Fix:** read `getPIDFCoefficients(RUN_USING_ENCODER)` in `VelocityMotor`'s constructor and
+  restore it when custom is switched off.
+
+### R2-A7. The `-Ptuning` guard is build-time only (RISK, R704)
+- **Where:** `build.dependencies.gradle`, `TeamCode/build.gradle`.
+- **Cause:** one `tuning=true` line in `gradle.properties` (someone will add it so Android Studio
+  stops showing red files) puts the web server in every APK from then on, and nothing at runtime
+  tells you.
+- **Fix:** in `MatchOpMode.init()`: `try { Class.forName("com.pedropathing.tuning.autotune.Tuner"); telemetry.addLine("!! TUNING BUILD — not legal in a match (R704)"); } catch (ClassNotFoundException ignored) {}`.
+
+### R2-A8. Auto starts without the selector being confirmed
+- **Where:** `MainAuto.onStart()` ignores `selector.isConfirmed()`; alliance defaults to BLUE.
+- **Impact:** harmless with the hardcoded auto; the moment paths exist, an unconfirmed START
+  drives the blue route on the red side. Fix now while it is cheap: refuse to schedule the routine
+  and show a full-screen "PRESS A TO CONFIRM" until confirmed, or blink the card every loop.
+
+### R2-A9. Second-motor directions are read once at construction
+- **Where:** `Shooter.SECOND_MOTOR_DIRECTION`, `Storage.SECOND_MOTOR_DIRECTION` are consumed in the
+  constructor. A bench that flips them has no effect until re-INIT. Document on the bench card or
+  apply in `update()` on change.
+
+### R2-A10. Sensorless count drift is visible to the operator only in debug telemetry
+- **Where:** `Macros.piecesOnBoard()` (assume 4 when 0 and uncounted), `Storage.markExited` after
+  each pulse. After `shootOne` the count is 3; intake two more (uncounted); `shootAll` fires 3
+  pulses with 4 aboard. Bounded and safe, but the "Pieces 3/4" line on the match card is fiction.
+- **Fix:** show "Pieces: unknown (no sensor)" when `!hasEntranceSensor()`; pair with the
+  operator count control from R2-A3.
+
+## R2-B. Structure
+
+### R2-B1. Sensor-configuration policy is spread across three classes
+- `Storage.hasEntranceSensor()/hasExitSensor()`, `Transfer.hasFeedSensor()`, and
+  `Macros.piecesOnBoard()/feedOneCore()/transferLeg()` all branch on "which sensors exist"; the
+  fallback rules (assume 4, timed pulse, dead-reckon the count) are decided in three places and
+  R2-A3 is a direct consequence. Introduce one value object built in `Robot.wireSuppliers()` —
+  `SensorSet { canCountEntries, canConfirmExit, canConfirmFeed, presenceIsDistance }` — and have
+  every macro ask it. The subsystems keep their suppliers; the *policy* lives once.
+
+### R2-B2. `Macros.piecesOnBoard()` hides a strategy decision in a getter
+- "Assume the robot is full when nothing is known" is a game decision. Name it
+  (`Macros.ASSUME_FULL_WHEN_UNCOUNTED`), show it on the card, and test it by name.
+
+### R2-B3. `MatchOpMode` and `BenchOpMode` are the two copies of the lifecycle that
+`MatchOpMode`'s own Javadoc says must not exist
+- `init()`/`init_loop()`/`start()`/`loop()`/`stop()`, the loop timer, `nowMs`, missing-hardware
+  reporting are duplicated. `BenchOpMode` should extend `MatchOpMode` with `matchPeriod()` = a
+  new `Period.BENCH` and a hook that skips `Scheduler.execute()`, or both should share a base.
+
+### R2-B4. `Teleop.handleDriver` gate chains grow with every macro
+- The "needs the drivetrain" and "needs the camera" lists are hand-maintained `||` chains. Put
+  `requiresDrivetrain` / `requiresCamera` on the `Controls` enum (it already carries pad, label,
+  description) and gate generically.
+
+### R2-B5. Three homes for every rule (Javadoc, docs/03, HANDOFF)
+- The round-1 "everything still runs" error was a drift between HANDOFF and the code. `Drivetrain`
+  is 26 KB with roughly 40 % Javadoc restating docs/03. Pick one home per rule: the Javadoc owns
+  "what this class guarantees", docs/03 owns cross-class contracts, HANDOFF owns status. Delete
+  the restatements.
+
+### R2-B6. Presence and classification share a name
+- `Robot.pieceAtStorageEntrance()` (hue classification) and `Robot.pieceNear()` (distance) are
+  both "is there a piece". Rename the entrance one `classifiedPieceAtEntrance()` so the next person
+  does not wire a distance-only sensor into a hue predicate.
+
+## R2-C. Verified fixed (no action)
+- A1 open-loop stick fallback + `stickForwardDrivesOpenLoopWhenPedroIsNotTuned`.
+- A2 `Tuning.java` factories with `NotReady`; A4 `-Ptuning` exclusion of `Tuning.java` and
+  `procedures/**` — plain build confirmed to compile without them.
+- B1 `updateLocalization` writes back only on `ACCEPTED`; `headingHoldCorrectsThroughTheFullLoop`.
+- B2 sensorless feed is now storage+transfer pulse in parallel with flywheel recovery wait.
+- B3 `driverHeadingOffset` (π for blue) in `drive()` and `resetHeading()`; `redForwardIsFieldPlusX`.
+- B4 dpad overrides the auto's alliance; B6 no endgame; B7 pose re-applied after the 1 s settle.
+- C6/C7 `reporting()` wrapper marks CANCELLED on interrupt; `waitForSpeedCommand` has no requirement
+  so it no longer competes with `holdSpeedCommand`.
+- D1 the tautological assertion is gone (`lastMoving[0].forward()`).

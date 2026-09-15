@@ -126,6 +126,7 @@ public class MainAutoTest {
         assertTrue(telemetry.contains("Setup: RED / Facing HIVE"));
         assertTrue(telemetry.contains("REAR (shooter) toward the up CELL"));
         assertTrue(telemetry.contains("Pre-loads: 4 POLLEN"));
+        assertTrue(telemetry.contains("Sensors: entrance=none"));
         assertTrue(telemetry.contains("open loop (Pedro not tuned)"));
         press(op.gamepad1, g -> g.a = true);
         op.init_loop();

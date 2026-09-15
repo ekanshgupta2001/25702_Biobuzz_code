@@ -176,6 +176,7 @@ public class Teleop extends MatchOpMode {
         telemetry.addData("Alliance", alliance + " (" + allianceSource + ")  dpad left/right to change");
         telemetry.addData("Pose from auto?", inheritedPose ? "yes" : "no - press Y once facing away from the driver wall");
         telemetry.addData("Pieces", piecesLine() + (inheritedCount ? "  (from auto)" : ""));
+        telemetry.addData("Sensors", robot.sensingSummary());
         telemetry.addData("Localized?", localized ? "yes" : "no (odometry only this season)");
         int[] tags = tagRange();
         telemetry.addData("Aim target", alliance + " " + targetSide() + " CELL, tags " + tags[0] + "-" + tags[1]);
@@ -312,6 +313,11 @@ public class Teleop extends MatchOpMode {
         if (in.pressed(Controls.HIVE_TIPPED)) {
             tipsCounted++;       // the aim lock reads the target live, so it re-targets at once
         }
+        // The sensorless weeks: the operator is the entrance sensor. Four on board makes isFull()
+        // true, which holds the intake roller (the G407 system) and makes Shoot All fire exactly
+        // four; zero forgets it, back to "unknown" (fixthese R2-A2, R2-A3).
+        if (in.pressed(Controls.MARK_FULL)) robot.storage.setCount(Storage.CAPACITY);
+        if (in.pressed(Controls.MARK_EMPTY)) robot.storage.setCount(0);
         if (in.pressed(Controls.TOGGLE_DEBUG)) DEBUG_TELEMETRY = !DEBUG_TELEMETRY;
     }
 
@@ -499,8 +505,11 @@ public class Teleop extends MatchOpMode {
      */
     private String piecesLine() {
         if (!robot.macros.isCountKnown()) {
-            return "?  (no entrance sensor: " + Controls.SHOOT_ONE.button() + " = 1 pulse, "
-                    + Controls.SHOOT_ALL.button() + " = " + Storage.CAPACITY + ")";
+            String set = Controls.MARK_FULL.button() + " sets " + Storage.CAPACITY;
+            return Macros.ASSUME_FULL_WHEN_UNCOUNTED
+                    ? "?  (assumes " + Storage.CAPACITY + ": " + Controls.SHOOT_ONE.button() + " = 1 pulse, "
+                            + Controls.SHOOT_ALL.button() + " = " + Storage.CAPACITY + "; " + set + ")"
+                    : "?  (no count: shooting refused; " + set + ")";
         }
         return robot.macros.piecesOnBoard() + "/" + Storage.CAPACITY + (robot.storage.isFull() ? "  FULL" : "");
     }

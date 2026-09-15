@@ -9,6 +9,7 @@ import static org.junit.Assert.assertTrue;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.ivy.Scheduler;
 import com.pedropathing.math.Pose;
+import com.qualcomm.robotcore.hardware.NormalizedColorSensor;
 
 import org.firstinspires.ftc.teamcode.commands.Macros;
 import org.firstinspires.ftc.teamcode.game.PieceType;
@@ -22,6 +23,7 @@ import org.firstinspires.ftc.teamcode.subsystems.OpenLoopDrive;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.subsystems.Storage;
 import org.firstinspires.ftc.teamcode.subsystems.Transfer;
+import org.firstinspires.ftc.teamcode.subsystems.FakeColorOnlySensor;
 import org.firstinspires.ftc.teamcode.subsystems.FakeColorRangeSensor;
 import org.firstinspires.ftc.teamcode.util.diagnostics.MatchLogger;
 import org.firstinspires.ftc.teamcode.util.field.Alliance;
@@ -80,11 +82,12 @@ public class RobotTest {
         Scheduler.reset();
         Hardware.reset();
         Intake.REJECT_ENABLED = false;
+        PieceType.HUES_CALIBRATED = false;
     }
 
     /** The fixture robot with real (fake) sensors at the four points; {@code null} = not fitted. */
-    private Robot robotWithSensors(FakeColorRangeSensor entrance, FakeColorRangeSensor full,
-                                   FakeColorRangeSensor transfer, FakeColorRangeSensor feed) {
+    private Robot robotWithSensors(NormalizedColorSensor entrance, NormalizedColorSensor full,
+                                   NormalizedColorSensor transfer, NormalizedColorSensor feed) {
         return new Robot(
                 new Drivetrain(follower, clock),
                 new OpenLoopDrive((com.pedropathing.drivetrain.Drivetrain) null, clock),
@@ -170,6 +173,78 @@ public class RobotTest {
         assertFalse("no transfer sensor: the storage count cannot decrement itself", robot.storage.hasExitSensor());
         assertFalse("no entrance sensor: the count cannot rise, so zero is unknown", robot.storage.hasEntranceSensor());
         assertFalse(robot.macros.isCountKnown());
+        assertFalse("no full sensor either: nothing can say full", robot.storage.canDetectFull());
+        assertEquals("entrance=none (count unknown, shoots blind) | full=none | transfer=none | feed=none (timed pulses)",
+                robot.sensingSummary());
+    }
+
+    @Test
+    public void entranceCountsByDistanceBeforeTheHuesAreMeasured() {
+        // fixthese R2-A3: a plugged-in entrance sensor with unmeasured hue windows used to leave the
+        // count at 0 for ever, and 0 with a "fitted" sensor meant every shoot macro was NO_TARGET.
+        // A REV V3's proximity read needs no calibration, so the count runs on that.
+        assertFalse(PieceType.HUES_CALIBRATED);
+        FakeColorRangeSensor entrance = new FakeColorRangeSensor();      // black: no hue window matches
+        robot = robotWithSensors(entrance, null, null, null);
+        assertTrue("trusted for counting, by distance", robot.storage.hasEntranceSensor());
+        assertTrue(robot.macros.isCountKnown());
+        assertEquals(0, robot.macros.piecesOnBoard());
+        assertTrue(robot.sensingSummary(), robot.sensingSummary().startsWith("entrance=count by distance (hues not measured"));
+
+        robot.intake.intakeCommand().schedule();
+        tick();
+        assertEquals(0, robot.storage.count());
+        entrance.distanceInches = 1.0;
+        tick();
+        assertEquals("one piece, by distance alone", 1, robot.storage.count());
+        assertTrue(robot.intake.hasPiece());
+        entrance.distanceInches = 100;
+        tick();
+        entrance.distanceInches = 1.0;
+        tick();
+        assertEquals(2, robot.storage.count());
+        assertFalse("no measured hues: no G408 reject is wired", robot.intake.isRejecting());
+    }
+
+    @Test
+    public void aHueOnlyEntranceSensorIsNotTrustedUntilCalibrated() {
+        // In the configuration is not the same as measured. A sensor that can only match hues nobody
+        // has tuned is "not fitted" to the count, so the shooting macros fire blind, not NO_TARGET.
+        FakeColorOnlySensor entrance = new FakeColorOnlySensor().showing(0.9f, 0.9f, 0.1f);   // yellow POLLEN
+        robot = robotWithSensors(entrance, null, null, null);
+        assertTrue(robot.storageEntranceSensor.isAvailable());
+        assertFalse(robot.storageEntranceSensor.hasDistance());
+        assertFalse("present but not trusted", robot.storage.hasEntranceSensor());
+        assertFalse(robot.macros.isCountKnown());
+        assertEquals(Storage.CAPACITY, robot.macros.piecesOnBoard());
+        assertTrue(robot.sensingSummary(), robot.sensingSummary().contains("NOT trusted"));
+
+        PieceType.HUES_CALIBRATED = true;
+        robot = robotWithSensors(entrance, null, null, null);
+        assertTrue("measured hues are trusted", robot.storage.hasEntranceSensor());
+        assertTrue(robot.sensingSummary(), robot.sensingSummary().startsWith("entrance=count by hue, G408 reject wired"));
+        robot.intake.intakeCommand().schedule();
+        tick();
+        assertEquals(1, robot.storage.count());
+    }
+
+    @Test
+    public void aFullSensorIsKnownToTheStorage() {
+        // fixthese R2-A2: the full sensor is the first one to fit. Storage must know it exists so a
+        // timed intake can tell "ended because full" from "no way to know".
+        FakeColorRangeSensor full = new FakeColorRangeSensor();
+        robot = robotWithSensors(null, full, null, null);
+        assertTrue(robot.storage.hasFullSensor());
+        assertTrue(robot.storage.canDetectFull());
+        assertFalse(robot.storage.hasEntranceSensor());
+        assertTrue(robot.sensingSummary().contains("full=fitted"));
+        robot.intake.intakeCommand().schedule();
+        tick();
+        assertEquals(Intake.INTAKE_TICKS_PER_SEC, intakeMotor.commandedVelocity, EPS);
+        full.distanceInches = 1.0;
+        tick();
+        assertTrue("the last slot is seen: full, count or no count", robot.storage.isFull());
+        assertEquals("G407: roller held still", 0, intakeMotor.commandedVelocity, EPS);
     }
 
     @Test
@@ -195,7 +270,9 @@ public class RobotTest {
     @Test
     public void opponentNectarTriggersRejectOnlyForTheOtherAlliance() {
         Intake.REJECT_ENABLED = true;
+        PieceType.HUES_CALIBRATED = true;              // the reject is wired only once the hues are measured
         FakeColorRangeSensor entrance = new FakeColorRangeSensor().showing(0.1f, 0.1f, 0.9f);   // blue NECTAR
+        entrance.distanceInches = 1.0;                 // and presence is by distance
         robot = robotWithSensors(entrance, null, null, null);
         robot.setAlliance(Alliance.RED);
         robot.intake.intakeCommand().schedule();

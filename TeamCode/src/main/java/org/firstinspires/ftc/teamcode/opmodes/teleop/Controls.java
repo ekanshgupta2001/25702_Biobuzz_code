@@ -65,6 +65,8 @@ public enum Controls {
     ARM_FLYWHEEL(Pad.OPERATOR, "L-trigger", "flywheel on / off", Gamepad::leftTriggerWasPressed, null),
 
     HIVE_TIPPED(Pad.OPERATOR, "dpad down", "our HIVE tipped: aim at the other CELL", Gamepad::dpadDownWasPressed, null),
+    MARK_FULL(Pad.OPERATOR, "dpad up", "count = 4 (no sensor)", Gamepad::dpadUpWasPressed, null),
+    MARK_EMPTY(Pad.OPERATOR, "dpad left", "count = 0 / unknown", Gamepad::dpadLeftWasPressed, null),
 
     TOGGLE_DEBUG(Pad.OPERATOR, "BACK", "toggle debug telemetry", Gamepad::backWasPressed, null);
 

@@ -98,6 +98,19 @@ public class StorageTest {
     }
 
     @Test
+    public void fullSensorFittedIsRecorded() {
+        assertTrue(storage.hasFullSensor());
+        assertTrue(storage.canDetectFull());
+        storage.setFullSupplier(null);
+        storage.setEntranceSupplier(null);
+        assertFalse(storage.hasFullSensor());
+        assertFalse("no entrance, no full sensor: nothing can say full", storage.canDetectFull());
+        assertFalse(storage.isFull());
+        storage.setEntranceSupplier(() -> false);
+        assertTrue("an entrance sensor counts up to full", storage.canDetectFull());
+    }
+
+    @Test
     public void advanceOneRunsUntilAPieceLeaves() {
         storage.setCount(2);
         Command cmd = storage.advanceOneCommand();

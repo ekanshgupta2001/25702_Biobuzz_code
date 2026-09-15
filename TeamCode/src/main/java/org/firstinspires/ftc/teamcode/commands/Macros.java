@@ -63,9 +63,10 @@ import java.util.function.Supplier;
  *
  * <p><b>Without a storage-entrance sensor the count is unknowable in teleop</b> (it only rises on
  * that sensor's edge or through {@code setCount}), so {@link #piecesOnBoard()} treats a zero count as
- * "assume full": Shoot One always fires one pulse and Shoot All fires {@code Storage.CAPACITY} of
- * them (the operator cancels early with the stop button). A robot that refuses to shoot because it
- * cannot count is useless at an event; a spare pulse on an empty channel costs nothing.
+ * "assume full" ({@link #ASSUME_FULL_WHEN_UNCOUNTED}): Shoot One always fires one pulse and Shoot
+ * All fires {@code Storage.CAPACITY} of them (the operator cancels early with the stop button, or
+ * sets the count by hand). A robot that refuses to shoot because it cannot count is useless at an
+ * event; a spare pulse on an empty channel costs nothing.
  */
 public class Macros {
     // ---- Timeouts and tolerances (plain statics; edit and redeploy) ----
@@ -76,6 +77,14 @@ public class Macros {
      * for the whole intake (fixthese C8). Flip it only once the mechanism proves it needs the help.
      */
     public static boolean INTAKE_RUNS_STORAGE = false;
+    /**
+     * A game decision, named so it can be found: when nothing can count (no trusted entrance
+     * sensor and nothing set the count), treat the robot as holding {@code Storage.CAPACITY}
+     * pieces, so Shoot One fires one pulse and Shoot All fires four. {@code false} makes an unknown
+     * count NO_TARGET: a robot that cannot count refuses to shoot. Shown on the teleop card as
+     * "assumes 4" (fixthese R2-B2).
+     */
+    public static boolean ASSUME_FULL_WHEN_UNCOUNTED = true;
     public static long SHOOT_ONE_TIMEOUT_MS = 6000;
     public static long SHOOT_ALL_TIMEOUT_MS = 20000;
     /**
@@ -155,12 +164,13 @@ public class Macros {
 
     /**
      * Pieces currently in the robot: the storage queue plus one in the lift, if sensed. Without a
-     * storage-entrance sensor a zero count is "unknown", not "empty", and this returns
-     * {@code Storage.CAPACITY} so the shooting macros fire blind (see the class doc).
+     * trusted storage-entrance sensor a zero count is "unknown", not "empty", and this returns
+     * {@code Storage.CAPACITY} so the shooting macros fire blind, if
+     * {@link #ASSUME_FULL_WHEN_UNCOUNTED} (see the class doc).
      */
     public int piecesOnBoard() {
         int known = robot.storage.count() + (robot.transfer.hasPieceInLift() ? 1 : 0);
-        if (known == 0 && !robot.storage.hasEntranceSensor()) return Storage.CAPACITY;
+        if (known == 0 && !isCountKnown() && ASSUME_FULL_WHEN_UNCOUNTED) return Storage.CAPACITY;
         return known;
     }
 
@@ -220,11 +230,17 @@ public class Macros {
 
     /**
      * Runs the intake (and, if {@link #INTAKE_RUNS_STORAGE}, the storage transport) until the storage
-     * reports full or the timeout passes. NO_TARGET when the storage was already full.
+     * reports full or {@link #INTAKE_TIMEOUT_MS} passes. NO_TARGET when the storage was already
+     * full; SUCCESS when it became full or the count rose. On a robot with no way to know it is full
+     * (no entrance sensor, no full sensor: {@code Storage.canDetectFull()}) the timer ending
+     * <em>is</em> the job, so that is SUCCESS too, under the name {@code "intake (timed)"} so the
+     * card says what it did; the operator then sets the count by hand. Only a robot that could have
+     * seen a piece and saw none reports TIMED_OUT (fixthese R2-A4).
      */
     public Command intakeUntilFull() {
         final int[] countAtStart = new int[1];
         final boolean[] alreadyFull = new boolean[1];
+        final boolean canDetectFull = robot.storage.canDetectFull();
         Command transport = INTAKE_RUNS_STORAGE
                 ? robot.storage.advanceUntilCommand(robot.storage::isFull, INTAKE_TIMEOUT_MS)
                 : noop();
@@ -232,15 +248,18 @@ public class Macros {
                 parallel(robot.intake.intakeCommand(), transport),
                 waitUntil(robot.storage::isFull),
                 waitMs(INTAKE_TIMEOUT_MS));
-        return reporting("intake",
+        return reporting(canDetectFull ? "intake" : "intake (timed)",
                 sequential(
                         instant(() -> {
                             countAtStart[0] = robot.storage.count();
                             alreadyFull[0] = robot.storage.isFull();
                         }),
                         conditional(() -> !alreadyFull[0], work, noop())),
-                () -> robot.storage.count() > countAtStart[0] ? Outcome.SUCCESS
-                        : alreadyFull[0] ? Outcome.NO_TARGET : Outcome.TIMED_OUT);
+                () -> {
+                    if (alreadyFull[0]) return Outcome.NO_TARGET;
+                    if (robot.storage.count() > countAtStart[0] || robot.storage.isFull()) return Outcome.SUCCESS;
+                    return canDetectFull ? Outcome.TIMED_OUT : Outcome.SUCCESS;
+                });
     }
 
     /**

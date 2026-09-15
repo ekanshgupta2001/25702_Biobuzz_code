@@ -181,23 +181,38 @@ public class Robot {
     }
 
     /**
-     * The only place two subsystems are connected. Each supplier is a sensor question answered by
-     * a private predicate below, so swapping a colour sensor for a beam-break at any point is a
-     * one-line change here and nowhere else. The setters stay public, so a test may override any
-     * of them after construction.
+     * The only place two subsystems are connected, and the only place that decides which sensor
+     * is <em>trusted</em>, as opposed to merely present in the configuration. Each supplier is a
+     * sensor question answered by a private predicate below, so swapping a colour sensor for a
+     * beam-break at any point is a one-line change here and nowhere else. The setters stay public,
+     * so a test may override any of them after construction.
+     *
+     * <p>The trust policy, in one place (fixthese R2-A3, R2-B1):
+     * <ul>
+     *   <li>A {@code null} supplier means "no sensor" to Storage and Transfer, and every fallback
+     *       follows from that: no entrance, the count cannot rise, so zero is "unknown" and the
+     *       shooting macros fire blind rather than refuse; no exit, the shooting macro dead-reckons
+     *       the count down; no feed, the transfer runs timed pulses; no full sensor, only the count
+     *       (or the operator) can say full. Never pass an always-false supplier for any of these.</li>
+     *   <li>The entrance sensor counts pieces by <b>distance</b> when it has a distance reading (a
+     *       REV V3's proximity read needs no calibration) and by hue only once
+     *       {@link PieceType#HUES_CALIBRATED} says the windows were measured. A hue-only sensor with
+     *       unmeasured windows is therefore <em>not fitted</em> as far as the count is concerned:
+     *       plugging it in must not turn a shooting robot into one that reports NO_TARGET.</li>
+     *   <li>The G408 reject (opponent NECTAR) needs the hue, so it is wired only once the hues are
+     *       measured; {@code Intake.REJECT_ENABLED} still has to be switched on as well.</li>
+     * </ul>
+     * {@link #sensingSummary()} prints the result on every init card.
      */
     private void wireSuppliers() {
-        // Storage and Transfer keep null as "no sensor fitted". Entrance: the count then cannot
-        // rise, so zero means "unknown" and the shooting macros fire blind rather than refusing
-        // (an operator without a sensor still has to be able to shoot). Exit: the count is
-        // dead-reckoned down by the shooting macro. Feed: the transfer falls back to timed pulses.
-        // Never pass an always-false supplier for any of these.
-        boolean entrance = storageEntranceSensor.isAvailable();
-        intake.setCapturedSupplier(entrance ? this::pieceAtStorageEntrance : null);
+        boolean countTrusted = storageEntranceSensor.isAvailable()
+                && (storageEntranceSensor.hasDistance() || PieceType.HUES_CALIBRATED);
+        boolean classifyTrusted = countTrusted && PieceType.HUES_CALIBRATED;
+        intake.setCapturedSupplier(countTrusted ? this::pieceEnteringStorage : null);
         intake.setFullSupplier(storage::isFull);                    // G407: roller held still at 4
-        intake.setRejectSupplier(entrance ? this::opponentNectarAtEntrance : null);   // G408
-        storage.setEntranceSupplier(entrance ? this::pieceAtStorageEntrance : null);  // rising edge -> count + 1
-        storage.setFullSupplier(this::storageFullSensorSees);       // ORed with count >= CAPACITY
+        intake.setRejectSupplier(classifyTrusted ? this::opponentNectarAtEntrance : null);   // G408
+        storage.setEntranceSupplier(countTrusted ? this::pieceEnteringStorage : null);  // rising edge -> count + 1
+        storage.setFullSupplier(storageFullSensor.isAvailable() ? this::storageFullSensorSees : null);  // ORed with count >= CAPACITY
         transfer.setInLiftSupplier(this::pieceInTransfer);
         storage.setExitSupplier(transferSensor.isAvailable() ? this::pieceInTransfer : null);
         transfer.setAtFeedSupplier(shooterFeedSensor.isAvailable() ? this::pieceAtShooterFeed : null);
@@ -212,11 +227,36 @@ public class Robot {
         return alliance;
     }
 
+    /**
+     * One line for the init cards: what each sensor point is actually doing, as decided by
+     * {@link #wireSuppliers()}. "Fitted" and "trusted" are different things and the drivers should
+     * see which one they have.
+     */
+    public String sensingSummary() {
+        String entrance;
+        if (!storageEntranceSensor.isAvailable()) {
+            entrance = "none (count unknown, shoots blind)";
+        } else if (!storage.hasEntranceSensor()) {
+            entrance = "fitted, NOT trusted (hues not measured, no distance)";
+        } else {
+            entrance = storageEntranceSensor.hasDistance() ? "count by distance" : "count by hue";
+            entrance += PieceType.HUES_CALIBRATED ? ", G408 reject wired" : " (hues not measured: no G408 reject)";
+        }
+        return "entrance=" + entrance
+                + " | full=" + (storage.hasFullSensor() ? "fitted" : "none")
+                + " | transfer=" + (storage.hasExitSensor() ? "fitted" : "none")
+                + " | feed=" + (transfer.hasFeedSensor() ? "fitted" : "none (timed pulses)");
+    }
+
     // ---- Sensor predicates: the seam between a reserved sensor point and its sensor type ----
 
-    /** The entrance identifies the piece (hue): a piece being thrown back out (G408) is not counted. */
-    private boolean pieceAtStorageEntrance() {
-        if (!PieceType.anyAtSensor(storageEntranceSensor)) return false;
+    /**
+     * A piece is entering the storage: presence first (distance where the sensor has it, otherwise
+     * a hue match), then classification, because a piece being thrown back out (G408) is not
+     * counted. Presence and classification are different questions; only this point asks both.
+     */
+    private boolean pieceEnteringStorage() {
+        if (!pieceNear(storageEntranceSensor)) return false;
         return !(Intake.REJECT_ENABLED && opponentNectarAtEntrance());
     }
 
@@ -239,10 +279,10 @@ public class Robot {
     }
 
     /**
-     * "A piece is here" for the three presence points. Distance when the sensor has it (a REV V3
+     * "A piece is here" for every sensor point. Distance when the sensor has it (a REV V3
      * proximity read does not care about lighting or which colour the piece is); the hue match only
      * as a fallback, because a hue window nobody has measured fails silently to "no piece", which
-     * the interlocks read as "keep going".
+     * the interlocks read as "keep going" and the count reads as "nothing ever entered".
      */
     private boolean pieceNear(ColorSensor sensor) {
         if (sensor.hasDistance()) {

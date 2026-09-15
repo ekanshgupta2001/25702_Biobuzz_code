@@ -108,6 +108,7 @@ public abstract class BenchOpMode extends OpMode {
         double volts = robot.getBatteryVolts();
         telemetry.addData("Battery", volts > 0 ? String.format(Locale.US, "%.2f V", volts) : "n/a");
         telemetry.addData("Loop", loopStats.getStatus());
+        telemetry.addData("Sensors", robot.sensingSummary());
         missingHardware();
     }
 

@@ -342,6 +342,47 @@ public class TeleopTest {
     }
 
     @Test
+    public void operatorCanMarkTheRobotFullWithoutASensor() {
+        // fixthese R2-A2/A3: on the sensorless robot the operator is the entrance sensor. Four on
+        // board holds the roller (the G407 system) and makes Shoot All fire exactly four; dpad left
+        // forgets it and the card is back to "?".
+        initAndStart();
+        assertTrue(telemetry.joined(), telemetry.contains("Sensors: entrance=none"));
+        press(op.gamepad2, g -> g.right_bumper = true);          // INTAKE
+        loop();
+        release(op.gamepad2);
+        loop();
+        assertEquals(Intake.INTAKE_TICKS_PER_SEC, intakeMotor.commandedVelocity, EPS);
+
+        press(op.gamepad2, g -> g.dpad_up = true);               // MARK_FULL
+        loop();
+        release(op.gamepad2);
+        telemetry.clear();
+        loop();
+        assertTrue(robot.storage.isFull());
+        assertTrue(robot.macros.isCountKnown());
+        assertEquals("roller held still at four", 0, intakeMotor.commandedVelocity, EPS);
+        assertTrue(telemetry.joined(), telemetry.contains("Pieces: 4/4  FULL"));
+
+        shooterMotor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM);
+        press(op.gamepad2, g -> g.a = true);                     // SHOOT_ALL
+        loop();
+        release(op.gamepad2);
+        loopUntilMacroDone();
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        assertEquals("exactly the four the operator declared", 4, robot.macros.getShotsFired());
+
+        robot.storage.setCount(2);
+        press(op.gamepad2, g -> g.dpad_left = true);             // MARK_EMPTY
+        loop();
+        release(op.gamepad2);
+        telemetry.clear();
+        loop();
+        assertFalse(robot.macros.isCountKnown());
+        assertTrue(telemetry.joined(), telemetry.contains("Pieces: ?  (assumes 4"));
+    }
+
+    @Test
     public void operatorIntakeButtonsGoThroughCommands() {
         initAndStart();
         press(op.gamepad2, g -> g.right_bumper = true);
@@ -360,7 +401,7 @@ public class TeleopTest {
         initAndStart();
         press(op.gamepad2, g -> g.y = true);               // INTAKE_UNTIL_FULL
         loop();
-        assertEquals("intake", robot.macros.getActiveName());
+        assertEquals("no sensor can end it early", "intake (timed)", robot.macros.getActiveName());
         release(op.gamepad2);
         loop();
         assertTrue(intakeMotor.commandedVelocity > 0);

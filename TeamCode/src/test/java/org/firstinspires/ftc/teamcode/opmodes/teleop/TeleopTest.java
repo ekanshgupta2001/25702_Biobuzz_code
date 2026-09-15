@@ -35,6 +35,7 @@ import org.firstinspires.ftc.teamcode.util.field.StartPosition;
 import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
 import org.firstinspires.ftc.teamcode.util.math.DriveScaling;
 import org.firstinspires.ftc.teamcode.util.time.FakeClock;
+import org.firstinspires.ftc.teamcode.util.time.MatchClock;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -243,6 +244,73 @@ public class TeleopTest {
         assertEquals("no drive macro without a follower", "idle", robot.macros.getActiveName());
         assertEquals(Macros.Outcome.IDLE, robot.macros.getOutcome());
         assertTrue("the driver is told", op.gamepad1.isRumbling());
+    }
+
+    /** How a test presses each drive control; kept complete by {@link #everyDriveMacroIsRefusedWithoutAFollower}. */
+    private static final java.util.Map<Controls, Consumer<Gamepad>> DRIVE_PRESSES = new java.util.LinkedHashMap<>();
+    static {
+        DRIVE_PRESSES.put(Controls.COLLECT, g -> g.a = true);
+        DRIVE_PRESSES.put(Controls.ALIGN, g -> g.x = true);
+        DRIVE_PRESSES.put(Controls.DRIVE_TO_SHOOT, g -> g.b = true);
+        DRIVE_PRESSES.put(Controls.DRIVE_TO_PARK, g -> g.right_bumper = true);
+        DRIVE_PRESSES.put(Controls.SNAP_90, g -> g.dpad_up = true);
+        DRIVE_PRESSES.put(Controls.SNAP_0, g -> g.dpad_right = true);
+        DRIVE_PRESSES.put(Controls.SNAP_270, g -> g.dpad_down = true);
+        DRIVE_PRESSES.put(Controls.SNAP_180, g -> g.dpad_left = true);
+    }
+
+    @Test
+    public void everyDriveMacroIsRefusedWithoutAFollower() {
+        // fixthese R2-B4: the gate reads Controls.Needs, not a hand-kept list. This test is table
+        // driven over the enum, so a new drive macro fails here until it is given a press above.
+        for (Controls c : Controls.values()) {
+            if (c.requiresDrivetrain()) assertTrue("no press for " + c, DRIVE_PRESSES.containsKey(c));
+            else assertFalse(c + " is not a drive control", DRIVE_PRESSES.containsKey(c));
+        }
+        assertTrue(Controls.COLLECT.requiresCamera());
+        assertEquals("A/X", Controls.buttonsNeeding(Controls.Needs.CAMERA));
+
+        useUntunedRobot();
+        initAndStart();
+        for (java.util.Map.Entry<Controls, Consumer<Gamepad>> e : DRIVE_PRESSES.entrySet()) {
+            op.gamepad1.stopRumble();
+            press(op.gamepad1, e.getValue());
+            loop();
+            assertEquals(e.getKey() + " must not start anything", "idle", robot.macros.getActiveName());
+            assertTrue(e.getKey() + " must be refused with a rumble", op.gamepad1.isRumbling());
+            release(op.gamepad1);
+            loop();
+        }
+
+        // With a follower but no measured camera mount, exactly the camera macros are refused.
+        setUp();
+        Limelight.MOUNT_CALIBRATED = false;
+        initAndStart();
+        for (Controls c : Controls.needing(Controls.Needs.CAMERA)) {
+            op.gamepad1.stopRumble();
+            press(op.gamepad1, DRIVE_PRESSES.get(c));
+            loop();
+            assertEquals(c + " must not start", "idle", robot.macros.getActiveName());
+            assertTrue(c + " refused", op.gamepad1.isRumbling());
+            release(op.gamepad1);
+            loop();
+        }
+        op.gamepad1.stopRumble();
+        press(op.gamepad1, DRIVE_PRESSES.get(Controls.SNAP_90));
+        loop();
+        assertEquals("a plain drive macro still runs", "snapTo 90", robot.macros.getActiveName());
+    }
+
+    @Test
+    public void finalSecondsGiveOneLongRumbleOnBothPads() {
+        // "Full" is two blips on both pads; the final warning must feel different, so it is one buzz.
+        initAndStart();
+        loop();
+        assertFalse(op.gamepad1.isRumbling());
+        clock.advance(MatchClock.TELEOP_MS - MatchClock.FINAL_WARNING_MS);
+        loop();
+        assertTrue(op.gamepad1.isRumbling());
+        assertTrue(op.gamepad2.isRumbling());
     }
 
     @Test

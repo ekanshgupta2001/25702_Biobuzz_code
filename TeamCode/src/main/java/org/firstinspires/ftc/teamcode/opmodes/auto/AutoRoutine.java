@@ -25,7 +25,11 @@ import java.util.List;
  * that left with the balls still on board beats one stuck against the wall.
  *
  * <p>The Pedro-path version (drive to the shooting spot, {@code aimAndShootAll}, park) replaces
- * this once the drivetrain is tuned; see HANDOFF.
+ * this once the drivetrain is tuned; see HANDOFF. <b>Rule for that version:</b> {@code MainAuto}
+ * starts whether or not the menu was locked, because this routine is alliance-safe. A path is not:
+ * an unlocked START on the red side would drive the blue route. The path version must schedule its
+ * drive legs only when {@code selector.isConfirmed()} and otherwise fall back to this shoot-in-place
+ * routine (fixthese R2-A8).
  */
 public final class AutoRoutine {
     /** Which way "off the wall" is, in the robot's frame. */

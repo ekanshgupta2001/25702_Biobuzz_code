@@ -19,6 +19,12 @@ import org.firstinspires.ftc.teamcode.util.time.MatchClock;
  * <p>This is the hardcoded first-competition version: no localizer, no paths. The robot is placed
  * touching its wall with the shooter (rear) toward the up-facing CELL; the routine shoots the four
  * pre-loads and drives off the wall for LEAVE.
+ *
+ * <p><b>START runs whether or not the menu was locked with A.</b> An auto that refuses to run
+ * because someone forgot a button costs more than the default route, and this routine is
+ * alliance-safe (it shoots in place and leaves by a timed drive). The init card blinks a warning
+ * while unlocked and the running card says the defaults were used (fixthese R2-A8). The
+ * Pedro-path version must not inherit this: see {@link AutoRoutine}.
  */
 @Autonomous(name = "Auto: shoot 4 + leave", group = "Main", preselectTeleOp = "Teleop")
 public class MainAuto extends MatchOpMode {
@@ -26,6 +32,9 @@ public class MainAuto extends MatchOpMode {
     private AutoRoutine routine;
     private Command routineCommand;
     private boolean stoppedAtBuzzer = false;
+    private boolean startedUnlocked = false;
+    /** The unlocked warning blinks at this period so it cannot be mistaken for a static line. */
+    public static long UNLOCKED_BLINK_MS = 500;
 
     @Override
     protected String logTag() {
@@ -56,6 +65,10 @@ public class MainAuto extends MatchOpMode {
         if (robot.drivetrain.isAvailable() && !robot.drivetrain.isLocalizerSettled()) {
             telemetry.addLine("!! Localizer calibrating: wait a second before START");
         }
+        if (!selector.isConfirmed() && (robot.getClock().nowMs() / UNLOCKED_BLINK_MS) % 2 == 0) {
+            telemetry.addLine("!! NOT LOCKED: dpad picks alliance / start, A locks. START runs "
+                    + selector.getAlliance() + " / " + selector.getStart().label() + " anyway.");
+        }
         telemetry.addData("Setup", selector.status());
         telemetry.addLine("Place the robot touching the wall, REAR (shooter) toward the up CELL.");
         telemetry.addData("Pre-loads", robot.storage.count() + " POLLEN");
@@ -69,6 +82,7 @@ public class MainAuto extends MatchOpMode {
 
     @Override
     protected void onStart() {
+        startedUnlocked = !selector.isConfirmed();
         // Where the robot was placed, in the true field frame. A no-op without a follower; once
         // Constants.create() is real this is what makes teleop's inherited pose mean something.
         robot.drivetrain.setPose(FieldConstants.forAlliance(
@@ -113,6 +127,10 @@ public class MainAuto extends MatchOpMode {
         telemetry.addData("Shots", robot.macros.getShotsFired() + "  (" + robot.macros.getStatus() + ")");
         telemetry.addData("Pieces left", robot.storage.count());
         telemetry.addData("Loop", loopStats.getStatus());   // the auto's loop health, on the DS not only in the CSV
+        if (startedUnlocked) {
+            telemetry.addLine("started UNLOCKED: ran " + selector.getAlliance() + " / "
+                    + selector.getStart().label() + " without A being pressed");
+        }
         if (stoppedAtBuzzer) telemetry.addLine("!! STOPPED at the buzzer before the routine finished");
         for (String line : robot.getMissingHardware()) telemetry.addData("!! MISSING", line);
     }

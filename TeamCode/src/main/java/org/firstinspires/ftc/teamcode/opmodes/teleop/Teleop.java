@@ -63,7 +63,8 @@ public class Teleop extends MatchOpMode {
     /** Distinguishable from success without looking. */
     private static final int RUMBLE_FAILURE_BLIPS = 3;
     private static final int RUMBLE_FULL_BLIPS = 2;
-    private static final int RUMBLE_FINAL_BLIPS = 2;
+    /** One long buzz, not blips: "full" is two blips on the same pads and must feel different. */
+    private static final int RUMBLE_FINAL_MS = 600;
 
     private Alliance alliance = Alliance.BLUE;
     /** Where the current alliance came from, for the init card: default, auto, or the dpad. */
@@ -184,7 +185,7 @@ public class Teleop extends MatchOpMode {
         telemetry.addData("Pose", robot.drivetrain.getPose());
         telemetry.addData("Drive", driveStatus());
         if (!Limelight.MOUNT_CALIBRATED) {
-            telemetry.addLine("Camera macros (" + Controls.COLLECT.button() + "/" + Controls.ALIGN.button()
+            telemetry.addLine("Camera macros (" + Controls.buttonsNeeding(Controls.Needs.CAMERA)
                     + ") off until the mount is measured: Bench: Limelight, then Limelight.MOUNT_CALIBRATED");
         }
         if (loggerError != null) telemetry.addData("!! Logger FAILED", loggerError);
@@ -238,19 +239,16 @@ public class Teleop extends MatchOpMode {
         }
         if (macroRunning()) return;
 
+        // The gates read each control's declared need (Controls.Needs), not a list kept here, so a
+        // macro added later is gated the day it is bound (fixthese R2-B4).
         if (!robot.drivetrain.isAvailable()) {
             // No follower: every drive macro would finish at once with TIMED_OUT and the aim lock has
             // nothing to steer. Answer the press with the failure rumble instead.
-            if (in.pressed(Controls.COLLECT) || in.pressed(Controls.ALIGN)
-                    || in.pressed(Controls.DRIVE_TO_SHOOT) || in.pressed(Controls.DRIVE_TO_PARK)
-                    || in.pressed(Controls.SNAP_90) || in.pressed(Controls.SNAP_0)
-                    || in.pressed(Controls.SNAP_270) || in.pressed(Controls.SNAP_180)) {
-                gamepad1.rumbleBlips(RUMBLE_FAILURE_BLIPS);
-            }
+            if (in.anyPressed(Controls::requiresDrivetrain)) gamepad1.rumbleBlips(RUMBLE_FAILURE_BLIPS);
             return;
         }
 
-        if (!Limelight.MOUNT_CALIBRATED && (in.pressed(Controls.COLLECT) || in.pressed(Controls.ALIGN))) {
+        if (!Limelight.MOUNT_CALIBRATED && in.anyPressed(Controls::requiresCamera)) {
             // The approach geometry is built from unmeasured mount constants: a wrong estimate is
             // four seconds of the robot driving somewhere unexpected before the timeout.
             gamepad1.rumbleBlips(RUMBLE_FAILURE_BLIPS);
@@ -461,8 +459,8 @@ public class Teleop extends MatchOpMode {
         MatchClock clock = robot.getMatchClock();
         if (!announcedFinal && clock != null && clock.isFinalSeconds()) {
             announcedFinal = true;
-            gamepad1.rumbleBlips(RUMBLE_FINAL_BLIPS);
-            gamepad2.rumbleBlips(RUMBLE_FINAL_BLIPS);
+            gamepad1.rumble(RUMBLE_FINAL_MS);
+            gamepad2.rumble(RUMBLE_FINAL_MS);
         }
     }
 

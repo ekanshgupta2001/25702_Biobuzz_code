@@ -43,15 +43,15 @@ public enum Controls {
     RESET_HEADING(Pad.DRIVER, "Y", "re-zero field heading", Gamepad::yWasPressed, null),
     ABORT(Pad.DRIVER, "BACK", "abort macro (or just move a stick)", Gamepad::backWasPressed, null),
 
-    COLLECT(Pad.DRIVER, "A", "collect a piece (camera)", Gamepad::aWasPressed, null),
-    ALIGN(Pad.DRIVER, "X", "turn to face a piece (camera)", Gamepad::xWasPressed, null),
-    DRIVE_TO_SHOOT(Pad.DRIVER, "B", "path to the shooting spot", Gamepad::bWasPressed, null),
-    DRIVE_TO_PARK(Pad.DRIVER, "RB", "path to park", Gamepad::rightBumperWasPressed, null),
+    COLLECT(Pad.DRIVER, "A", "collect a piece (camera)", Gamepad::aWasPressed, null, Needs.CAMERA),
+    ALIGN(Pad.DRIVER, "X", "turn to face a piece (camera)", Gamepad::xWasPressed, null, Needs.CAMERA),
+    DRIVE_TO_SHOOT(Pad.DRIVER, "B", "path to the shooting spot", Gamepad::bWasPressed, null, Needs.DRIVETRAIN),
+    DRIVE_TO_PARK(Pad.DRIVER, "RB", "path to park", Gamepad::rightBumperWasPressed, null, Needs.DRIVETRAIN),
 
-    SNAP_90(Pad.DRIVER, "dpad up", "snap to 90 deg", Gamepad::dpadUpWasPressed, null),
-    SNAP_0(Pad.DRIVER, "dpad right", "snap to 0 deg", Gamepad::dpadRightWasPressed, null),
-    SNAP_270(Pad.DRIVER, "dpad down", "snap to 270 deg", Gamepad::dpadDownWasPressed, null),
-    SNAP_180(Pad.DRIVER, "dpad left", "snap to 180 deg", Gamepad::dpadLeftWasPressed, null),
+    SNAP_90(Pad.DRIVER, "dpad up", "snap to 90 deg", Gamepad::dpadUpWasPressed, null, Needs.DRIVETRAIN),
+    SNAP_0(Pad.DRIVER, "dpad right", "snap to 0 deg", Gamepad::dpadRightWasPressed, null, Needs.DRIVETRAIN),
+    SNAP_270(Pad.DRIVER, "dpad down", "snap to 270 deg", Gamepad::dpadDownWasPressed, null, Needs.DRIVETRAIN),
+    SNAP_180(Pad.DRIVER, "dpad left", "snap to 180 deg", Gamepad::dpadLeftWasPressed, null, Needs.DRIVETRAIN),
 
     // ---- Operator (gamepad 2): mechanisms and diagnostics ----
     INTAKE(Pad.OPERATOR, "RB", "run intake", Gamepad::rightBumperWasPressed, null),
@@ -73,11 +73,19 @@ public enum Controls {
     /** Which driver holds this control. */
     public enum Pad { DRIVER, OPERATOR }
 
+    /**
+     * What a control needs before it is safe to act on. {@code Teleop} gates on this generically,
+     * so a new macro cannot be added without saying what it needs, and cannot escape the gate by
+     * being left out of a hand-written list (fixthese R2-B4). CAMERA implies DRIVETRAIN.
+     */
+    public enum Needs { NOTHING, DRIVETRAIN, CAMERA }
+
     private final Pad pad;
     private final String button;
     private final String description;
     private final Predicate<Gamepad> edge;
     private final ToDoubleFunction<Gamepad> axis;
+    private final Needs needs;
 
     /**
      * A button carries an {@code edge} test and a null {@code axis}; a stick or trigger the
@@ -86,11 +94,17 @@ public enum Controls {
      */
     Controls(Pad pad, String button, String description,
              Predicate<Gamepad> edge, ToDoubleFunction<Gamepad> axis) {
+        this(pad, button, description, edge, axis, Needs.NOTHING);
+    }
+
+    Controls(Pad pad, String button, String description,
+             Predicate<Gamepad> edge, ToDoubleFunction<Gamepad> axis, Needs needs) {
         this.pad = pad;
         this.button = button;
         this.description = description;
         this.edge = edge;
         this.axis = axis;
+        this.needs = needs;
     }
 
     /**
@@ -114,6 +128,38 @@ public enum Controls {
 
     public boolean isAnalog() {
         return axis != null;
+    }
+
+    public Needs needs() {
+        return needs;
+    }
+
+    /** True for anything that steers the robot: paths, snaps and the camera macros. */
+    public boolean requiresDrivetrain() {
+        return needs != Needs.NOTHING;
+    }
+
+    public boolean requiresCamera() {
+        return needs == Needs.CAMERA;
+    }
+
+    /** Every control with exactly this need, in card order. */
+    public static List<Controls> needing(Needs needs) {
+        List<Controls> out = new ArrayList<>();
+        for (Controls c : values()) {
+            if (c.needs == needs) out.add(c);
+        }
+        return out;
+    }
+
+    /** The buttons of {@link #needing}, joined with "/", for a card line. */
+    public static String buttonsNeeding(Needs needs) {
+        StringBuilder sb = new StringBuilder();
+        for (Controls c : needing(needs)) {
+            if (sb.length() > 0) sb.append('/');
+            sb.append(c.button);
+        }
+        return sb.toString();
     }
 
     public Pad pad() {
@@ -152,6 +198,14 @@ public enum Controls {
 
         public boolean pressed(Controls control) {
             return pressed[control.ordinal()];
+        }
+
+        /** True when any control matching {@code which} was pressed this loop. */
+        public boolean anyPressed(Predicate<Controls> which) {
+            for (Controls c : values()) {
+                if (pressed[c.ordinal()] && which.test(c)) return true;
+            }
+            return false;
         }
 
         public double axis(Controls control) {

@@ -137,6 +137,34 @@ public class MainAutoTest {
     }
 
     @Test
+    public void startingUnlockedWarnsButRuns() {
+        // fixthese R2-A8: refusing to run would cost the auto whenever someone forgets A; this
+        // routine is alliance-safe, so it runs, loudly.
+        op.init();
+        op.init_loop();
+        assertTrue(telemetry.joined(), telemetry.contains("NOT LOCKED"));
+        assertTrue(telemetry.contains("START runs BLUE / Facing HIVE anyway"));
+        op.start();
+        loop();
+        assertTrue("it runs", robot.macros.isRunning());
+        assertTrue(telemetry.contains("started UNLOCKED"));
+        op.stop();
+
+        telemetry.clear();
+        op = new TestAuto();
+        op.telemetry = telemetry;
+        op.gamepad1 = new Gamepad();
+        op.gamepad2 = new Gamepad();
+        op.init();
+        press(op.gamepad1, g -> g.a = true);
+        op.init_loop();
+        assertFalse("locked: no warning", telemetry.contains("NOT LOCKED"));
+        op.start();
+        loop();
+        assertFalse(telemetry.contains("started UNLOCKED"));
+    }
+
+    @Test
     public void runsTheRoutineAndHandsTheAllianceToTeleop() {
         op.init();
         press(op.gamepad1, g -> g.dpad_left = true);

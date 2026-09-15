@@ -60,6 +60,21 @@ public class IntakeCommandTest {
     }
 
     @Test
+    public void currentIsReadOnceALoop() {
+        // fixthese R2-A1: the jam detector, the match log and the telemetry each used to read the
+        // motor current themselves, and a current read is not in the bulk cache.
+        motor.currentAmps = 2.5;
+        intake.intakeCommand().schedule();
+        tick();
+        tick();
+        assertEquals(2, motor.currentReads);
+        assertEquals(2.5, intake.getCurrentAmps(), EPS);
+        intake.getCurrentAmps();
+        intake.getCurrentAmps();
+        assertEquals("readers use the sample, not the bus", 2, motor.currentReads);
+    }
+
+    @Test
     public void defaultIdleStopsTheMotor() {
         intake.defaultIdleCommand().schedule();
         tick();

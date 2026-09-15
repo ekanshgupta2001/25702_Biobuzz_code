@@ -140,6 +140,7 @@ public class MainAutoTest {
         op.init_loop();
         op.start();
         loopUntil(() -> telemetry.contains("Phase: done"));
+        assertTrue("loop health is on the auto card", telemetry.contains("p95"));
         assertEquals(4, robot.macros.getShotsFired());
         assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
         assertEquals(0, robot.storage.count());

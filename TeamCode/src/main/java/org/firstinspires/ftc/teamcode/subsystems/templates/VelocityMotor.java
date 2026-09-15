@@ -22,10 +22,30 @@ import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
  * Ticks per revolution differ per motor part and must be measured: pairing the 312 RPM part's
  * 537.7 ticks/rev with a 435 RPM motor overstates the ceiling by ~40%, saturates the velocity
  * loop and trips every stall detector during normal running.
+ *
+ * <h2>The bus is the budget</h2>
+ * Every {@code setVelocity} is its own transaction to the hub, and six of these per loop for a
+ * value that has not changed is the largest avoidable cost in {@code Robot.writeActuators()}
+ * (fixthese R2-A1). {@link #write} therefore sends only when the value differs from the last one
+ * sent, and re-sends an unchanged value every {@link #REFRESH_EVERY_N_WRITES} loops anyway, so a
+ * hub that browned out and forgot its targets recovers within a quarter second.
+ *
+ * <p>Only the {@code Shooter} uses {@link #setTarget}/{@link #update()} and therefore
+ * {@link #atSpeed}; the intake, storage and transfer keep their own target and call {@link #write}
+ * directly, so on those {@code getTarget()} is 0 and {@code atSpeed} is always false.
  */
 public final class VelocityMotor {
+    /**
+     * An unchanged velocity is still re-sent this often (in loops; about 250 ms at 20 ms loops).
+     * A hub reset mid-match loses its targets; without the refresh a held speed would never come
+     * back until it changed.
+     */
+    public static int REFRESH_EVERY_N_WRITES = 12;
+
     private final DcMotorEx motor;
     private double target = 0;
+    private double lastWritten = Double.NaN;
+    private int writesSinceSent = 0;
 
     /** Resolves {@code name} fail-soft; the result is unavailable when the name is missing. */
     public static VelocityMotor fromHardware(HardwareMap hardwareMap, String name,
@@ -90,9 +110,17 @@ public final class VelocityMotor {
         write(target);
     }
 
-    /** Writes a specific velocity this loop instead of the target (anti-jam reversal). */
+    /**
+     * Writes a specific velocity this loop instead of the target (anti-jam reversal). Reaches the
+     * bus only when the value changed, or every {@link #REFRESH_EVERY_N_WRITES} calls regardless.
+     */
     public void write(double ticksPerSec) {
-        if (motor != null) motor.setVelocity(ticksPerSec);
+        if (motor == null) return;
+        boolean changed = Double.isNaN(lastWritten) || ticksPerSec != lastWritten;
+        if (!changed && ++writesSinceSent < REFRESH_EVERY_N_WRITES) return;
+        motor.setVelocity(ticksPerSec);
+        lastWritten = ticksPerSec;
+        writesSinceSent = 0;
     }
 
     /**

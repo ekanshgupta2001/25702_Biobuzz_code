@@ -229,6 +229,29 @@ public class RobotTest {
     }
 
     @Test
+    public void presenceSensorsAreReadInRotationAndTheEntranceEveryLoop() {
+        // fixthese R2-A1: four fitted colour sensors were eight I2C transactions per loop. The
+        // entrance is an edge and keeps every sample; the presence points share the bus.
+        FakeColorRangeSensor entrance = new FakeColorRangeSensor();
+        FakeColorRangeSensor full = new FakeColorRangeSensor();
+        FakeColorRangeSensor transfer = new FakeColorRangeSensor();
+        FakeColorRangeSensor feed = new FakeColorRangeSensor();
+        robot = robotWithSensors(entrance, full, transfer, feed);
+        for (int i = 0; i < 6; i++) robot.readSensors();
+        assertEquals(6, entrance.colorReads);
+        assertEquals(2, full.colorReads);
+        assertEquals(2, transfer.colorReads);
+        assertEquals(2, feed.colorReads);
+        assertEquals("distance rides along with each colour read", 2, feed.distanceReads);
+
+        // With one presence sensor fitted it is read every loop, so nothing changes on today's robot.
+        FakeColorRangeSensor onlyFull = new FakeColorRangeSensor();
+        robot = robotWithSensors(null, onlyFull, null, null);
+        for (int i = 0; i < 6; i++) robot.readSensors();
+        assertEquals(6, onlyFull.colorReads);
+    }
+
+    @Test
     public void aFullSensorIsKnownToTheStorage() {
         // fixthese R2-A2: the full sensor is the first one to fit. Storage must know it exists so a
         // timed intake can tell "ended because full" from "no way to know".

@@ -27,6 +27,8 @@ public final class FakeDcMotorEx implements DcMotorEx {
     public Direction direction = Direction.FORWARD;
     public int velocityWrites = 0;
     public int powerWrites = 0;
+    /** How many times {@code getCurrent} was called: each one is a bus transaction on the robot. */
+    public int currentReads = 0;
     /** Most negative velocity ever commanded; tests use it to ask "did it ever run backwards?". */
     public double minCommandedVelocity = 0;
     /** Most positive velocity ever commanded. */
@@ -100,6 +102,7 @@ public final class FakeDcMotorEx implements DcMotorEx {
 
     @Override
     public double getCurrent(CurrentUnit unit) {
+        currentReads++;
         return currentAmps;
     }
 

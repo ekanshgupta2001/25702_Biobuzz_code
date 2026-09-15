@@ -111,6 +111,7 @@ public class MainAuto extends MatchOpMode {
         telemetry.addData("Phase", routine == null ? "-" : routine.getPhase());
         telemetry.addData("Shots", robot.macros.getShotsFired() + "  (" + robot.macros.getStatus() + ")");
         telemetry.addData("Pieces left", robot.storage.count());
+        telemetry.addData("Loop", loopStats.getStatus());   // the auto's loop health, on the DS not only in the CSV
         if (stoppedAtBuzzer) telemetry.addLine("!! STOPPED at the buzzer before the routine finished");
         for (String line : robot.getMissingHardware()) telemetry.addData("!! MISSING", line);
     }

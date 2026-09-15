@@ -95,6 +95,10 @@ public class Robot {
     /** Our alliance, set by the OpMode; {@code null} until known. Drives the G408 reject. */
     private Alliance alliance = null;
 
+    /** The fitted presence sensors, read one per loop in turn (see {@link #readSensors()}). */
+    private final List<ColorSensor> presenceSensors = new ArrayList<>();
+    private int nextPresenceSensor = 0;
+
     private final Clock clock;
     private final List<LynxModule> hubs;
     private final List<VoltageSensor> voltageSensors;
@@ -147,6 +151,7 @@ public class Robot {
         shooterFeedSensor = new ColorSensor(hardwareMap, HardwareNames.SENSOR_SHOOTER_FEED,
                 ColorSensor.DEFAULT_GAIN, true);
 
+        collectPresenceSensors();
         wireSuppliers();
         macros = new Macros(this);   // last: it takes this, so every field must already be set
     }
@@ -176,8 +181,15 @@ public class Robot {
         this.storageFullSensor = storageFullSensor;
         this.transferSensor = transferSensor;
         this.shooterFeedSensor = shooterFeedSensor;
+        collectPresenceSensors();
         wireSuppliers();
         macros = new Macros(this);
+    }
+
+    private void collectPresenceSensors() {
+        for (ColorSensor sensor : new ColorSensor[] {storageFullSensor, transferSensor, shooterFeedSensor}) {
+            if (sensor.isAvailable()) presenceSensors.add(sensor);
+        }
     }
 
     /**
@@ -298,6 +310,14 @@ public class Robot {
      * Refreshes cached sensor data. Call at the TOP of the loop, before commands run.
      *
      * <p>Clearing the bulk caches here is what makes the whole loop see one consistent snapshot.
+     *
+     * <p>Colour sensors are I2C and outside the bulk read: each costs two transactions (colour and
+     * distance), several milliseconds on a Control Hub. The entrance sensor is read every loop
+     * because a passing piece is a short edge and the count must not miss it. The three presence
+     * points (full, transfer, feed) watch pieces that sit for hundreds of milliseconds, so the
+     * <em>fitted</em> ones are read one per loop in rotation: with one fitted it is read every
+     * loop, with three each is refreshed every third loop, about 60 ms of latency at most, for
+     * half the bus time (fixthese R2-A1). Watch the loop line in {@code Bench: Color sensors}.
      */
     public void readSensors() {
         for (LynxModule hub : hubs) {
@@ -308,9 +328,10 @@ public class Robot {
         limelight.setTargetHeightInches(blobTarget.targetHeightInches());
         limelight.update();
         storageEntranceSensor.update();
-        storageFullSensor.update();
-        transferSensor.update();
-        shooterFeedSensor.update();
+        if (!presenceSensors.isEmpty()) {
+            presenceSensors.get(nextPresenceSensor).update();
+            nextPresenceSensor = (nextPresenceSensor + 1) % presenceSensors.size();
+        }
 
         long now = clock.nowMs();
         if (matchClock != null) matchClock.update(now);

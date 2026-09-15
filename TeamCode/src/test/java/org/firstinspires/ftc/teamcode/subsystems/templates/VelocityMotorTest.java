@@ -40,6 +40,24 @@ public class VelocityMotorTest {
     }
 
     @Test
+    public void anUnchangedVelocityIsNotResentEveryLoop() {
+        // fixthese R2-A1: six setVelocity transactions per loop for values that had not changed.
+        FakeDcMotorEx motor = new FakeDcMotorEx();
+        VelocityMotor vm = new VelocityMotor(motor);
+        int refresh = VelocityMotor.REFRESH_EVERY_N_WRITES;
+        for (int i = 0; i < refresh; i++) vm.write(1500);
+        assertEquals("the first write lands, the repeats do not", 1, motor.velocityWrites);
+        vm.write(1500);
+        assertEquals("but an unchanged value is refreshed every REFRESH_EVERY_N_WRITES loops", 2, motor.velocityWrites);
+        vm.write(-500);
+        assertEquals("a change always lands", 3, motor.velocityWrites);
+        assertEquals(-500, motor.commandedVelocity, EPS);
+        vm.write(0);
+        vm.write(0);
+        assertEquals(4, motor.velocityWrites);
+    }
+
+    @Test
     public void atSpeedNeedsANonZeroTargetWithinTolerance() {
         FakeDcMotorEx motor = new FakeDcMotorEx();
         VelocityMotor vm = new VelocityMotor(motor);

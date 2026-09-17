@@ -100,7 +100,6 @@ public class MacrosTest {
         Macros.SEARCH_TIMEOUT_MS = 2000;
         Macros.APPROACH_TIMEOUT_MS = 4000;
         Macros.ALIGN_TIMEOUT_MS = 1500;
-        Macros.RELOCALIZE_TIMEOUT_MS = 1500;
         Macros.SNAP_TIMEOUT_MS = 1500;
         Macros.SNAP_TOLERANCE_DEGREES = 3.0;
         Macros.DRIVE_TO_TIMEOUT_MS = 6000;
@@ -609,16 +608,7 @@ public class MacrosTest {
         assertEquals(Follower.Mode.MANUAL, follower.mode);
     }
 
-    // ---- Localization and heading ----
-
-    @Test
-    public void relocalizeReportsNoTargetAndLeavesThePose() {
-        Command macro = robot.macros.relocalize();
-        assertTrue(macro.requirements().contains(robot.drivetrain));
-        runToCompletion(macro);
-        assertEquals(Macros.Outcome.NO_TARGET, robot.macros.getOutcome());
-        assertEquals("pose must be untouched", 0, follower.setPoseCalls);
-    }
+    // ---- Heading and position ----
 
     @Test
     public void snapToHeadingSucceedsWhenTheTurnArrives() {

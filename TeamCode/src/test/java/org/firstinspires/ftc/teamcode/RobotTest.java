@@ -27,7 +27,6 @@ import org.firstinspires.ftc.teamcode.subsystems.FakeColorOnlySensor;
 import org.firstinspires.ftc.teamcode.subsystems.FakeColorRangeSensor;
 import org.firstinspires.ftc.teamcode.util.diagnostics.MatchLogger;
 import org.firstinspires.ftc.teamcode.util.field.Alliance;
-import org.firstinspires.ftc.teamcode.util.field.PoseFusion;
 import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
 import org.firstinspires.ftc.teamcode.util.time.FakeClock;
 import org.firstinspires.ftc.teamcode.util.time.MatchClock;
@@ -37,7 +36,7 @@ import org.junit.Test;
 
 /**
  * Robot composition against fakes: supplier wiring, the read -> decide -> write loop order,
- * localization write-back, the shared cancel path and the match-log row. Each test steps the loop
+ * the shared cancel path and the match-log row. Each test steps the loop
  * the way MatchOpMode does: readSensors, scheduler, writeActuators.
  */
 public class RobotTest {
@@ -109,10 +108,9 @@ public class RobotTest {
         clock.advance(20);
     }
 
-    /** The full MatchOpMode loop, localization step included. */
+    /** The full MatchOpMode loop. */
     private void fullLoop() {
         robot.readSensors();
-        robot.updateLocalization();
         Scheduler.execute();
         robot.writeActuators();
         clock.advance(20);
@@ -137,7 +135,6 @@ public class RobotTest {
         assertNotNull(robot.openLoopDrive);
         assertFalse("no drive motors under test", robot.openLoopDrive.isAvailable());
         assertNotNull(robot.macros);
-        assertNotNull(robot.poseFusion);
         assertTrue(robot.drivetrain.isAvailable());
         assertTrue(robot.intake.isAvailable());
         assertTrue(robot.shooter.isAvailable());
@@ -341,22 +338,9 @@ public class RobotTest {
     }
 
     @Test
-    public void updateLocalizationLeavesTheFollowerAloneWithoutAFix() {
-        follower.pose = new Pose(10, 20, 0.5);
-        for (int i = 0; i < 20; i++) {
-            robot.updateLocalization();
-            follower.pose = new Pose(10 + i, 20, 0.5);      // the robot drives on
-            clock.advance(20);
-        }
-        assertEquals("odometry only: nothing is written back", 0, follower.setPoseCalls);
-        assertEquals(PoseFusion.Result.ODOMETRY_ONLY, robot.poseFusion.getLastResult());
-        assertTrue(robot.poseFusion.isSeeded());
-    }
-
-    @Test
     public void headingHoldCorrectsThroughTheFullLoop() {
         // fixthese B1: the per-loop pose write-back used to release the hold every loop, so it never
-        // produced a correction on the robot. This runs the real loop order, localization included.
+        // produced a correction on the robot. This runs the real loop order.
         follower.pose = new Pose(0, 0, 0);
         robot.drivetrain.driverControlCommand(() -> 0, () -> 0, () -> 0).schedule();
         fullLoop();
@@ -368,13 +352,6 @@ public class RobotTest {
         fullLoop();
         assertTrue("still holding", robot.drivetrain.isHeadingHoldActive());
         assertTrue("correcting back clockwise: turn " + follower.lastTurn, follower.lastTurn < -0.05);
-    }
-
-    @Test
-    public void aprilTagLocalizationReportsNoFixWithoutACamera() {
-        assertFalse(robot.tryLocalizeFromAprilTag());
-        assertEquals(0, follower.setPoseCalls);
-        assertFalse(robot.poseFusion.isSeeded());
     }
 
     @Test

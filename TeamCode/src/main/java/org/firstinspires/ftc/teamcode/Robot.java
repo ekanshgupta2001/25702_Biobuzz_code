@@ -19,7 +19,6 @@ import org.firstinspires.ftc.teamcode.subsystems.Storage;
 import org.firstinspires.ftc.teamcode.subsystems.Transfer;
 import org.firstinspires.ftc.teamcode.util.diagnostics.MatchLogger;
 import org.firstinspires.ftc.teamcode.util.field.Alliance;
-import org.firstinspires.ftc.teamcode.util.field.PoseFusion;
 import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
 import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
 import org.firstinspires.ftc.teamcode.util.time.Clock;
@@ -31,7 +30,7 @@ import java.util.List;
 
 /**
  * Top-level composition of the BIOBUZZ V1 robot. Owns every subsystem as a public final field, the
- * {@link Macros}, the {@link PoseFusion} and the {@link MatchClock}, and wires cross-subsystem
+ * {@link Macros} and the {@link MatchClock}, and wires cross-subsystem
  * suppliers in its constructor so that no subsystem ever imports another.
  *
  * <p>The loop is split in two halves that the OpMode calls on either side of the Ivy scheduler:
@@ -88,7 +87,6 @@ public class Robot {
     public final ColorSensor shooterFeedSensor;
 
     public final Macros macros;
-    public final PoseFusion poseFusion = new PoseFusion();
 
     private MatchClock matchClock;
     private PieceType blobTarget = PieceType.POLLEN;
@@ -352,50 +350,6 @@ public class Robot {
         drivetrain.update();
     }
 
-    // ---- Localization ----
-
-    /**
-     * Blends any absolute fix into the pose estimate and writes the result back to the drivetrain.
-     * In BIOBUZZ every AprilTag rides on a moving HIVE CELL, so {@link Limelight#getBotposeAsPedroPose()}
-     * is expected to return {@code null} all season and this runs odometry-only; the plumbing stays
-     * so a static reference can be added without touching the loop.
-     */
-    public void updateLocalization() {
-        Pose odometry = drivetrain.getPose();
-        if (odometry == null) return;
-
-        Pose vision = limelight.getBotposeAsPedroPose();   // already null unless trustworthy
-        Pose corrected = poseFusion.update(
-                clock.nowMs(), odometry, vision, limelight.getVisionLatencyMs());
-
-        // Write back only when fusion actually changed the estimate. On the odometry-only path the
-        // fused x/y equal the follower's own (the filter's correction term is exactly zero), and a
-        // write every loop released the heading hold each tick, so it never corrected anything, and
-        // re-wrote the Pinpoint over I2C for nothing (fixthese B1). setPose releases the hold, which
-        // is right for a real correction: the old setpoint was in the old frame.
-        if (corrected != null && poseFusion.getLastResult() == PoseFusion.Result.ACCEPTED) {
-            drivetrain.setPose(corrected);
-        }
-    }
-
-    /**
-     * Hard-sets the pose from an AprilTag fix and re-seeds fusion. Returns {@code false} until the
-     * AprilTag pipeline is active and a trustworthy botpose exists; callers retry next loop. Expected
-     * to report no fix in BIOBUZZ (see {@link #updateLocalization()}).
-     */
-    public boolean tryLocalizeFromAprilTag() {
-        if (limelight.getPipelineIndex() != Limelight.APRILTAG_PIPELINE_INDEX) {
-            // The switch takes several frames to take effect; the next loop retries.
-            limelight.activateAprilTagPipeline();
-            return false;
-        }
-        Pose botpose = limelight.getBotposeAsPedroPose();
-        if (botpose == null) return false;
-        drivetrain.setPose(botpose);
-        poseFusion.seed(botpose);
-        return true;
-    }
-
     // ---- Match state ----
 
     /** Starts the match clock for the period. Call once from the OpMode's {@code start()}. */
@@ -523,7 +477,6 @@ public class Robot {
                 limelight.hasTarget() ? 1 : 0,
                 limelight.getTx(),
                 limelight.getTy(),
-                poseFusion.getLastResult(),
                 macros.getActiveName(),
                 macros.getOutcome(),
         };

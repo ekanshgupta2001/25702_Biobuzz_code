@@ -56,8 +56,6 @@ public class Teleop extends MatchOpMode {
     public static double LOW_BATTERY_VOLTS = 11.5;
     /** Right-trigger pull past this holds the aim lock. */
     public static double AIM_LOCK_TRIGGER = 0.5;
-    /** How often init retries an AprilTag fix; the pipeline switch and read are camera round-trips. */
-    public static long LOCALIZE_RETRY_MS = 500;
 
     private static final int RUMBLE_SUCCESS_BLIPS = 1;
     /** Distinguishable from success without looking. */
@@ -71,9 +69,6 @@ public class Teleop extends MatchOpMode {
     private String allianceSource = "default";
     private boolean inheritedPose = false;
     private boolean inheritedCount = false;
-    private boolean localized = false;
-    private boolean localizeTried = false;
-    private long lastLocalizeTryMs = 0;
     /** TIPs of our HIVE the operator has counted; the up-CELL flips on each. */
     private int tipsCounted = 0;
 
@@ -128,7 +123,6 @@ public class Teleop extends MatchOpMode {
         // driver's first stick input sends the robot in an arbitrary direction.
         if (PoseStorage.hasPose()) {
             robot.drivetrain.setPose(PoseStorage.getPose());
-            robot.poseFusion.seed(PoseStorage.getPose());
             inheritedPose = true;
         }
         if (PoseStorage.hasAlliance()) {
@@ -161,15 +155,6 @@ public class Teleop extends MatchOpMode {
                     ? "dpad, overrode auto" : "dpad";
             applyAlliance();
         }
-        // Expected to stay false all season (BIOBUZZ tags move). Only with a camera, and no more
-        // often than LOCALIZE_RETRY_MS: the attempt is a pipeline switch plus a read.
-        long now = robot.getClock().nowMs();
-        if (robot.limelight.isAvailable() && (!localizeTried || now - lastLocalizeTryMs >= LOCALIZE_RETRY_MS)) {
-            localizeTried = true;
-            lastLocalizeTryMs = now;
-            localized = robot.tryLocalizeFromAprilTag();
-        }
-
         reportMissingHardware();
         reportBuildWarnings();
         if (robot.drivetrain.isAvailable() && !robot.drivetrain.isLocalizerSettled()) {
@@ -179,7 +164,6 @@ public class Teleop extends MatchOpMode {
         telemetry.addData("Pose from auto?", inheritedPose ? "yes" : "no - press Y once facing away from the driver wall");
         telemetry.addData("Pieces", piecesLine() + (inheritedCount ? "  (from auto)" : ""));
         telemetry.addData("Sensors", robot.sensingSummary());
-        telemetry.addData("Localized?", localized ? "yes" : "no (odometry only this season)");
         int[] tags = tagRange();
         telemetry.addData("Aim target", alliance + " " + targetSide() + " CELL, tags " + tags[0] + "-" + tags[1]);
         telemetry.addData("Pose", robot.drivetrain.getPose());
@@ -545,7 +529,6 @@ public class Teleop extends MatchOpMode {
         int[] tags = tagRange();
         telemetry.addData("Limelight", "%s  pipeline %s  tag tx %.1f", robot.limelight.isAvailable() ? "ok" : "MISSING",
                 robot.limelight.getPipelineName(), robot.limelight.getTagTx(tags[0], tags[1]));
-        telemetry.addData("Localization", robot.poseFusion.getStatus());
         telemetry.addData("Sensors hue", "entrance %.0f  full %.0f  transfer %.0f  feed %.0f",
                 robot.storageEntranceSensor.getHue(), robot.storageFullSensor.getHue(),
                 robot.transferSensor.getHue(), robot.shooterFeedSensor.getHue());

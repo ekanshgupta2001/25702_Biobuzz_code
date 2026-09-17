@@ -12,7 +12,6 @@ import org.firstinspires.ftc.teamcode.subsystems.Storage;
 import org.firstinspires.ftc.teamcode.subsystems.Transfer;
 import org.firstinspires.ftc.teamcode.subsystems.templates.VelocityMotor;
 import org.firstinspires.ftc.teamcode.util.diagnostics.Tunables;
-import org.firstinspires.ftc.teamcode.util.field.PoseFusion;
 import org.firstinspires.ftc.teamcode.util.math.DriveScaling;
 
 /**
@@ -24,7 +23,7 @@ public final class RobotTunables {
     public static final Class<?>[] CLASSES = {
             Shooter.class, Intake.class, Storage.class, Transfer.class, Macros.class,
             Drivetrain.class, Robot.class, PieceType.class, Limelight.class, ColorSensor.class,
-            VelocityMotor.class, PoseFusion.class, DriveScaling.class,
+            VelocityMotor.class, DriveScaling.class,
     };
 
     private RobotTunables() {}

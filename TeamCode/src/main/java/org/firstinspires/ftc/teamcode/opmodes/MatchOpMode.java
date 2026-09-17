@@ -25,7 +25,6 @@ import java.util.List;
  *
  * <pre>
  *   readSensors()        1. observe   (fixed)
- *   updateLocalization()
  *   onDecide()                        (yours: read buttons, schedule commands)
  *   Scheduler.execute()  2. decide    (fixed)
  *   writeActuators()     3. act       (fixed)
@@ -153,7 +152,6 @@ public abstract class MatchOpMode extends OpMode {
         loopStats.record(loopMs);
 
         robot.readSensors();          // 1. observe
-        robot.updateLocalization();   //    blend any absolute fix into the pose estimate
         onDecide();                   // 2. decide
         Scheduler.execute();          //    driver control and macros both run here
         robot.writeActuators();       // 3. act

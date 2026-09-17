@@ -104,7 +104,6 @@ public class Macros {
     public static long SEARCH_TIMEOUT_MS = 2000;
     public static long APPROACH_TIMEOUT_MS = 4000;
     public static long ALIGN_TIMEOUT_MS = 1500;
-    public static long RELOCALIZE_TIMEOUT_MS = 1500;
     public static long SNAP_TIMEOUT_MS = 1500;
     public static double SNAP_TOLERANCE_DEGREES = 3.0;
     public static long DRIVE_TO_TIMEOUT_MS = 6000;
@@ -595,29 +594,7 @@ public class Macros {
                 && robot.drivetrain.atHeading(wanted, Math.toRadians(AIM_TOLERANCE_DEGREES));
     }
 
-    // ---- Localization and heading ----
-
-    /**
-     * AprilTag pipeline, wait for a trustworthy botpose, apply it. In BIOBUZZ every tag rides on a
-     * moving HIVE CELL, so this is expected to report NO_TARGET all season; it stays wired for a
-     * future static reference and costs nothing.
-     */
-    public Command relocalize() {
-        final boolean[] fixed = new boolean[1];
-        return reporting("relocalize",
-                sequential(
-                        instant(() -> {
-                            fixed[0] = false;
-                            robot.limelight.activateAprilTagPipeline();
-                        }),
-                        waitMs(PIPELINE_WARMUP_MS),
-                        race(waitUntil(() -> robot.limelight.getBotposeAsPedroPose() != null),
-                                waitMs(RELOCALIZE_TIMEOUT_MS)),
-                        // The only explicit requirement in this class: nothing else here drives, and a
-                        // pose write must not race the driver-control default command.
-                        instant(() -> fixed[0] = robot.tryLocalizeFromAprilTag()).requiring(robot.drivetrain)),
-                Outcome.SUCCESS, Outcome.NO_TARGET, () -> fixed[0]);
-    }
+    // ---- Heading and position ----
 
     /** Turns in place to an absolute heading; hands the follower back either way. */
     public Command snapToHeading(double headingRadians) {

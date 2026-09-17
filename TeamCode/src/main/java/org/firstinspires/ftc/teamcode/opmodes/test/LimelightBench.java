@@ -4,7 +4,6 @@ import com.qualcomm.hardware.limelightvision.LLResultTypes;
 import com.qualcomm.hardware.limelightvision.LLStatus;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
-import org.firstinspires.ftc.robotcore.external.navigation.Pose3D;
 import org.firstinspires.ftc.teamcode.subsystems.Limelight;
 
 /**
@@ -47,16 +46,14 @@ public class LimelightBench extends BenchOpMode {
                     status.getFps(), status.getPipelineIndex(), status.getPipelineType(),
                     status.getTemp(), status.getCpu(), status.getRam());
         }
-        telemetry.addData("Pipeline", "%s (%d)   frame %s   latency %d ms", ll.getPipelineName(), ll.getPipelineIndex(),
-                ll.hasTarget() ? "fresh" : (ll.isStale() ? "STALE" : "none"), ll.getVisionLatencyMs());
+        telemetry.addData("Pipeline", "%s (%d)   frame %s", ll.getPipelineName(), ll.getPipelineIndex(),
+                ll.hasTarget() ? "fresh" : (ll.isStale() ? "STALE" : "none"));
         telemetry.addData("Target", "tx %s  ty %s  ta %s", num(ll.getTx(), "%.1f"), num(ll.getTy(), "%.1f"), num(ll.getTa(), "%.1f"));
 
-        telemetry.addData("Tags", "%d in frame   botpose tags %d", ll.getTagCount(), ll.getBotposeTagCount());
+        telemetry.addData("Tags", "%d in frame", ll.getTagCount());
         for (LLResultTypes.FiducialResult tag : ll.getTags()) {
             telemetry.addData("  tag", "id %d  tx %.1f  ty %.1f", tag.getFiducialId(), tag.getTargetXDegrees(), tag.getTargetYDegrees());
         }
-        Pose3D botpose = ll.getBotpose();
-        if (botpose != null) telemetry.addData("Raw botpose", botpose.toString());
 
         telemetry.addData("Blob", "seen %s  stable %s  area %s  spread %.1f deg   tx %s ty %s",
                 ll.seesBlob(), ll.hasStableBlob(), num(ll.getBlobArea(), "%.1f"), ll.getBlobSpreadDegrees(),

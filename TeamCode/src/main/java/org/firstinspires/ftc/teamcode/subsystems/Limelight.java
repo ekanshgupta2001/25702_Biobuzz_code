@@ -7,11 +7,6 @@ import com.qualcomm.hardware.limelightvision.LLStatus;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
-import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
-import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
-import org.firstinspires.ftc.robotcore.external.navigation.Pose3D;
-import org.firstinspires.ftc.robotcore.external.navigation.Position;
-import org.firstinspires.ftc.robotcore.external.navigation.YawPitchRollAngles;
 import org.firstinspires.ftc.teamcode.util.field.FieldConstants;
 import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
 import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
@@ -32,13 +27,10 @@ import java.util.List;
  * {@link #setTargetHeightInches(double)}.
  *
  * <p><b>BIOBUZZ:</b> every AprilTag rides on a moving HIVE CELL, and the SDK v12.0 notes say they
- * are unsuitable for field localisation. {@link #getBotposeAsPedroPose()} keeps its gates and is
- * expected to return {@code null} all season; the useful AprilTag output is
- * {@link #getTagTx(int, int)}, the horizontal error to the cluster the shooter must hit.
+ * are unsuitable for field localisation, so there is no botpose here. The useful AprilTag output
+ * is {@link #getTagTx(int, int)}, the horizontal error to the cluster the shooter must hit.
  */
 public class Limelight {
-    /** Added to the tag-derived yaw, for a camera whose forward axis is not the robot's. */
-    public static double BOTPOSE_HEADING_OFFSET_RAD = 0.0;
     /**
      * Set true only after the camera mount constants below have been measured on the built robot
      * ({@code Bench: Limelight}, estimated distance against a tape measure). Until then the
@@ -46,14 +38,6 @@ public class Limelight {
      * drive four seconds toward a wrong spot.
      */
     public static boolean MOUNT_CALIBRATED = false;
-    /**
-     * Set true only once the Limelight field frame has been checked against ours on a real field.
-     * The Limelight's frame has its origin at the field centre with X along the red wall; ours has
-     * its origin at the A1 corner with +X toward column F. The conversion in
-     * {@link #getBotposeAsPedroPose()} adds the half-field offset and uses the yaw as is, which is
-     * a guess; nothing this season needs it (every BIOBUZZ tag moves), so it stays gated to null.
-     */
-    public static boolean BOTPOSE_FRAME_VERIFIED = false;
 
     public static int APRILTAG_PIPELINE_INDEX = 0;
     public static int BLOB_PIPELINE_INDEX = 1;
@@ -252,46 +236,6 @@ public class Limelight {
     public List<LLResultTypes.FiducialResult> getTags() {
         return hasTarget() ? Collections.unmodifiableList(tagDetections)
                 : Collections.<LLResultTypes.FiducialResult>emptyList();
-    }
-
-    public Pose3D getBotpose() {
-        return hasTarget() ? latestResult.getBotpose() : null;
-    }
-
-    /**
-     * The AprilTag-derived field pose in Pedro's corner-origin frame, or {@code null}. Gated on a
-     * fresh frame, the AprilTag pipeline, {@code getBotposeTagCount() >= 1} (the SDK returns an
-     * all-zero botpose, never null, when no tag localised) and the field bounds. In BIOBUZZ the
-     * tags move, so this is expected to stay {@code null}; it remains for a future static map.
-     */
-    public Pose getBotposeAsPedroPose() {
-        if (!BOTPOSE_FRAME_VERIFIED) return null;
-        if (!hasTarget()) return null;
-        if (currentPipeline != APRILTAG_PIPELINE_INDEX) return null;
-        if (latestResult.getBotposeTagCount() < 1) return null;
-
-        Pose3D bp = latestResult.getBotpose();
-        if (bp == null) return null;
-        Position pos = bp.getPosition().toUnit(DistanceUnit.INCH);
-        if (Double.isNaN(pos.x) || Double.isNaN(pos.y)) return null;
-
-        double x = pos.x + FieldConstants.FIELD_CENTER_INCHES;
-        double y = pos.y + FieldConstants.FIELD_CENTER_INCHES;
-        if (!FieldConstants.isInsideField(x, y)) return null;
-
-        YawPitchRollAngles ori = bp.getOrientation();
-        double yaw = ori.getYaw(AngleUnit.RADIANS) + BOTPOSE_HEADING_OFFSET_RAD;
-        return new Pose(x, y, yaw);
-    }
-
-    public int getBotposeTagCount() {
-        return hasTarget() ? latestResult.getBotposeTagCount() : 0;
-    }
-
-    /** Age of the current result: capture plus targeting latency, in milliseconds. */
-    public long getVisionLatencyMs() {
-        if (latestResult == null) return 0;
-        return (long) (latestResult.getCaptureLatency() + latestResult.getTargetingLatency());
     }
 
     // ---- Colour-blob detection ----

@@ -7,8 +7,7 @@ package org.firstinspires.ftc.teamcode.util.control;
  * It is the most intricate logic on the robot — three pieces of timing state, an attempt counter,
  * and an eligibility rule that is wrong in two different directions if you get it backwards — and
  * inside a class holding a {@code DcMotorEx} none of it could be tested. Here it is pure state and
- * arithmetic, so every branch below is covered by {@code JamDetectorTest} without a robot. Same
- * reasoning as {@code VisionMath} and {@code PoseFusion}; the story is in {@code docs/09}.
+ * arithmetic, so every branch below is covered by {@code JamDetectorTest} without a robot.
  *
  * <h2>How it decides</h2>
  * High current alone is not a jam — a motor accelerating from rest draws stall current for a moment.

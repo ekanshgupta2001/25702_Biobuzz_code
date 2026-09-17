@@ -71,7 +71,7 @@ public class MatchLogger {
             "storage_count", "transfer_state",
             "heading_hold_deg", "aim_lock",
             "shooter_rpm", "shooter_target_rpm",
-            "ll_target", "ll_tx", "ll_ty", "localization",
+            "ll_target", "ll_tx", "ll_ty",
             "macro", "macro_outcome"
     };
 

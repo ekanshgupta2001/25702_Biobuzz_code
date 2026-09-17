@@ -110,6 +110,13 @@ public class Macros {
     public static long DRIVE_TO_TIMEOUT_MS = 6000;
     /** A drive-to counts as arrived within this of the target on both axes. */
     public static double DRIVE_TO_TOLERANCE_INCHES = 3.0;
+    /**
+     * Shorter than this and no path is built: a line from the current pose to (almost) itself is
+     * degenerate inside Pedro (a zero tangent, NaN powers that the motor layer drops on the floor),
+     * so {@code followLazyCommand} is handed a null path and finishes at once, and the macro's own
+     * position check reports the outcome.
+     */
+    public static double MIN_PATH_INCHES = 0.5;
 
     /** How the last macro finished. */
     public enum Outcome { IDLE, RUNNING, SUCCESS, TIMED_OUT, NO_TARGET, CANCELLED }
@@ -191,9 +198,16 @@ public class Macros {
      * are {@code CommandBuilder}s whose {@code setEnd} <em>replaces</em> the group's own end, the one
      * that ends its children (docs/01 B.5 trap 12). A natural finish costs one extra tick and fires
      * the callback too, which is harmless: a terminal outcome is never changed.
+     *
+     * <p>{@code alongside} commands run in parallel with the whole macro and are ended with it.
+     * They start inside {@code Scheduler.schedule()}, before the first loop, which is what lets
+     * {@link #heldFlywheel()} take the shooter over from a displaced hold with no gap.
      */
-    private Command reporting(String name, Command body, Supplier<Outcome> result) {
-        return deadline(sequential(begin(name), body, finishWith(result)), onInterrupt(this::markCancelled));
+    private Command reporting(String name, Command body, Supplier<Outcome> result, Command... alongside) {
+        Command[] children = new Command[alongside.length + 1];
+        children[0] = onInterrupt(this::markCancelled);
+        System.arraycopy(alongside, 0, children, 1, alongside.length);
+        return deadline(sequential(begin(name), body, finishWith(result)), children);
     }
 
     private Command reporting(String name, Command body, Outcome success, Outcome failure, BooleanSupplier ok) {
@@ -224,6 +238,19 @@ public class Macros {
 
     private static Command noop() {
         return instant(() -> { });
+    }
+
+    /**
+     * The flywheel hold that rides alongside a shooting macro from its first tick to its last. It
+     * starts inside {@code Scheduler.schedule()}, right after the hold it displaces (Teleop's armed
+     * flywheel, ended by Ivy's OVERRIDE with an {@code idle()}), so the wheel never sees a zero
+     * target between the two holds and {@code Shooter.atSpeed()}'s latch is not reset. Before this
+     * the macro's own hold started two hand-off ticks later and every armed shot began with one
+     * loop of {@code setVelocity(0)} (review of 2026-09-16). With nothing on board it is a no-op:
+     * NO_TARGET never touches the shooter.
+     */
+    private Command heldFlywheel() {
+        return conditional(() -> piecesOnBoard() > 0, robot.shooter.holdSpeedCommand(), noop());
     }
 
     // ---- Collecting ----
@@ -317,15 +344,16 @@ public class Macros {
 
     /**
      * Spins up, moves one piece storage → transfer → flywheel, and idles the wheel. The shooter is
-     * owned by {@code holdSpeedCommand} for the whole cycle so the default command cannot wind it
-     * down under the piece; the spin-up wait itself requires nothing. NO_TARGET with nothing on board.
+     * held by {@link #heldFlywheel()} from the macro's first tick to its last, so the default
+     * command cannot wind it down under the piece and an already-armed wheel is never told to stop
+     * on the way in; the spin-up wait itself requires nothing. NO_TARGET with nothing on board.
      */
     public Command shootOne() {
         final int[] shots = new int[1];
         final boolean[] hadPieces = new boolean[1];
-        Command work = bounded(deadline(
+        Command work = bounded(
                 sequential(robot.shooter.waitForSpeedCommand(), feedOneCore(shots, () -> false)),
-                robot.shooter.holdSpeedCommand()), SHOOT_ONE_TIMEOUT_MS);
+                SHOOT_ONE_TIMEOUT_MS);
         return reporting("shootOne",
                 sequential(
                         instant(() -> {
@@ -335,7 +363,8 @@ public class Macros {
                         }),
                         conditional(() -> hadPieces[0], work, noop())),
                 () -> shots[0] >= 1 ? Outcome.SUCCESS
-                        : hadPieces[0] ? Outcome.TIMED_OUT : Outcome.NO_TARGET);
+                        : hadPieces[0] ? Outcome.TIMED_OUT : Outcome.NO_TARGET,
+                heldFlywheel());
     }
 
     /**
@@ -353,13 +382,15 @@ public class Macros {
                             onBoard[0] = piecesOnBoard();
                         }),
                         conditional(() -> onBoard[0] > 0, shootAllCore(shots, onBoard), noop())),
-                () -> shootAllOutcome(shots[0], onBoard[0]));
+                () -> shootAllOutcome(shots[0], onBoard[0]),
+                heldFlywheel());
     }
 
     /**
      * {@link #aimAt} then {@link #shootAll()} as one bounded, reporting macro: the autonomous
      * "empty the pre-loads into the up-CELL" move. Requires the drivetrain, storage, transfer and
-     * shooter for the whole run, so it is autonomous's move, not a teleop button.
+     * shooter for the whole run, so it is autonomous's move, not a teleop button. The flywheel
+     * spins up during the aim ({@link #heldFlywheel()}), not after it.
      */
     public Command aimAndShootAll(Pose target, int minTagId, int maxTagId) {
         final int[] shots = new int[1];
@@ -378,7 +409,8 @@ public class Macros {
                                 sequential(bounded(aimCore(target, minTagId, maxTagId), AIM_TIMEOUT_MS),
                                         shootAllCore(shots, onBoard)),
                                 noop())),
-                () -> shootAllOutcome(shots[0], onBoard[0]));
+                () -> shootAllOutcome(shots[0], onBoard[0]),
+                heldFlywheel());
     }
 
     private Command shootAllCore(int[] shots, int[] onBoard) {
@@ -397,8 +429,9 @@ public class Macros {
                             feedOneCore(shots, () -> attempts[0] < onBoard[0])),
                     noop());
         }
-        // holdSpeedCommand is the only child that requires the shooter (fixthese C7).
-        return bounded(deadline(sequential(steps), robot.shooter.holdSpeedCommand()), SHOOT_ALL_TIMEOUT_MS);
+        // Nothing in here requires the shooter: heldFlywheel() in the enclosing reporting group owns
+        // it for the whole macro, so no two siblings ever set its target (fixthese C7).
+        return bounded(sequential(steps), SHOOT_ALL_TIMEOUT_MS);
     }
 
     private static Outcome shootAllOutcome(int shots, int onBoard) {
@@ -615,10 +648,14 @@ public class Macros {
 
     // ---- Private geometry helpers ----
 
-    /** Straight line from the current pose to {@code target}; null without a pose. */
+    /**
+     * Straight line from the current pose to {@code target}; null without a pose, and null when the
+     * target is within {@link #MIN_PATH_INCHES} (a zero-length line is degenerate inside Pedro).
+     */
     private Path lineTo(Pose target) {
         Pose current = robot.drivetrain.getPose();
         if (current == null || target == null) return null;
+        if (current.distance(target) < MIN_PATH_INCHES) return null;
         return Paths.line(current, target).linear(current.heading(), target.heading());
     }
 
@@ -628,6 +665,7 @@ public class Macros {
         if (current == null || !robot.limelight.hasStableBlob()) return null;
         Pose target = robot.limelight.estimateBlobApproachPose(current);
         if (target == null) return null;
+        if (current.distance(target) < MIN_PATH_INCHES) return null;
         return Paths.line(current, target).linear(current.heading(), target.heading());
     }
 

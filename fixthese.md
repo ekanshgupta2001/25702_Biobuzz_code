@@ -602,3 +602,56 @@ review was partly wrong, the verdict says so and why; the body of each item is l
 - C6/C7 `reporting()` wrapper marks CANCELLED on interrupt; `waitForSpeedCommand` has no requirement
   so it no longer competes with `holdSpeedCommand`.
 - D1 the tautological assertion is gone (`lastMoving[0].forward()`).
+
+
+---
+
+# Round 3 — Pedro 3.0.0 / Ivy 1.1.1 usage audit (2026-09-16)
+
+Asked: check every Pedro and Ivy call in the repo against the official docs (the pedropathing.com
+docs source in `Docs-master/`) and confirm the code is correct for real use.
+
+Method: all 60 doc pages read; the Ivy 1.0.0 sources read and the Ivy core 1.1.1 bytecode diffed
+against them class by class (only change: `waitMs` now on `System.currentTimeMillis`); the real
+`ivy:pedro:1.1.1` source read; Pedro core 3.0.0 disassembled (`Follower`, `PathTracker`,
+`Foresight`, `ManualDrive`, `PIDController`, `Angle`, `Vector2D`, `Paths`/`Path`/`AtomicPath`,
+`KalmanFilter`); the revhub 3.0.0 sources (`Mecanum`, `CachedMotor`, `PinpointLocalizer`, configs)
+and the AutoTune sources (`TunerScanner`, `Tuner`, `Hooks`, `Procedure`) read; then every repo file
+that imports the libraries (37 main sources), the fakes and the seven tests that pin library
+behaviour checked call by call. 368 tests, 0 failures on the source as reviewed.
+
+## Verdict
+
+**No incorrect Pedro or Ivy usage.** Every call exists with the signature used, and every semantic
+the code depends on is real in the shipped artifacts: the follower's mode machine and
+`atParametricEnd` (true whenever not FOLLOW), `isBusy` cleared only in a hold, `hold(Pose)` unscaled,
+`manual` latched; the scheduler's inline interrupt on `schedule()`, suspend-and-resume without
+`start()`, `cancel` always INTERRUPTED; `Deadline`/`Parallel` forwarding their own end condition and
+ending losers INTERRUPTED on a natural finish; `Race` checking done before execute; `Repeat.end`
+dereferencing a list built in `start` (hence `shootAllCore` unrolled); `Lazy` with no requirements;
+`unless` never finishing; `Mecanum`'s +strafe = left and +turn = CCW (so `Controls` negates all three
+sticks, as the Quickstart's own `Tests.java` does); `ManualDrive.fieldCentric` rotating by minus the
+heading; `PIDController.calculate(0, error)` with Pedro's target-minus-current sign; the Pinpoint
+constructor's IMU recalibration; `Path.endPose()` throwing without an interpolator (caught);
+`KalmanFilter.update(dx, meas)` giving exactly zero correction on the odometry-only path; `@Tuner`
+factory rules; AutoTune's servers bound whenever the library is present.
+
+What cannot be checked off the robot, none of it a library question: motor directions in
+`Constants.drivetrainConfig`, Pinpoint pod directions and offsets, the Foresight numbers, and
+HANDOFF §9.
+
+## Where the official docs are wrong (recorded in docs/01; do not "fix" the code toward them)
+
+| Page | Says | Library |
+|---|---|---|
+| `pathing/guide/teleop-usage.mdx` | `manual(-left_stick_y, left_stick_x, right_stick_x)` | +strafe is left and +turn is CCW, so strafe and turn must be negated; the Quickstart's `Tests.java` and `Controls` do |
+| `ivy/pedro-commands.mdx`, `pathing/guide/path-following.mdx` | `follow()` finishes when "no longer busy" / `following()` false | `setDone(follower::atParametricEnd)`: 97.5 % of the last segment, still in FOLLOW |
+| `pathing/custom/drivetrain.mdx` | the 2.x abstract class (`calculateDrive`, `runDrive`) | the 3.0.0 `Drivetrain` interface (`drive`, `maxScaling`, `stop`, `debug`, `interpolateVelocity`) |
+
+## Round 3 status
+
+| Item | What | Change | Proof |
+|---|---|---|---|
+| R3-1 | An armed flywheel was told to stop for one loop when a shot macro started: Ivy's OVERRIDE ended Teleop's hold (`idle()`) at `schedule()` and the macro's own hold started two hand-off ticks later, resetting the at-speed latch. About 100 to 300 ms per shot; not a bug | `Macros.reporting(..., Command... alongside)` and `heldFlywheel()`: the hold starts inside `Scheduler.schedule()` for `shootOne`, `shootAll`, `aimAndShootAll` (where it now overlaps the aim); the inner `deadline(..., holdSpeedCommand())` groups are gone; NO_TARGET still never touches the shooter | `MacrosTest.shootOneKeepsAnArmedFlywheelSpinning` |
+| R3-2 | `driveTo` from a pose equal to its target built a zero-length line (degenerate inside Pedro: NaN powers, which `CachedMotor` ignores, leaving the last written power). Exact equality is practically impossible on hardware; theoretical | `Macros.MIN_PATH_INCHES = 0.5`; `lineTo` and `approachPath` return null inside it, so `followLazyCommand` finishes at once and the macro's position check reports | `MacrosTest.driveToAlreadyThereFinishesWithoutAPath` |
+| R3-3 | The docs discrepancies above would tempt the next reader to flip `Controls` or "simplify" `followLazyCommand` | docs/01 A.4, A.6, B.1 and HANDOFF §7 | — |

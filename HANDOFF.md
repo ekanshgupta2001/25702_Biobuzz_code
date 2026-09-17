@@ -41,7 +41,7 @@ things are the way they are, and what to do next. Everything here is backed by a
 | `pedro/procedures/*` | Quickstart AutoTune procedures, untouched, tuning build only | — |
 | `docs/01..04`, `docs/specs/*` | written and kept current | — |
 
-`./gradlew :TeamCode:testDebugUnitTest` → **368 tests, 0 failures**. `:TeamCode:assembleDebug`
+`./gradlew :TeamCode:testDebugUnitTest` → **370 tests, 0 failures**. `:TeamCode:assembleDebug`
 builds the competition APK (no AutoTune) with `Teleop`, `Auto: shoot 4 + leave`, six `Bench: …`
 OpModes and `SelfTest` registered.
 
@@ -101,6 +101,14 @@ and §8.1 has the item-by-item table). Five local commits, nothing pushed:
 (trimming Javadoc that restates docs/03). Both are structure only with no effect on the field; do
 them after the first event, with time to re-test.
 
+**What was done on 2026-09-16** (Round 3 of `fixthese.md`: a library-usage audit of every Pedro
+3.0.0 and Ivy 1.1.1 call against the pedropathing.com docs source in `Docs-master/` and against the
+library bytecode and sources in the Gradle cache). Verdict: **no incorrect Pedro or Ivy usage**;
+the official docs are wrong in three places and docs/01 now says where. Two small hardening
+changes came out of it, neither a correctness bug: the flywheel hold now rides alongside a shooting
+macro from its first tick (`Macros.heldFlywheel`), so an armed wheel is never told to stop when a
+shot starts; and `driveTo` builds no path when the target is within `Macros.MIN_PATH_INCHES`.
+
 ## 3. Read these first
 
 | File | Why |
@@ -109,7 +117,7 @@ them after the first event, with time to re-test.
 | `docs/03-software-architecture.md` | the loop contract, package map, per-subsystem API, Limelight and colour-sensor specs, lessons-learned rules, and §20's practical notes |
 | `docs/01-libraries-pedro-3.0.0-ivy-1.1.1.md` | the two libraries' real APIs, verified from bytecode: read before touching `Drivetrain`, `Macros` or `AutoRoutine` |
 | `docs/04-biobuzz-season-analysis.md` | sourced game/field/rule facts, and §9 "implications for our robot" |
-| `fixthese.md` | both reviews: 2026-09-14 (status table at the top) and Round 2, 2026-09-15 ("Round 2 status", with a verdict on each claim) |
+| `fixthese.md` | all three reviews: 2026-09-14 (status table at the top), Round 2, 2026-09-15 ("Round 2 status", with a verdict on each claim), and Round 3, 2026-09-16 (the Pedro/Ivy usage audit) |
 | `opmodes/teleop/Controls.java` | every binding and the help card; change a button there and nowhere else |
 | `opmodes/test/*Bench.java` | how each constant in §9 gets measured |
 | `game/Field.java` Javadoc | the field frame (origin corner, axes, heading) every pose and path depends on |
@@ -322,6 +330,7 @@ left, loop stats, and `started UNLOCKED` if A was never pressed.
 - Paths need a heading (`.constant/.linear/.tangent`) or `follow()` throws; `followLazyCommand` catches and records it.
 - No callbacks, no `setMaxPower`, no `turnTo`: poll, use Ivy, or `path.with(cfg.maxPathSpeed.at(p))`. A turn is `hold(pose.withHeading(h))`.
 - `@Tuner` factories run at RC start-up (`TunerScanner`): static, zero-arg, return `Procedure`, never throw (`Tuning.NotReady`).
+- The official docs are wrong in three places (docs/01 A.4, A.6, B.1): the TeleOp page's stick signs, `PedroCommands.follow`'s done condition, and the custom-drivetrain page. `Controls` and `PathFollower` follow the library's bytecode, not the page.
 
 **Ivy 1.1.1** (docs/01 §B)
 - `Command.unless()` never finishes; use `conditional(cond, real, instant(() -> {}))`.
@@ -424,6 +433,14 @@ left, loop stats, and `started UNLOCKED` if A was never pressed.
 Verdicts in short: A1, A4, A6, A7, A8, A9, B1–B6 confirmed as written. A2, A3, A5 and A10 were partly
 wrong (§2 explains how). A8 was confirmed but kept as a deliberate choice: the auto still runs unlocked,
 now with a warning.
+
+**Round 3** (2026-09-16, the Pedro/Ivy usage audit; the evidence table is in `fixthese.md` "Round 3"):
+
+| Item | Change | Proof |
+|---|---|---|
+| R3-1 | `Macros.reporting(..., alongside)` and `heldFlywheel()`: the shooter hold starts inside `Scheduler.schedule()` for `shootOne`, `shootAll`, `aimAndShootAll`; the inner `deadline(..., holdSpeedCommand())` groups are gone | `MacrosTest.shootOneKeepsAnArmedFlywheelSpinning` |
+| R3-2 | `Macros.MIN_PATH_INCHES`; `lineTo` / `approachPath` return null inside it | `MacrosTest.driveToAlreadyThereFinishesWithoutAPath` |
+| R3-3 | docs/01 records where the official docs are wrong (A.4, A.6, B.1); §7 above points at it | — |
 
 ### 8.2 Before the first event, on the real robot, in this order
 

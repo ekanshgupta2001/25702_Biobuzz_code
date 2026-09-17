@@ -6,6 +6,11 @@ sources are published for core), the `revhub:3.0.0` and `tuning:1.0.0` sources, 
 `com.pedropathing.ivy:core:1.1.1` bytecode, the `ivy:pedro:1.1.1` source, and the Ivy 1.0.0 sources
 (for scheduler semantics). Where something is inferred rather than read, it is marked **[inferred]**.
 
+Re-checked on 2026-09-16 against the pedropathing.com documentation source (`Docs-master/`, the
+site's `content/docs` tree). The site is wrong in three places, each noted where it matters
+(A.4 stick signs, A.6 the custom-drivetrain page, B.1 the `follow` done condition); where the
+site and the bytecode disagree, the bytecode wins and the code follows the bytecode.
+
 Companion docs: `02-robot-physical-architecture.md` (what the robot is),
 `03-software-architecture.md` (how the code is organised and how it uses these libraries).
 
@@ -299,6 +304,14 @@ DrivePowers p = ManualDrive.headingLock(follower, Controller.pid(kP, 0, kD), pow
 Switching: `follower.follow(path)` hands control to the path; `follower.manual(DrivePowers.zero())`
 takes it back. Always keep the single `follower.update()` per loop.
 
+**Stick signs (the docs page is wrong).** `guide/teleop-usage.mdx` passes `gamepad1.left_stick_x`
+and `gamepad1.right_stick_x` to `manual` un-negated. With the `Mecanum` mixing above (+strafe is
+robot-left, +turn is counter-clockwise) that inverts strafe and turn: stick-right would strafe left
+and turn left. The Quickstart's own `procedures/Tests.java` negates all three
+(`-left_stick_y, -left_stick_x, -right_stick_x`), and so does `opmodes/teleop/Controls`. Do not
+"fix" `Controls` toward the docs page; the check that settles it on the robot is the SDK's
+TestHardware or the Tests/Driving procedure.
+
 ## A.5 Paths
 
 Units: inches and radians. Axes: +x forward at the zero pose, +y left, heading CCW. `Pose` normalises
@@ -419,6 +432,10 @@ Shipped localizers (all `(HardwareMap, XConfig)`): `PinpointLocalizer`, `OTOSLoc
 `OctoQuadLocalizer`, `ThreeWheelLocalizer`, `ThreeWheelIMULocalizer`, `TwoWheelLocalizer`, and in core
 `FusionLocalizer(deadReckoning, P, Q, R, historySize)` with `addMeasurement(pose, timestampNanos)`.
 There is no drive-encoder localizer in 3.0.0.
+
+The docs' "Custom Drivetrain" page (`custom/drivetrain.mdx`) still describes the 2.x abstract class
+(`calculateDrive`, `runDrive`); the 3.0.0 contract is the `Drivetrain` interface above, which is
+what the test fake `FakePedroDrivetrain` implements.
 
 Because core has no dependencies, a JVM test can build a real `Follower` on a fake `Localizer` that
 integrates `DrivePowers` via `Pose.exp(Twist, dt)` and a recording `Drivetrain`, driven by
@@ -568,6 +585,12 @@ PedroCommands.follow(Follower f, Path p)   // setStart(f.follow(p)), setDone(f::
 PedroCommands.hold(Follower f)             // hold(f, f.pose()) — pose captured at BUILD time
 PedroCommands.hold(Follower f, Pose p)     // Commands.instant(f.hold(p)) — finishes on tick one
 ```
+
+The docs (`ivy/pedro-commands.mdx`, `pathing/guide/path-following.mdx`) say `follow()` finishes
+when the follower "is no longer busy" or `following()` turns false. The 1.1.1 source is
+`setDone(follower::atParametricEnd)`: done at 97.5 % of the last segment, while the follower is
+still in FOLLOW and before its own end-of-path hold. `Drivetrain.followLazyCommand` uses the same
+condition and adds the requirement and the hand-back that `follow()` lacks (B.6).
 
 ## B.2 Model
 

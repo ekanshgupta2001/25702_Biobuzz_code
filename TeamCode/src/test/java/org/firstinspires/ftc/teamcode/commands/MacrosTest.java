@@ -105,6 +105,7 @@ public class MacrosTest {
         Macros.SNAP_TOLERANCE_DEGREES = 3.0;
         Macros.DRIVE_TO_TIMEOUT_MS = 6000;
         Macros.DRIVE_TO_TOLERANCE_INCHES = 3.0;
+        Macros.MIN_PATH_INCHES = 0.5;
         Storage.CAPACITY = 4;
         Storage.ADVANCE_TIMEOUT_MS = 2500;
         Transfer.LIFT_TIMEOUT_MS = 2000;
@@ -395,6 +396,36 @@ public class MacrosTest {
         assertEquals("the flywheel was let go", 0, shooterMotor.commandedVelocity, EPS);
     }
 
+    @Test
+    public void shootOneKeepsAnArmedFlywheelSpinning() {
+        // Teleop's armed hold owns the shooter; scheduling a shot macro displaces it (Ivy OVERRIDE,
+        // whose end idles the wheel). The macro's own hold must take over inside that same
+        // schedule() call, so the wheel is never told to stop and the at-speed latch survives
+        // (review of 2026-09-16, item 1). Before the fix the first loop wrote setVelocity(0).
+        robot.storage.setCount(2);
+        shooterAtSpeed();
+        Command armed = robot.shooter.holdSpeedCommand();
+        armed.schedule();
+        for (int i = 0; i < 10; i++) tick();
+        assertEquals(Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM), shooterMotor.commandedVelocity, EPS);
+        assertTrue(robot.shooter.atSpeed());
+
+        final boolean[] dropped = {false};
+        final boolean[] latchLost = {false};
+        runToCompletion(robot.macros.shootOne(), () -> {
+            if (robot.macros.getShotsFired() < 1) {
+                if (shooterMotor.commandedVelocity == 0) dropped[0] = true;
+                if (!robot.shooter.atSpeed()) latchLost[0] = true;
+            }
+        });
+        assertFalse("the armed hold was displaced by the macro", Scheduler.isScheduled(armed));
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        assertEquals(1, robot.macros.getShotsFired());
+        assertFalse("the wheel was told to stop between the two holds", dropped[0]);
+        assertFalse("the at-speed latch was reset by a zero target", latchLost[0]);
+        assertEquals("released once the macro is over", 0, shooterMotor.commandedVelocity, EPS);
+    }
+
     // ---- Collecting ----
 
     @Test
@@ -624,6 +655,32 @@ public class MacrosTest {
         assertEquals(24, follower.lastPath.endPose().x(), 1e-6);
         assertEquals(12, follower.lastPath.endPose().y(), 1e-6);
         assertEquals("handed back to the sticks", Follower.Mode.MANUAL, follower.mode);
+    }
+
+    @Test
+    public void driveToAlreadyThereFinishesWithoutAPath() {
+        // A line from the current pose to (almost) itself is degenerate inside Pedro, so no path is
+        // built and the outcome comes from the position check alone (review of 2026-09-16, item 2).
+        Pose target = new Pose(24, 12, Math.toRadians(90));
+        follower.pose = target;
+        runToCompletion(robot.macros.driveTo(target));
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        assertEquals("no path for a zero-length line", 0, follower.followCalls);
+
+        follower.pose = new Pose(24.3, 12, Math.toRadians(90));       // inside MIN_PATH_INCHES
+        runToCompletion(robot.macros.driveTo(target));
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        assertEquals(0, follower.followCalls);
+
+        follower.pose = new Pose(25, 12, Math.toRadians(90));         // an inch away: a real path
+        runToCompletion(robot.macros.driveTo(target), () -> {
+            if (follower.mode == Follower.Mode.FOLLOW) {
+                follower.pose = target;
+                follower.finishPath();
+            }
+        });
+        assertEquals(1, follower.followCalls);
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
     }
 
     @Test

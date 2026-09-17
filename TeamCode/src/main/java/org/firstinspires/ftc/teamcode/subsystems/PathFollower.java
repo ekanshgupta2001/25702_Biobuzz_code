@@ -16,9 +16,8 @@ import com.pedropathing.paths.Path;
  *
  * <p>The contract mirrors Pedro exactly, including its surprises: {@link #atParametricEnd()} is
  * the "path finished" signal and is true whenever the follower is not following;
- * {@link #isBusy()} is only cleared inside a hold, once settled; {@link #follow} always restarts
- * from the start of the path; and the mode is implied by the last command
- * ({@code follow}, {@code hold}, {@code manual}, {@code stop}).
+ * {@link #follow} always restarts from the start of the path; and the mode is implied by the last
+ * command ({@code follow}, {@code hold}, {@code manual}).
  */
 public interface PathFollower {
     /** Advances the follower one loop. Exactly once per loop; it also ticks the localizer. */
@@ -43,14 +42,8 @@ public interface PathFollower {
     /** True once the path geometry is finished, and whenever the follower is not following. */
     boolean atParametricEnd();
 
-    /** Pedro's settle flag: set by {@link #follow}, cleared only inside a hold once settled. */
-    boolean isBusy();
-
     /** Station-keeps at a pose. {@code scaled} applies the gentler hold gains. */
     void hold(Pose pose, boolean scaled);
-
-    /** Stops driving (IDLE mode). */
-    void stop();
 
     Follower.Mode mode();
 }

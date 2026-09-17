@@ -45,8 +45,6 @@ public final class HardwareNames {
 
     /** goBILDA Pinpoint odometry computer (I2C), the Pedro localizer. */
     public static final String PINPOINT = "pinpoint";
-    /** Control Hub IMU, for anything that reads heading outside Pedro. */
-    public static final String IMU = "imu";
 
     // ---- Front intake (16 mm compliant roller above the ramp) ----
 
@@ -71,8 +69,6 @@ public final class HardwareNames {
     public static final String SHOOTER_MOTOR = "shooter";
     /** Second flywheel motor, if fitted. Absent otherwise. */
     public static final String SHOOTER_MOTOR_2 = "shooter_2";
-    /** Feed gate servo between the transfer and the flywheel, if fitted. */
-    public static final String SHOOTER_FEED_SERVO = "shooter_feed";
 
     // ---- Vision ----
 
@@ -85,8 +81,6 @@ public final class HardwareNames {
     // 2 m distance sensor, beam break on a digital channel) is decided per point when it is fitted;
     // the name stays the same either way so the wrapper that resolves it is the only thing to change.
 
-    /** A piece is entering the intake. */
-    public static final String SENSOR_INTAKE_ENTRANCE = "sensor_intake_entrance";
     /** A piece has entered the storage channel (counts pieces, identifies Pollen vs Nectar). */
     public static final String SENSOR_STORAGE_ENTRANCE = "sensor_storage_entrance";
     /** The fourth storage slot is occupied. */

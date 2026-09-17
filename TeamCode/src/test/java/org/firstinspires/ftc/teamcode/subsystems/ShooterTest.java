@@ -63,30 +63,32 @@ public class ShooterTest {
     }
 
     @Test
-    public void spinUpFinishesOnceAtSpeedAndKeepsSpinningWhileOwned() {
-        Command spin = shooter.spinUpCommand();
-        spin.schedule();
+    public void waitForSpeedFinishesOnceTheBandIsHeldWhileAHoldOwnsTheWheel() {
+        Command hold = shooter.holdSpeedCommand();
+        Command wait = shooter.waitForSpeedCommand();
+        hold.schedule();
+        wait.schedule();
         tick();
         assertEquals(Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM), motor.commandedVelocity, EPS);
         assertEquals(Shooter.Mode.SPINNING_UP, shooter.getMode());
-        assertTrue(Scheduler.isScheduled(spin));
+        assertTrue(Scheduler.isScheduled(wait));
 
         motor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM - 50);
         ticks(Shooter.AT_SPEED_LOOPS);                    // in band, held for the latch
         tick();
-        assertFalse(Scheduler.isScheduled(spin));
+        assertFalse(Scheduler.isScheduled(wait));
         assertEquals(Shooter.Mode.READY, shooter.getMode());
-        assertEquals("a natural end does not touch the target",
-                Shooter.SHOOT_RPM, shooter.getTargetRpm(), EPS);
+        assertTrue("the wait requires nothing: the hold keeps the wheel", Scheduler.isScheduled(hold));
+        assertEquals(Shooter.SHOOT_RPM, shooter.getTargetRpm(), EPS);
     }
 
     @Test
-    public void spinUpGivesUpAfterTheTimeout() {
-        Command spin = shooter.spinUpCommand();
-        spin.schedule();
+    public void waitForSpeedGivesUpAfterTheTimeout() {
+        Command wait = shooter.waitForSpeedCommand();
+        wait.schedule();
         clock.advance(Shooter.SPINUP_TIMEOUT_MS);
         Scheduler.execute();
-        assertFalse(Scheduler.isScheduled(spin));
+        assertFalse(Scheduler.isScheduled(wait));
     }
 
     @Test
@@ -199,13 +201,13 @@ public class ShooterTest {
     }
 
     @Test
-    public void unavailableShooterFinishesSpinUpAtOnce() {
+    public void unavailableShooterFinishesTheWaitAtOnce() {
         Shooter none = new Shooter((DcMotorEx) null, null, clock);
         assertFalse(none.isAvailable());
-        Command spin = none.spinUpCommand();
-        spin.schedule();
+        Command wait = none.waitForSpeedCommand();
+        wait.schedule();
         Scheduler.execute();
-        assertFalse(Scheduler.isScheduled(spin));
+        assertFalse(Scheduler.isScheduled(wait));
         assertEquals(0, none.getRpm(), EPS);
     }
 }

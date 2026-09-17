@@ -128,7 +128,6 @@ public class AutoRoutineTest {
         assertEquals(4, robot.macros.getShotsFired());
         assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
         assertEquals(0, robot.storage.count());
-        assertTrue(auto.getLog().contains("shots 4 : SUCCESS"));
         assertEquals("leave went backward at LEAVE_POWER", -0.3, lastMoving[0].forward(), EPS);
         assertEquals(0, lastMoving[0].strafe(), EPS);
         assertEquals(0, lastMoving[0].turn(), EPS);
@@ -165,7 +164,6 @@ public class AutoRoutineTest {
         assertEquals("done", auto.getPhase());
         assertEquals(Macros.Outcome.TIMED_OUT, robot.macros.getOutcome());
         assertEquals(0, robot.macros.getShotsFired());
-        assertTrue(auto.getLog().contains("shots 0 : TIMED_OUT"));
         assertTrue("still drove off the wall", motors.driveCalls >= 1);
         assertFalse(motors.moving);
     }

@@ -17,7 +17,9 @@ public class FieldPosesTest {
 
     @Test
     public void everyPoseAndItsRedTwinStaysOnTheField() {
-        for (Pose p : FieldPoses.all()) {
+        Pose[] all = {FieldPoses.BLUE_START_FACING_HIVE, FieldPoses.BLUE_START_ALLIANCE_WALL,
+                FieldPoses.BLUE_SHOOTING_SPOT, FieldPoses.BLUE_PARK};
+        for (Pose p : all) {
             assertTrue("blue pose off field: " + p, FieldConstants.isInsideField(p));
             assertTrue("red twin off field: " + p,
                     FieldConstants.isInsideField(FieldConstants.forAlliance(p, Alliance.RED)));
@@ -63,11 +65,15 @@ public class FieldPosesTest {
     @Test
     public void parkPoseOverlapsItsOwnLoadingZone() {
         double half = FieldPoses.ROBOT_HALF_LENGTH_INCHES;
-        assertTrue(Field.blueLoadingZone().overlapsSquare(FieldPoses.BLUE_PARK, half));
-        Pose redPark = FieldConstants.forAlliance(FieldPoses.BLUE_PARK, Alliance.RED);
-        assertTrue(Field.loadingZone(Alliance.RED).overlapsSquare(redPark, half));
-        assertTrue("but the robot body stays on the tiles",
-                FieldPoses.BLUE_PARK.x() + half <= Field.FIELD_SIZE_INCHES);
+        Pose zone = Field.blueLoadingZoneCenter();
+        Pose park = FieldPoses.BLUE_PARK;
+        assertEquals("centred on the zone's tile", zone.y(), park.y(), EPS);
+        assertTrue("the front reaches into the zone",
+                park.x() + half > Field.FIELD_SIZE_INCHES - Field.LOADING_ZONE_DEPTH_INCHES);
+        assertTrue("but the robot body stays on the tiles", park.x() + half <= Field.FIELD_SIZE_INCHES);
+        Pose redPark = FieldConstants.forAlliance(park, Alliance.RED);
+        assertEquals(FieldConstants.forAlliance(zone, Alliance.RED).y(), redPark.y(), EPS);
+        assertTrue("red park reaches into the red zone on A5", redPark.x() - half < Field.LOADING_ZONE_DEPTH_INCHES);
     }
 
     @Test

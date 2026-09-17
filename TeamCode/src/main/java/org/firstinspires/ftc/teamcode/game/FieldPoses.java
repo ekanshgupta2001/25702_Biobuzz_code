@@ -18,8 +18,8 @@ import org.firstinspires.ftc.teamcode.util.field.StartPosition;
  * <p>Fields are non-final statics so a value can be corrected from an OpMode on a practice field.
  *
  * <h2>These numbers are placeholders</h2>
- * Wall standoffs use the V1 CAD footprint; the shooting spot, park and garden approach are
- * reasonable first guesses. Measure the real field and replace them before trusting any path.
+ * Wall standoffs use the V1 CAD footprint; the shooting spot and park are reasonable first
+ * guesses. Measure the real field and replace them before trusting any path.
  */
 public final class FieldPoses {
     private FieldPoses() {}
@@ -63,12 +63,7 @@ public final class FieldPoses {
      */
     public static Pose BLUE_PARK =
             new Pose(Field.FIELD_SIZE_INCHES - ROBOT_HALF_LENGTH_INCHES - WALL_CLEARANCE_INCHES,
-                    Field.blueLoadingZone().center().y(), 0);
-
-    /** Intake facing the blue GARDEN strip on F6, to collect its four POLLEN. */
-    public static Pose BLUE_GARDEN_APPROACH =
-            new Pose(Field.FIELD_SIZE_INCHES - Field.GARDEN_DEPTH_INCHES - ROBOT_HALF_LENGTH_INCHES
-                    - WALL_CLEARANCE_INCHES, Field.blueGarden().center().y(), 0);
+                    Field.blueLoadingZoneCenter().y(), 0);
 
     /** Blue-side start pose for a start position. Adding a position needs a case here and nothing else. */
     public static Pose startPose(StartPosition position) {
@@ -80,13 +75,5 @@ public final class FieldPoses {
             default:
                 throw new IllegalArgumentException("no pose for " + position);
         }
-    }
-
-    /** Every blue pose, for sanity checks. */
-    public static Pose[] all() {
-        return new Pose[] {
-                BLUE_START_FACING_HIVE, BLUE_START_ALLIANCE_WALL, BLUE_SHOOTING_SPOT, BLUE_PARK,
-                BLUE_GARDEN_APPROACH,
-        };
     }
 }

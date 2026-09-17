@@ -255,24 +255,6 @@ public class Storage {
 
     // ---- Ivy commands ----
 
-    /** Runs the transport rearward until interrupted. */
-    public Command advanceCommand() {
-        return Command.build()
-                .setStart(this::advance)
-                .setDone(() -> false)
-                .setEnd(ec -> stop())
-                .requiring(this);
-    }
-
-    /** Runs the transport forward (toward the intake) until interrupted, to clear a jam. */
-    public Command reverseCommand() {
-        return Command.build()
-                .setStart(this::reverse)
-                .setDone(() -> false)
-                .setEnd(ec -> stop())
-                .requiring(this);
-    }
-
     public Command stopCommand() {
         return Command.build()
                 .setStart(this::stop)

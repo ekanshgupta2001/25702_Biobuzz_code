@@ -48,18 +48,8 @@ public final class PedroPathFollower implements PathFollower {
     }
 
     @Override
-    public boolean isBusy() {
-        return follower.isBusy();
-    }
-
-    @Override
     public void hold(Pose pose, boolean scaled) {
         follower.hold(pose, scaled);
-    }
-
-    @Override
-    public void stop() {
-        follower.stop();
     }
 
     @Override

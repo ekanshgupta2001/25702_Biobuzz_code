@@ -165,7 +165,7 @@ public class TeleopTest {
 
     private void loopUntilMacroDone() {
         int loops = 0;
-        while (robot.macros.isRunning()) {
+        while ((robot.macros.getOutcome() == Macros.Outcome.RUNNING)) {
             loop();
             if (++loops > MAX_LOOPS) fail("macro did not finish: " + robot.macros.getStatus());
         }

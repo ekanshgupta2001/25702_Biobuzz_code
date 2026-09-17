@@ -292,19 +292,6 @@ public class Intake {
                 .requiring(this);
     }
 
-    /** Runs at {@code ticksPerSec} for {@code ms} on the injected clock, then stops. */
-    public Command runForMs(double ticksPerSec, long ms) {
-        final long[] startedAt = new long[1];
-        return Command.build()
-                .setStart(() -> {
-                    startedAt[0] = clock.nowMs();
-                    setVelocity(ticksPerSec);
-                })
-                .setDone(() -> clock.nowMs() - startedAt[0] >= ms)
-                .setEnd(ec -> stop())
-                .requiring(this);
-    }
-
     /**
      * Intakes until {@code captured} reports a piece, marking possession only when it finishes
      * naturally; an interrupted capture does not claim a piece.

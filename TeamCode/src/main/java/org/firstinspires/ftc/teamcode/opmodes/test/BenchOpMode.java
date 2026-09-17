@@ -166,14 +166,6 @@ public abstract class BenchOpMode extends OpMode {
             max = Double.NaN;
         }
 
-        double max() {
-            return max;
-        }
-
-        double min() {
-            return min;
-        }
-
         String status(String format) {
             return Double.isNaN(max) ? "n/a" : fmt(format + " .. " + format, min, max);
         }

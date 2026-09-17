@@ -141,10 +141,6 @@ public class Macros {
         return activeName;
     }
 
-    public boolean isRunning() {
-        return outcome == Outcome.RUNNING;
-    }
-
     /** Pieces the last shooting macro actually fired (per the sensors, or the pulse count). */
     public int getShotsFired() {
         return shotsFired;
@@ -629,7 +625,8 @@ public class Macros {
                 Math.toDegrees(Angles.normalizeAngle(headingRadians)));
         return reporting(name,
                 bounded(robot.drivetrain.turnToCommand(headingRadians), SNAP_TIMEOUT_MS),
-                Outcome.SUCCESS, Outcome.TIMED_OUT, () -> atHeading(headingRadians));
+                Outcome.SUCCESS, Outcome.TIMED_OUT,
+                () -> robot.drivetrain.atHeading(headingRadians, Math.toRadians(SNAP_TOLERANCE_DEGREES)));
     }
 
     /**
@@ -682,10 +679,4 @@ public class Macros {
                 && Math.abs(robot.limelight.getFilteredBlobTx()) <= ALIGN_TOLERANCE_DEGREES;
     }
 
-    private boolean atHeading(double headingRadians) {
-        Pose pose = robot.drivetrain.getPose();
-        if (pose == null) return false;
-        double errorDegrees = Math.toDegrees(Angles.angleError(pose.heading(), headingRadians));
-        return Math.abs(errorDegrees) <= SNAP_TOLERANCE_DEGREES;
-    }
 }

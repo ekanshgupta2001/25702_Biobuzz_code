@@ -34,8 +34,7 @@ import java.util.List;
  * </pre>
  *
  * Observe, decide, act, in that order. A subclass cannot get it wrong because there is no ordering
- * left for it to choose (docs/03 section 1). One {@link #nowMs} timestamp is taken per loop and
- * shared, rather than each caller reading the clock again.
+ * left for it to choose (docs/03 section 1).
  *
  * <p>Two protected seams, {@link #buildRobot()} and {@link #openLogger()}, exist so a JVM test can
  * run this whole lifecycle on a robot made of fakes; production never overrides them.
@@ -59,8 +58,6 @@ public abstract class MatchOpMode extends OpMode {
     protected double loopMs = 0;
     /** Loop-time statistics for the whole run: p95, max, spike count. */
     protected final LoopTimer loopStats = new LoopTimer();
-    /** One timestamp per loop, from the robot's {@code Clock}, so nothing re-reads it mid-cycle. */
-    protected long nowMs = 0;
 
     private final ElapsedTime loopTimer = new ElapsedTime();
 
@@ -154,7 +151,6 @@ public abstract class MatchOpMode extends OpMode {
         loopMs = loopTimer.milliseconds();
         loopTimer.reset();
         loopStats.record(loopMs);
-        nowMs = robot.getClock().nowMs();
 
         robot.readSensors();          // 1. observe
         robot.updateLocalization();   //    blend any absolute fix into the pose estimate

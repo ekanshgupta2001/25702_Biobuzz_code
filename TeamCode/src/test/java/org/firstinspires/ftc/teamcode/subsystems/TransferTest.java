@@ -146,7 +146,7 @@ public class TransferTest {
     public void defaultIdleStopsAndInterruptedLiftStops() {
         transfer.defaultIdleCommand().schedule();
         tick();
-        Command lift = transfer.liftCommand();
+        Command lift = transfer.liftOneCommand();   // no feed sensor: a timed lift
         lift.schedule();
         tick();
         assertEquals(Transfer.LIFT_TICKS_PER_SEC, motor.commandedVelocity, EPS);

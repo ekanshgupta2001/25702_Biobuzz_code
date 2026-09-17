@@ -211,11 +211,6 @@ public class Drivetrain {
         return fieldCentric;
     }
 
-    /** Same as {@link #setPose}; Pedro 3 has a single pose setter. Kept for readability at init. */
-    public void setStartingPose(Pose pose) {
-        setPose(pose);
-    }
-
     /**
      * Writes the pose estimate, e.g. at init or from an external fix.
      *
@@ -247,12 +242,6 @@ public class Drivetrain {
      */
     public Follower getFollower() {
         return pedro;
-    }
-
-    /** Starts a path. Prefer {@link #followLazyCommand}, which also cleans up. */
-    public void followPath(Path path) {
-        if (follower == null || path == null) return;
-        follower.follow(path);
     }
 
     /** True while a path is actively being followed. Stick input is ignored during this. */

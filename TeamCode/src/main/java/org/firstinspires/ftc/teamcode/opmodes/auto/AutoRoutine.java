@@ -9,9 +9,6 @@ import org.firstinspires.ftc.teamcode.Robot;
 import org.firstinspires.ftc.teamcode.commands.Waits;
 import org.firstinspires.ftc.teamcode.game.Field;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 
 /**
  * The first-competition autonomous: shoot the four pre-loaded POLLEN into the up-facing CELL, then
@@ -51,7 +48,6 @@ public final class AutoRoutine {
 
     private final Robot robot;
     private String phase = "not started";
-    private final List<String> log = new ArrayList<>();
 
     public AutoRoutine(Robot robot) {
         this.robot = robot;
@@ -67,7 +63,6 @@ public final class AutoRoutine {
                 }),
                 Waits.bounded(robot.getClock(), robot.macros.shootAll(), SHOOT_BUDGET_MS),
                 // If the budget cut the macro, the macro itself reports CANCELLED (Macros.reporting).
-                instant(() -> log.add("shots " + robot.macros.getShotsFired() + " : " + robot.macros.getOutcome())),
                 Waits.waitMs(robot.getClock(), SETTLE_MS),
                 instant(() -> setPhase("leave")),
                 leaveCommand(leave),
@@ -108,14 +103,9 @@ public final class AutoRoutine {
 
     private void setPhase(String name) {
         phase = name;
-        log.add(name);
     }
 
     public String getPhase() {
         return phase;
-    }
-
-    public List<String> getLog() {
-        return Collections.unmodifiableList(log);
     }
 }

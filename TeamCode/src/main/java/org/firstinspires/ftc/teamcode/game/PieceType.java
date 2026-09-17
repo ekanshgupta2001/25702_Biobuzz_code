@@ -19,9 +19,9 @@ import org.firstinspires.ftc.teamcode.util.field.Alliance;
  */
 public enum PieceType {
     /** Yellow, neutral, about 2.8 in. Forty on the field. */
-    POLLEN("Pollen", 2.8, new float[] {55f}),
+    POLLEN(2.8, new float[] {55f}),
     /** Red or blue, alliance-specific, about 3.6 in. Eight of each colour. */
-    NECTAR("Nectar", 3.6, new float[] {0f, 220f});
+    NECTAR(3.6, new float[] {0f, 220f});
 
     /**
      * True once the hue windows below have been measured on real POLLEN and NECTAR under venue
@@ -43,18 +43,12 @@ public enum PieceType {
     /** Below this value the reading is shadow noise. */
     public static float MIN_VALUE = 0.15f;
 
-    private final String displayName;
     private final double diameterInches;
     private final float[] hueDegrees;
 
-    PieceType(String displayName, double diameterInches, float[] hueDegrees) {
-        this.displayName = displayName;
+    PieceType(double diameterInches, float[] hueDegrees) {
         this.diameterInches = diameterInches;
         this.hueDegrees = hueDegrees;
-    }
-
-    public String displayName() {
-        return displayName;
     }
 
     public double diameterInches() {

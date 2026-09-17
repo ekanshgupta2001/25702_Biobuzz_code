@@ -214,24 +214,6 @@ public class Shooter {
     // ---- Ivy commands ----
 
     /**
-     * Spins up to {@link #SHOOT_RPM} and finishes once at speed (or after
-     * {@link #SPINUP_TIMEOUT_MS}). The wheel keeps spinning after it finishes only while something
-     * still owns the shooter, so follow it with {@link #holdSpeedCommand()} in a deadline or
-     * parallel group rather than letting the default command idle the wheel mid-cycle.
-     */
-    public Command spinUpCommand() {
-        final long[] startedAt = new long[1];
-        return Command.build()
-                .setStart(() -> {
-                    startedAt[0] = clock.nowMs();
-                    spinUp();
-                })
-                .setDone(() -> !isAvailable() || atSpeed()
-                        || clock.nowMs() - startedAt[0] >= SPINUP_TIMEOUT_MS)
-                .requiring(this);
-    }
-
-    /**
      * Finishes once the wheel is at speed, after {@link #SPINUP_TIMEOUT_MS}, or at once when no
      * shooter is fitted. Requires nothing: it is the wait inside a group in which
      * {@link #holdSpeedCommand()} owns the shooter and sets the target, so two siblings never both
@@ -251,14 +233,6 @@ public class Shooter {
                 .setStart(this::spinUp)
                 .setDone(() -> false)
                 .setEnd(ec -> idle())
-                .requiring(this);
-    }
-
-    /** Drops to {@link #IDLE_RPM} immediately. */
-    public Command idleCommand() {
-        return Command.build()
-                .setStart(this::idle)
-                .setDone(() -> true)
                 .requiring(this);
     }
 

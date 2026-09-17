@@ -207,24 +207,6 @@ public class Transfer {
                 .requiring(this);
     }
 
-    /** Runs the lift upward until interrupted. */
-    public Command liftCommand() {
-        return Command.build()
-                .setStart(this::liftPiece)
-                .setDone(() -> false)
-                .setEnd(ec -> stop())
-                .requiring(this);
-    }
-
-    /** Runs the lift downward until interrupted, to clear a jam. */
-    public Command reverseCommand() {
-        return Command.build()
-                .setStart(this::reverse)
-                .setDone(() -> false)
-                .setEnd(ec -> stop())
-                .requiring(this);
-    }
-
     public Command stopCommand() {
         return Command.build()
                 .setStart(this::stop)

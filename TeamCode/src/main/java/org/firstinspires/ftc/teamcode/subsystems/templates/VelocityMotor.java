@@ -3,11 +3,9 @@ package org.firstinspires.ftc.teamcode.subsystems.templates;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
-import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.PIDFCoefficients;
 
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
-import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
 
 /**
  * A velocity-controlled motor: the shared wrapper for every roller and flywheel on the robot
@@ -50,13 +48,6 @@ public final class VelocityMotor {
     private double target = 0;
     private double lastWritten = Double.NaN;
     private int writesSinceSent = 0;
-
-    /** Resolves {@code name} fail-soft; the result is unavailable when the name is missing. */
-    public static VelocityMotor fromHardware(HardwareMap hardwareMap, String name,
-                                             DcMotorSimple.Direction direction,
-                                             DcMotor.ZeroPowerBehavior zeroPower) {
-        return new VelocityMotor(Hardware.get(hardwareMap, DcMotorEx.class, name), direction, zeroPower);
-    }
 
     public VelocityMotor(DcMotorEx motor) {
         this(motor, DcMotorSimple.Direction.FORWARD, DcMotor.ZeroPowerBehavior.FLOAT);
@@ -156,11 +147,6 @@ public final class VelocityMotor {
     /** Puts back the coefficients the hub had at construction, if they were readable. */
     public void restoreSdkPidf() {
         if (motor != null && sdkPidf != null) motor.setPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER, sdkPidf);
-    }
-
-    /** The coefficients read at construction, or {@code null}. */
-    public PIDFCoefficients getSdkPidf() {
-        return sdkPidf;
     }
 
     /** What the hub holds right now: a bus read, for a bench card, not for the loop. */

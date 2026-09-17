@@ -27,7 +27,6 @@ public class StorageBench extends BenchOpMode {
     private long pulseUntilMs = -1;
     private int inViewLoops = 0;
     private int longestInView = 0;
-    private boolean lastSeen = false;
 
     @Override
     protected String title() {
@@ -62,7 +61,6 @@ public class StorageBench extends BenchOpMode {
         boolean seen = robot.storageEntranceSensor.isAvailable() && PieceType.anyAtSensor(robot.storageEntranceSensor);
         inViewLoops = seen ? inViewLoops + 1 : 0;
         if (seen && inViewLoops > longestInView) longestInView = inViewLoops;
-        lastSeen = seen;
 
         telemetry.addData("Count", "%d / %d  %s  (dpad)", storage.count(), Storage.CAPACITY,
                 storage.isFull() ? "FULL" : "");

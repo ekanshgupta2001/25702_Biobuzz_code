@@ -392,7 +392,7 @@ public class MacrosTest {
         runToCompletion(cut);
         assertEquals(Macros.Outcome.CANCELLED, robot.macros.getOutcome());
         assertEquals("idle", robot.macros.getActiveName());
-        assertFalse(robot.macros.isRunning());
+        assertFalse((robot.macros.getOutcome() == Macros.Outcome.RUNNING));
         assertEquals("the flywheel was let go", 0, shooterMotor.commandedVelocity, EPS);
     }
 
@@ -434,7 +434,7 @@ public class MacrosTest {
         robot.storage.setEntranceSupplier(() -> false);
         final String[] name = new String[1];
         int ticks = runToCompletion(robot.macros.intakeUntilFull(), () -> {
-            if (robot.macros.isRunning()) name[0] = robot.macros.getActiveName();
+            if ((robot.macros.getOutcome() == Macros.Outcome.RUNNING)) name[0] = robot.macros.getActiveName();
         });
         assertEquals("intake", name[0]);
         assertEquals(Macros.Outcome.TIMED_OUT, robot.macros.getOutcome());
@@ -474,7 +474,7 @@ public class MacrosTest {
         assertFalse(robot.storage.canDetectFull());
         final String[] name = new String[1];
         int ticks = runToCompletion(robot.macros.intakeUntilFull(), () -> {
-            if (robot.macros.isRunning()) name[0] = robot.macros.getActiveName();
+            if ((robot.macros.getOutcome() == Macros.Outcome.RUNNING)) name[0] = robot.macros.getActiveName();
         });
         assertEquals("the card says what it is", "intake (timed)", name[0]);
         assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());

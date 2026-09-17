@@ -334,7 +334,7 @@ public class RobotTest {
     @Test
     public void writeActuatorsAppliesWhatTheSchedulerDecidedThisLoop() {
         assertEquals(0, shooterMotor.commandedVelocity, EPS);
-        robot.shooter.spinUpCommand().schedule();
+        robot.shooter.holdSpeedCommand().schedule();
         tick();
         assertEquals(Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM), shooterMotor.commandedVelocity, EPS);
         assertEquals("drivetrain ticked once per loop", 1, follower.updateCalls);

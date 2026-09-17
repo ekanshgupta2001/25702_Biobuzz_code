@@ -158,10 +158,6 @@ public class Limelight {
         tyFilter.reset();
     }
 
-    public LLResult getLatestResult() {
-        return latestResult;
-    }
-
     public LLStatus getStatus() {
         return limelight == null ? null : limelight.getStatus();
     }
@@ -218,10 +214,6 @@ public class Limelight {
         return currentPipeline;
     }
 
-    public void start() {
-        if (limelight != null) limelight.start();
-    }
-
     public void stop() {
         if (limelight != null) limelight.stop();
     }
@@ -230,11 +222,6 @@ public class Limelight {
 
     public boolean activateAprilTagPipeline() {
         return switchPipeline(APRILTAG_PIPELINE_INDEX);
-    }
-
-    /** True when at least one tag with an ID in {@code [minId, maxId]} is in the fresh frame. */
-    public boolean seesTag(int minId, int maxId) {
-        return !Double.isNaN(getTagTx(minId, maxId));
     }
 
     /**

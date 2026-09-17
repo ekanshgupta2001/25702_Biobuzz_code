@@ -63,10 +63,6 @@ public final class PoseStorage {
         return alliance;
     }
 
-    public static StartPosition getStartPosition() {
-        return startPosition;
-    }
-
     /** True when a previous OpMode recorded how many pieces the robot holds. */
     public static boolean hasPieceCount() {
         return pieceCount >= 0;

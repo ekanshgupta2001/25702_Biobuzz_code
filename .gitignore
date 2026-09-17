@@ -81,3 +81,6 @@ lint/tmp/
 # lint/reports/
 # Claude Code local session settings
 .claude/
+
+# pedropathing.com docs source used for the Round 3 audit (docs/01 records the findings)
+Docs-master/

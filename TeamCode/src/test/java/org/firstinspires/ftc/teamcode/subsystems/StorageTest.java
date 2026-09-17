@@ -165,7 +165,7 @@ public class StorageTest {
         assertFalse(Scheduler.isScheduled(cmd));
         assertEquals(0, motor.commandedVelocity, EPS);
 
-        Command run = storage.advanceCommand();
+        Command run = storage.advanceUntilCommand(() -> false, 10_000);
         run.schedule();
         tick();
         Scheduler.cancel(run);
@@ -179,10 +179,10 @@ public class StorageTest {
         tick();
         assertEquals(0, motor.commandedVelocity, EPS);
 
-        Command run = storage.reverseCommand();
+        Command run = storage.advanceUntilCommand(() -> false, 10_000);
         run.schedule();
         tick();
-        assertEquals(Storage.REVERSE_TICKS_PER_SEC, motor.commandedVelocity, EPS);
+        assertEquals(Storage.ADVANCE_TICKS_PER_SEC, motor.commandedVelocity, EPS);
         Scheduler.cancel(run);
         tick();
         assertEquals(0, motor.commandedVelocity, EPS);

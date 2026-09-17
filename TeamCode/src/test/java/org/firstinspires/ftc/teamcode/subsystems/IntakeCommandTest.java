@@ -183,18 +183,6 @@ public class IntakeCommandTest {
     }
 
     @Test
-    public void runForMsStopsOnTheInjectedClock() {
-        Command burst = intake.runForMs(1000, 100);
-        burst.schedule();
-        tick();                                      // t = 0 -> 20
-        assertEquals(1000, motor.commandedVelocity, EPS);
-        clock.advance(100);
-        tick();
-        assertFalse(Scheduler.isScheduled(burst));
-        assertEquals(0, motor.commandedVelocity, EPS);
-    }
-
-    @Test
     public void sustainedOverCurrentWhileIntakingReversesTheMotor() {
         intake.intakeCommand().schedule();
         motor.currentAmps = Intake.STALL_CURRENT_AMPS + 3;

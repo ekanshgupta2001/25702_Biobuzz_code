@@ -146,7 +146,7 @@ public class MainAutoTest {
         assertTrue(telemetry.contains("START runs BLUE / Facing HIVE anyway"));
         op.start();
         loop();
-        assertTrue("it runs", robot.macros.isRunning());
+        assertTrue("it runs", (robot.macros.getOutcome() == Macros.Outcome.RUNNING));
         assertTrue(telemetry.contains("started UNLOCKED"));
         op.stop();
 

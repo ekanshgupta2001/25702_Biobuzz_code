@@ -8,16 +8,14 @@ import com.pedropathing.paths.Path;
  * A {@link PathFollower} with Pedro 3.0.0's state machine and none of its motion.
  *
  * <p>Mirrors the real follower's surprises exactly: the mode is whatever the last command was,
- * {@link #atParametricEnd()} is true whenever not following, {@link #isBusy()} is set by
- * {@link #follow} and only cleared by {@link #settle()} (Pedro clears it inside a hold), and
- * {@link #follow} restarts the path. The test decides when a path's geometry "finishes" by calling
- * {@link #finishPath()}; the mode stays FOLLOW until the code under test acts, which is exactly
- * the window the drivetrain's {@code setEnd} has to handle.
+ * {@link #atParametricEnd()} is true whenever not following, and {@link #follow} restarts the
+ * path. The test decides when a path's geometry "finishes" by calling {@link #finishPath()} and
+ * when a turn has arrived by calling {@link #finishTurn()}; the mode stays FOLLOW or HOLD until the
+ * code under test acts, which is exactly the window the drivetrain's {@code setEnd} has to handle.
  */
 public final class FakePathFollower implements PathFollower {
     public Pose pose = Pose.zero();
     public Follower.Mode mode = Follower.Mode.IDLE;
-    public boolean busy = false;
     public boolean atEnd = false;
 
     public Path lastPath = null;
@@ -37,15 +35,9 @@ public final class FakePathFollower implements PathFollower {
         atEnd = true;
     }
 
-    /** A hold has settled within tolerance, clearing Pedro's busy flag. */
-    public void settle() {
-        busy = false;
-    }
-
     /** A hold-based turn has arrived: heading snaps to the held pose's heading. */
     public void finishTurn() {
         if (lastHoldPose != null) pose = pose.withHeading(lastHoldPose.heading());
-        busy = false;
     }
 
     @Override
@@ -71,7 +63,6 @@ public final class FakePathFollower implements PathFollower {
         lastStrafe = strafe;
         lastTurn = turn;
         mode = Follower.Mode.MANUAL;
-        busy = false;
         atEnd = false;
     }
 
@@ -80,7 +71,6 @@ public final class FakePathFollower implements PathFollower {
         followCalls++;
         lastPath = path;
         mode = Follower.Mode.FOLLOW;
-        busy = true;
         atEnd = false;
     }
 
@@ -90,24 +80,11 @@ public final class FakePathFollower implements PathFollower {
     }
 
     @Override
-    public boolean isBusy() {
-        return busy;
-    }
-
-    @Override
     public void hold(Pose pose, boolean scaled) {
         holdCalls++;
         lastHoldPose = pose;
         lastScaled = scaled;
         mode = Follower.Mode.HOLD;
-        busy = true;
-    }
-
-    @Override
-    public void stop() {
-        stopCalls++;
-        mode = Follower.Mode.IDLE;
-        busy = false;
     }
 
     @Override

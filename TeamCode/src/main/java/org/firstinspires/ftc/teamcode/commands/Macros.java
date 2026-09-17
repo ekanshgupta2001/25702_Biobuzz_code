@@ -114,17 +114,41 @@ public class Macros {
      * position check reports the outcome.
      */
     public static double MIN_PATH_INCHES = 0.5;
+    /**
+     * How long a tag-derived aim correction is kept after the tags leave view. The camera is
+     * front-mounted and sees the HIVE tags only while the robot faces the HIVE; the rear shooter
+     * needs it turned away, so the correction taken while facing is what the turn is aimed with.
+     * Odometry heading drifts little in a few seconds; the target's placement error does not move.
+     */
+    public static long AIM_BIAS_MAX_AGE_MS = 5000;
 
     /** How the last macro finished. */
     public enum Outcome { IDLE, RUNNING, SUCCESS, TIMED_OUT, NO_TARGET, CANCELLED }
+
+    /** Where the aim law reads a tag's horizontal offset; a test feeds one without a camera. */
+    public interface TagBearingSource {
+        /** Degrees, positive to the right, or NaN with no tag in {@code [minTagId, maxTagId]} in view. */
+        double tx(int minTagId, int maxTagId);
+    }
 
     private final Robot robot;
     private Outcome outcome = Outcome.IDLE;
     private String activeName = "idle";
     private int shotsFired = 0;
+    private TagBearingSource tagTx;
+    /** The tags' disagreement with odometry, radians, taken while a tag was visible; NaN when none. */
+    private double aimBias = Double.NaN;
+    private long aimBiasAtMs = 0;
+    private int aimBiasPoseWrites = -1;
 
     public Macros(Robot robot) {
         this.robot = robot;
+        this.tagTx = robot.limelight::getTagTx;
+    }
+
+    /** Replaces the camera as the source of tag bearings (tests). */
+    public void setTagBearingSource(TagBearingSource source) {
+        tagTx = source == null ? robot.limelight::getTagTx : source;
     }
 
     // ---- State ----
@@ -364,22 +388,45 @@ public class Macros {
     /**
      * The field heading the robot must hold so the shooter faces {@code target}. When a tag in
      * {@code [minTagId, maxTagId]} is visible the bearing comes from its {@code tx} (heading +
-     * camera yaw - tx; tx is positive to the right), otherwise from odometry toward the point. The
-     * shooter's firing direction ({@code Shooter.HEADING_OFFSET_RAD}) is subtracted, so a rear-firing
-     * shooter turns its back to the target. NaN without a pose, or without a target and a tag.
+     * camera yaw - tx; tx is positive to the right), and the difference between that and the
+     * odometry bearing to {@code target} is remembered; when no tag is visible the odometry bearing
+     * is used, plus that remembered correction while it is younger than {@link #AIM_BIAS_MAX_AGE_MS}
+     * and the pose has not been rewritten since. That is what makes a front camera useful to a rear
+     * shooter: face the HIVE, take the correction, turn, and shoot by it. The shooter's firing
+     * direction ({@code Shooter.HEADING_OFFSET_RAD}) is subtracted, so a rear-firing shooter turns
+     * its back to the target. NaN without a pose, or without a target and a tag.
      */
     public double aimHeading(Pose target, int minTagId, int maxTagId) {
         Pose pose = robot.drivetrain.getPose();
         if (pose == null) return Double.NaN;
-        double tx = robot.limelight.getTagTx(minTagId, maxTagId);
+        double tx = tagTx.tx(minTagId, maxTagId);
+        double odometry = target == null ? Double.NaN
+                : Math.atan2(target.y() - pose.y(), target.x() - pose.x());
         double bearing;
         if (!Double.isNaN(tx)) {
             bearing = pose.heading() + Math.toRadians(Limelight.CAMERA_YAW_OFFSET_DEGREES) - Math.toRadians(tx);
+            if (!Double.isNaN(odometry)) {
+                aimBias = Angles.angleError(odometry, bearing);
+                aimBiasAtMs = robot.getClock().nowMs();
+                aimBiasPoseWrites = robot.drivetrain.getPoseWrites();
+            }
         } else {
-            if (target == null) return Double.NaN;
-            bearing = Math.atan2(target.y() - pose.y(), target.x() - pose.x());
+            if (Double.isNaN(odometry)) return Double.NaN;
+            bearing = odometry + (hasAimBias() ? aimBias : 0);
         }
         return Angles.normalizeAngle(bearing - Shooter.HEADING_OFFSET_RAD);
+    }
+
+    /** True while a tag-derived correction is in force (young enough, pose not rewritten since). */
+    public boolean hasAimBias() {
+        return !Double.isNaN(aimBias)
+                && robot.getClock().nowMs() - aimBiasAtMs <= AIM_BIAS_MAX_AGE_MS
+                && robot.drivetrain.getPoseWrites() == aimBiasPoseWrites;
+    }
+
+    /** The correction in force, degrees (positive = the tags say the target is further CCW), or NaN. */
+    public double getAimBiasDegrees() {
+        return hasAimBias() ? Math.toDegrees(aimBias) : Double.NaN;
     }
 
     /**

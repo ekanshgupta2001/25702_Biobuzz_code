@@ -448,7 +448,9 @@ public class Teleop extends MatchOpMode {
         telemetry.addData("Macro", robot.macros.getStatus());
         telemetry.addData("Drive", driveStatus());
         telemetry.addData("Aim", (robot.drivetrain.isAimLocked() ? "LOCKED on " : Controls.AIM_LOCK.button() + " aims at ")
-                + alliance + " " + targetSide + " CELL");
+                + alliance + " " + targetSide + " CELL"
+                + (robot.macros.hasAimBias()
+                        ? String.format(Locale.US, "  (tag-corrected %+.1f deg)", robot.macros.getAimBiasDegrees()) : ""));
         telemetry.addData("Flywheel", flywheelArmed
                 ? String.format(Locale.US, "ARMED  %.0f rpm", robot.shooter.getRpm()) : "off");
 

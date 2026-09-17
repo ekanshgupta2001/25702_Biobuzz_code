@@ -105,6 +105,7 @@ public class MacrosTest {
         Macros.DRIVE_TO_TIMEOUT_MS = 6000;
         Macros.DRIVE_TO_TOLERANCE_INCHES = 3.0;
         Macros.MIN_PATH_INCHES = 0.5;
+        Macros.AIM_BIAS_MAX_AGE_MS = 5000;
         Storage.CAPACITY = 4;
         Storage.ADVANCE_TIMEOUT_MS = 2500;
         Transfer.LIFT_TIMEOUT_MS = 2000;
@@ -620,6 +621,65 @@ public class MacrosTest {
         Shooter.HEADING_OFFSET_RAD = 0;
         assertEquals("a forward-firing shooter would face the target",
                 Math.toRadians(45), robot.macros.aimHeading(new Pose(72, 72), 30, 45), 1e-9);
+    }
+
+    /** A target 100 in along +X from the origin: odometry says bearing 0, so the rear shooter faces 180. */
+    private static final Pose TARGET_ALONG_X = new Pose(100, 0, 0);
+
+    private double aim() {
+        return robot.macros.aimHeading(TARGET_ALONG_X, 30, 33);
+    }
+
+    @Test
+    public void aimHeadingKeepsTheTagCorrectionAfterTheTagLeavesView() {
+        // Round 4, front camera: the tags are visible only while the robot faces the HIVE, and the
+        // rear shooter needs it turned away, so the tags' disagreement with odometry is kept.
+        follower.pose = Pose.zero();                                   // facing the target
+        final double[] tx = {-5.0};                                    // the tags: 5 deg to the left
+        robot.macros.setTagBearingSource((min, max) -> tx[0]);
+        assertEquals("tag bearing 5 deg, rear shooter: face 185", Math.toRadians(185), aim(), 1e-9);
+        assertEquals(5.0, robot.macros.getAimBiasDegrees(), 1e-9);
+
+        tx[0] = Double.NaN;                                            // the robot turns; tags gone
+        follower.pose = new Pose(0, 0, Math.toRadians(185));
+        assertEquals("odometry says 180; the correction keeps it at 185", Math.toRadians(185), aim(), 1e-9);
+        assertTrue(robot.macros.hasAimBias());
+
+        robot.macros.setTagBearingSource(null);                        // back to the camera: none fitted
+        assertEquals("still corrected", Math.toRadians(185), aim(), 1e-9);
+    }
+
+    @Test
+    public void theAimCorrectionExpires() {
+        follower.pose = Pose.zero();
+        final double[] tx = {-5.0};
+        robot.macros.setTagBearingSource((min, max) -> tx[0]);
+        aim();
+        tx[0] = Double.NaN;
+        clock.advance(Macros.AIM_BIAS_MAX_AGE_MS);
+        assertEquals("at the age limit it still applies", Math.toRadians(185), aim(), 1e-9);
+        clock.advance(1);
+        assertFalse(robot.macros.hasAimBias());
+        assertEquals("past it, plain odometry", Math.toRadians(180), aim(), 1e-9);
+        assertTrue(Double.isNaN(robot.macros.getAimBiasDegrees()));
+    }
+
+    @Test
+    public void theAimCorrectionIsDroppedWhenThePoseIsRewritten() {
+        follower.pose = Pose.zero();
+        final double[] tx = {-5.0};
+        robot.macros.setTagBearingSource((min, max) -> tx[0]);
+        aim();
+        tx[0] = Double.NaN;
+        assertTrue(robot.macros.hasAimBias());
+        robot.drivetrain.resetHeading();                               // a new frame: the old offset means nothing
+        assertFalse(robot.macros.hasAimBias());
+        assertEquals(Math.toRadians(180), aim(), 1e-9);
+
+        tx[0] = -5.0;
+        aim();                                                         // seen again in the new frame
+        tx[0] = Double.NaN;
+        assertTrue("taken again once a tag is seen in the new frame", robot.macros.hasAimBias());
     }
 
     @Test

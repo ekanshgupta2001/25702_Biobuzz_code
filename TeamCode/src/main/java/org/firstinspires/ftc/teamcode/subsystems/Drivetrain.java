@@ -103,6 +103,8 @@ public class Drivetrain {
     /** The last pose written through {@link #setPose}, for the post-calibration repeat. */
     private Pose lastSetPose = null;
     private boolean reapplyWhenSettled = false;
+    /** How many times the pose estimate has been rewritten; anything derived from an older frame is stale. */
+    private int poseWrites = 0;
 
     private final PIDController headingController =
             Controller.pid(HEADING_HOLD_P, HEADING_HOLD_I, HEADING_HOLD_D);
@@ -228,8 +230,18 @@ public class Drivetrain {
             follower.setPose(pose);
             lastSetPose = pose;
             reapplyWhenSettled = !isLocalizerSettled();
+            poseWrites++;
         }
         releaseHeadingHold();
+    }
+
+    /**
+     * Count of pose rewrites ({@link #setPose}, {@link #resetHeading}, the post-calibration repeat).
+     * A caller holding something computed against the pose ({@code Macros}' tag-derived aim
+     * correction) compares this with the count it saw, and drops its value when they differ.
+     */
+    public int getPoseWrites() {
+        return poseWrites;
     }
 
     public Pose getPose() {
@@ -394,7 +406,10 @@ public class Drivetrain {
         if (follower == null) return;
         if (reapplyWhenSettled && isLocalizerSettled()) {
             reapplyWhenSettled = false;
-            if (lastSetPose != null) follower.setPose(lastSetPose);
+            if (lastSetPose != null) {
+                follower.setPose(lastSetPose);
+                poseWrites++;
+            }
         }
         follower.update();
     }

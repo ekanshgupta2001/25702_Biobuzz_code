@@ -655,3 +655,58 @@ HANDOFF §9.
 | R3-1 | An armed flywheel was told to stop for one loop when a shot macro started: Ivy's OVERRIDE ended Teleop's hold (`idle()`) at `schedule()` and the macro's own hold started two hand-off ticks later, resetting the at-speed latch. About 100 to 300 ms per shot; not a bug | `Macros.reporting(..., Command... alongside)` and `heldFlywheel()`: the hold starts inside `Scheduler.schedule()` for `shootOne`, `shootAll`, `aimAndShootAll` (where it now overlaps the aim); the inner `deadline(..., holdSpeedCommand())` groups are gone; NO_TARGET still never touches the shooter | `MacrosTest.shootOneKeepsAnArmedFlywheelSpinning` |
 | R3-2 | `driveTo` from a pose equal to its target built a zero-length line (degenerate inside Pedro: NaN powers, which `CachedMotor` ignores, leaving the last written power). Exact equality is practically impossible on hardware; theoretical | `Macros.MIN_PATH_INCHES = 0.5`; `lineTo` and `approachPath` return null inside it, so `followLazyCommand` finishes at once and the macro's position check reports | `MacrosTest.driveToAlreadyThereFinishesWithoutAPath` |
 | R3-3 | The docs discrepancies above would tempt the next reader to flip `Controls` or "simplify" `followLazyCommand` | docs/01 A.4, A.6, B.1 and HANDOFF §7 | — |
+
+
+# Round 4 — simplify and speed up (2026-09-16)
+
+The team asked for the code to be simpler and more efficient without losing anything that scores.
+Four decisions taken with the team first: the Limelight is front-mounted and for AprilTags only; the
+AprilTag field-localisation stack goes; the shooting cycle becomes one state-machine command;
+`Docs-master/` is ignored, not committed. Three read-only sweeps of the tree (loop cost, the command
+and OpMode layer, dead code) produced the evidence; every deletion was checked for callers in
+`main/` and `test/`.
+
+## What was costing points
+
+- **Ivy hand-off loops in the shooting cycle.** Ivy's `Sequential` (library source, 1.1.1 identical to
+  1.0.0) hands off one child per `execute()` and never executes the child it has just started, so
+  every child boundary costs a whole loop, an `instant` costs one by itself, and nesting compounds.
+  The shooting tree was nine levels deep: 7 idle loops between "flywheel recovered" and "next pulse
+  commanded", ~6 on entry, ~8 on exit, 35 to 43 per four-piece run by two independent counts.
+  Measured on the JVM (`MacrosTest`, sensorless four-piece `shootAll`, 20 ms ticks): **3,960 ms →
+  3,260 ms**, 198 → 163 loops, the 35 loops the count predicted.
+- **Bus transactions for values nobody read.** The intake motor current (not in the bulk cache) was
+  read every loop, idle or not; every REV V3 colour sensor paid a colour read *and* a distance read
+  while presence was judged by distance alone; the entrance sensor was read even when
+  `wireSuppliers()` had decided not to trust it. Two to three transactions per loop on today's
+  sensorless robot, two to three on the sensor-fitted one, roughly 3 to 8 ms of a 20 ms loop.
+  Plus 16 `String.format` calls per loop for the CSV row.
+- **An armed flywheel zeroed on the way out of every shot.** `holdSpeedCommand`'s end idled the
+  wheel one loop before Teleop re-armed the operator's hold (the mirror image of Round 3's entry
+  fix): one `setVelocity(0)` and a reset at-speed latch per armed shot.
+- **Dead weight.** 1,582 lines of Quickstart tuners for localizers the robot does not own; 376 lines of
+  positional templates nothing implements; a Kalman filter that never received a measurement
+  (`PoseFusion`, gated to null all season); a colour-blob stack the camera decision rules out; 59
+  unused public members in `Field`; `Scoring`, `RateLimiter`, ENDGAME machinery in `MatchClock`,
+  three `HardwareNames` for hardware V1 does not have, and a tail of members with no caller.
+
+## Status
+
+| Item | What changed | Proof |
+|---|---|---|
+| R4-1 | Deleted: `OTOSTuner`, `OctoQuadTuner`, `ThreeWheelTuner`, `ThreeWheelIMUTuner`, `TwoWheelTuner`; `Mechanism`, `PositionalMotor`, `PositionalServo`; `RateLimiter`; `Scoring`; `Field`'s FLOWER / GARDEN / inventory / TIP members and the `Zone` class (the LOADING ZONE is one centre pose now); `MatchClock`'s ENDGAME, FLOWER window, `hasTimeFor`; `HardwareNames.IMU / SHOOTER_FEED_SERVO / SENSOR_INTAKE_ENTRANCE`; `PathFollower.isBusy/stop`; `Shooter.spinUpCommand/idleCommand`, `Intake.runForMs`, `Storage.advanceCommand/reverseCommand`, `Transfer.liftCommand/reverseCommand`, `Macros.isRunning/atHeading`, `AutoRoutine.log`, `FieldPoses.BLUE_GARDEN_APPROACH/all`, the stock `readme.md`. `.gitignore` gets `Docs-master/`. | `6ef83ee`; both APKs build; 344 tests |
+| R4-2 | Deleted the AprilTag field-localisation stack: `PoseFusion`, `Robot.updateLocalization/tryLocalizeFromAprilTag`, the `MatchOpMode` call, Teleop's init-loop attempt, `Macros.relocalize`, `Limelight`'s botpose members, the `localization` log column. | `3434607`; 329 tests |
+| R4-3 | Deleted the colour-blob stack: `collectPiece`, `alignToPiece`, the blob pipeline, `VisionMath`, `MedianFilter`, `Angles.headingToward`, the intake capture flag, `PieceType` sizes, the mount constants and `MOUNT_CALIBRATED`, `Controls.COLLECT/ALIGN` and `Needs.CAMERA`. `Limelight` is now 120 lines: the tag list and `getTagTx`. | `5a22392`; 295 tests |
+| R4-4 | `Intake.update` samples current only while pulling (NaN otherwise); `ColorSensor.update(boolean colour)` and `Robot.readSensors` read only what `wireSuppliers` consumes, benches read everything (`setReadAllSensorData`); `MatchOpMode.LOG_EVERY_N_LOOPS = 2`; `Teleop.retarget()` computes the CELL pose and tag range on change. | `674cde8`; 298 tests; `IntakeCommandTest.currentIsReadOnceALoopWhilePullingAndNeverWhenIdle`, `ColorSensorTest.colourIsSkippedWhenNotAsked`, `RobotTest.anUntrustedEntranceSensorIsNotReadAtAll`, `benchesReadEverySensorInFull` |
+| R4-5 | `commands/ShootCycle`: one `Command.build()` state machine (`SPIN_UP → [ADVANCE →] [LIFT →] FEED → RECOVER → …`), every sensor variant, requires storage + transfer only; `shootOne` / `shootAll` / `aimAndShootAll` compose it; `shootAllCore`, `feedOneCore`, `transferLeg`, `afterShot`, `flywheelRecovery`, `pieceWasShot` gone from `Macros`. `Shooter.AT_SPEED_HOLD_MS` replaces the loop count; `holdSpeedCommand` has no end action; `AutoRoutine` idles the wheel before the leave. | `62174cf`; 302 tests; `MacrosTest.theNextPulseStartsTheLoopTheFlywheelRecovers`, `anArmedWheelFeedsWithinTwoLoopsOfThePress`, `sensorlessShootAllOfFourFinishesInsideTheSumOfItsTimers`; `TeleopTest.anArmedFlywheelIsNeverStoppedAcrossAShot`; `ShooterTest.holdSpeedLeavesTheTargetAndTheDefaultIdlesItNextLoop` |
+| R4-6 | `Macros.aimHeading` remembers the tags' disagreement with the odometry bearing while a tag is visible and applies it while no tag is (`AIM_BIAS_MAX_AGE_MS`, dropped on `Drivetrain.getPoseWrites()` change); `TagBearingSource` seam for tests; the teleop card shows `tag-corrected`. | `e9ab335`; 305 tests; `MacrosTest.aimHeadingKeepsTheTagCorrectionAfterTheTagLeavesView`, `theAimCorrectionExpires`, `theAimCorrectionIsDroppedWhenThePoseIsRewritten` |
+| R4-7 | HANDOFF, this section, docs/01..04 | this commit |
+
+Numbers: main code 13,070 → 9828 lines, tests 7,060 → 6345 lines, JVM suite 370 → 305 tests (the deleted
+features took their tests with them; eleven new tests pin the gains). Both APKs build after every step.
+
+**Not done, and why:** the `MatchOpMode` / `BenchOpMode` shared base (R2-B3) stays deferred, structure
+only; `OpenLoopDrive` stays until Pedro is tuned; the `PathFollower` seam and the fakes are what let
+the drivetrain run on the JVM; the per-loop telemetry strings are under a millisecond and the SDK
+transmits every 100 ms anyway; teleop's aim lock (the heading-hold PID under stick driving) and
+auto's `aimAt` (Pedro's tuned hold, turning in place) stay two controllers on one aim law.

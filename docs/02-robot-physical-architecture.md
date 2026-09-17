@@ -103,10 +103,11 @@ channel) is not decided. The `ColorSensor` wrapper is instantiable per name so s
 
 The spec allows "vision hardware if installed during V1". If a Limelight 3A is fitted:
 
-- **Rigid** chassis mount, so `VisionMath.Mount` (height, pitch, offsets, yaw) is a set of constants.
+- **Rigid** chassis mount, **facing front** (decided 2026-09-16), for AprilTags only.
 - High enough that intake and storage do not block the view; final position after the shooter CAD.
-  Its yaw relative to the robot's forward axis is `Limelight.CAMERA_YAW_OFFSET_DEGREES`, which the
-  aim law uses with a tag's tx; a rear-firing shooter with a front camera aims from odometry.
+  Its yaw relative to the robot's forward axis is `Limelight.CAMERA_YAW_OFFSET_DEGREES` (0 = front),
+  which the aim law uses with a tag's tx. The rear-firing shooter needs the robot turned away from
+  the tags, so `Macros.aimHeading` keeps the correction it took while facing them (docs/03 §9).
 - Uses: AprilTag **aiming** (the clusters on the HIVE CELL give `tx`/`ty`/range to the CELL opening)
   and game-piece detection (yellow POLLEN, red/blue NECTAR). Field localisation from tags is **not
   available in BIOBUZZ** (docs/04 §3); the pose comes from Pinpoint odometry and the IMU.
@@ -158,8 +159,7 @@ the subsystems only expose single-mechanism commands.
 Flower scoring mechanism, vertical and horizontal extensions, secondary intake, alternate storage
 path, separate Pollen/Nectar storage, routing diverter, complicated endgame mechanisms, moving storage
 carriage, elevators. The game rules that only those mechanisms would exercise (FLOWER scoring, G410's
-NECTAR-into-FLOWER window) are recorded in docs/04 for when V2 starts; `MatchClock.isFlowerUnlocked()`
-already exposes the timing.
+NECTAR-into-FLOWER window) are recorded in docs/04 for when V2 starts; there is no code for them.
 
 ## 9. Open hardware questions the code cannot resolve
 

@@ -1,6 +1,6 @@
 # HANDOFF — FTC Team 25702 BIOBUZZ Robot Code
 
-State as of **2026-09-15**, after both review rounds in `fixthese.md`. Read this first; it tells you what exists, what does not, why
+State as of **2026-09-16**, after four review rounds in `fixthese.md`. Read this first; it tells you what exists, what does not, why
 things are the way they are, and what to do next. Everything here is backed by a file in the repo.
 
 ---
@@ -28,20 +28,20 @@ things are the way they are, and what to do next. Everything here is backed by a
 
 | Layer | Status | Tests |
 |---|---|---|
-| `util/**` (20 classes) | **implemented**; `MatchLogger` prunes to `KEEP_NEWEST`; `JamDetector` forgives attempts only after healthy current; `Tunables` lists statics changed since the app started; `BuildFlavor` detects a tuning APK at runtime | 138 |
-| `subsystems/**` (10 classes + 4 templates) | **implemented**; `OpenLoopDrive` is the untuned-drivetrain layer; `ColorSensor` caches distance; `Shooter` has a latched at-speed, optional PIDF that really switches back off, and a live second-motor direction; `Intake` samples current once per loop and has the G408 reject scaffold; `Storage` knows whether a full sensor is fitted; `VelocityMotor` writes the bus only when a value changes | 97 |
-| `Robot.java` | **implemented**: composition, supplier wiring and the sensor-trust decision (every point by presence, distance first; the entrance trusted by distance or measured hues; the reject only with measured hues), `sensingSummary()`, presence sensors read in rotation, loop halves, localization write-back only on `ACCEPTED`, `logCells` | 18 |
-| `commands/Macros.java`, `commands/Waits.java` | **implemented**: every macro through `reporting()` (never left RUNNING); metered sensorless feed; blind shooting when the count is unknowable (`ASSUME_FULL_WHEN_UNCOUNTED`); a timed intake on a robot that cannot detect full is SUCCESS; aim bounded; recovery only between pieces | 38 + 2 |
-| `game/Field.java`, `Scoring.java`, `FieldPoses.java`, `PieceType.java` | **implemented**; `PieceType` hue windows are placeholders and `HUES_CALIBRATED = false` says so; `nectarAllianceAt` for G408 | 18 (+ via ColorSensorTest) |
-| `opmodes/MatchOpMode.java`, `RobotTunables.java` | **implemented**: extends `OpMode`, final lifecycle, `buildRobot()` / `openLogger()` seams; snapshots the tunables first in `init()`; tuning-build and tuned-this-session warnings on the init card | via `TeleopTest` |
-| `opmodes/teleop/Teleop.java`, `Controls.java` | **implemented**: `@TeleOp "Teleop"`; one drive default (Pedro or open loop); count, pose and alliance from auto; operator count buttons; drive and camera macros gated on each control's declared `Needs` | 26 + 6 |
+| `util/**` (16 classes) | **implemented**; `MatchLogger` prunes to `KEEP_NEWEST`; `JamDetector` forgives attempts only after healthy current; `Tunables` lists statics changed since the app started; `BuildFlavor` detects a tuning APK at runtime; `MatchClock` has no endgame and no FLOWER window | 85 |
+| `subsystems/**` (9 classes + `VelocityMotor`) | **implemented**; `OpenLoopDrive` is the untuned-drivetrain layer; `ColorSensor` reads only the half the loop asks for; `Shooter` has a time-based at-speed latch, a hold that leaves its target to the next owner, optional PIDF that really switches back off, and a live second-motor direction; `Intake` samples current only while the roller pulls and has the G408 reject scaffold; `Storage` knows whether a full sensor is fitted; `Limelight` is the target CELL's tag tx and nothing else | 87 |
+| `Robot.java` | **implemented**: composition, supplier wiring and the sensor-trust decision (every point by presence, distance first; the entrance trusted by distance or measured hues; the reject only with measured hues), which also decides what each sensor point is read for, `sensingSummary()`, presence sensors read in rotation, loop halves, `logCells` | 17 |
+| `commands/Macros.java`, `ShootCycle.java`, `Waits.java` | **implemented**: every macro through `reporting()` (never left RUNNING); the shooting cycle is one state-machine command with no Ivy hand-off loops; blind shooting when the count is unknowable (`ASSUME_FULL_WHEN_UNCOUNTED`); a timed intake on a robot that cannot detect full is SUCCESS; aim bounded; the tag-derived aim correction survives the turn | 43 + 2 |
+| `game/Field.java`, `FieldPoses.java`, `PieceType.java` | **implemented**; `Field` holds only what the code uses; `PieceType` hue windows are placeholders and `HUES_CALIBRATED = false` says so; `nectarAllianceAt` for G408 | 14 (+ via ColorSensorTest) |
+| `opmodes/MatchOpMode.java`, `RobotTunables.java` | **implemented**: extends `OpMode`, final lifecycle, `buildRobot()` / `openLogger()` seams; snapshots the tunables first in `init()`; tuning-build and tuned-this-session warnings on the init card; the log row every `LOG_EVERY_N_LOOPS` loops | via `TeleopTest` |
+| `opmodes/teleop/Teleop.java`, `Controls.java` | **implemented**: `@TeleOp "Teleop"`; one drive default (Pedro or open loop); count, pose and alliance from auto; operator count buttons; drive macros gated on each control's declared `Needs`; the aim target recomputed only on change | 26 + 6 |
 | `opmodes/auto/MainAuto.java`, `AutoRoutine.java`, `AutoSelector.java` | **implemented**: `@Autonomous "Auto: shoot 4 + leave"`, hardcoded and open-loop for the first event; hands alliance and piece count to teleop; warns loudly when started unlocked | 6 + 7 + 3 |
-| `opmodes/test/*` (`BenchOpMode` + 6 benches + `SelfTest`) | **implemented**: pit tools that measure §9's constants on the real robot; group "Bench" on the Driver Station; every footer lists tunables changed this session (BACK restores them) | 9 |
+| `opmodes/test/*` (`BenchOpMode` + 6 benches + `SelfTest`) | **implemented**: pit tools that measure §9's constants on the real robot; group "Bench" on the Driver Station; every footer lists tunables changed this session (BACK restores them); benches read every sensor in full | 9 |
 | `pedro/Constants.java`, `pedro/Tuning.java` | `drivetrainConfig` filled (names + directions); `localizerConfig` / `foresightConfig` `null` until AutoTune, so `create()` returns `null` and `Drivetrain` fails soft; four `@Tuner` factories registered (tuning build only) | — |
-| `pedro/procedures/*` | Quickstart AutoTune procedures, untouched, tuning build only | — |
+| `pedro/procedures/*` | the four Quickstart AutoTune procedures the robot uses (Mecanum, Pinpoint, Foresight, Tests), untouched, tuning build only | — |
 | `docs/01..04`, `docs/specs/*` | written and kept current | — |
 
-`./gradlew :TeamCode:testDebugUnitTest` → **370 tests, 0 failures**. `:TeamCode:assembleDebug`
+`./gradlew :TeamCode:testDebugUnitTest` → **305 tests, 0 failures**. `:TeamCode:assembleDebug`
 builds the competition APK (no AutoTune) with `Teleop`, `Auto: shoot 4 + leave`, six `Bench: …`
 OpModes and `SelfTest` registered.
 
@@ -109,6 +109,34 @@ changes came out of it, neither a correctness bug: the flywheel hold now rides a
 macro from its first tick (`Macros.heldFlywheel`), so an armed wheel is never told to stop when a
 shot starts; and `driveTo` builds no path when the target is within `Macros.MIN_PATH_INCHES`.
 
+**What was done on 2026-09-16, later** (Round 4: simplify and speed up. The team asked for less
+machinery and more points; `fixthese.md` "Round 4" has the evidence and §8.1 the item table). Six
+commits, one per step, the suite green and both APKs built after each, nothing pushed:
+1. `6ef83ee` Delete what cannot run on this robot: five Quickstart tuners for localizers the robot
+   does not own (1,582 lines), the positional templates, `RateLimiter`, `Scoring`, most of `Field`,
+   the unused `MatchClock` / `HardwareNames` members and a tail of members with no caller.
+2. `3434607` Delete the AprilTag field-localisation stack (`PoseFusion`, `updateLocalization`,
+   `tryLocalizeFromAprilTag`, the relocalize macro, the botpose conversion): every tag rides on a
+   moving CELL, so it was gated to null all season and never ran.
+3. `5a22392` Delete the colour-blob stack (collect/align macros, the blob pipeline, `VisionMath`,
+   `MedianFilter`, the intake capture flag, the camera mount constants): the camera is front-mounted
+   for AprilTags only (team decision).
+4. `674cde8` Loop budget: the intake current is sampled only while the roller pulls; colour sensors
+   read only the half the loop consumes and an untrusted entrance sensor is not read at all; the log
+   row every second loop; the aim target recomputed on change instead of every loop.
+5. `62174cf` The shooting cycle is one state-machine command (`commands/ShootCycle`) with no Ivy
+   hand-off loops: the next pulse is commanded in the loop the flywheel recovers. A four-piece
+   sensorless `shootAll` went from **3.96 s to 3.26 s** on the JVM (198 → 163 loops; the 35 idle
+   loops the tree cost). `Shooter.atSpeed()` is time-based (`AT_SPEED_HOLD_MS`); a hold's end leaves
+   the target to the next owner, so an armed wheel is never zeroed across a shot; the auto idles the
+   wheel itself.
+6. `e9ab335` The tag-derived aim correction survives the turn (`Macros.AIM_BIAS_MAX_AGE_MS`,
+   `Drivetrain.getPoseWrites()`): face the HIVE, take the correction, turn, shoot by it. That is what
+   makes a front camera useful to a rear shooter.
+
+Main code went from 13,070 to 9828 lines and the JVM suite from 370 to 305 tests: the deleted
+features took their tests with them, and eleven new tests pin the gains.
+
 ## 3. Read these first
 
 | File | Why |
@@ -117,7 +145,7 @@ shot starts; and `driveTo` builds no path when the target is within `Macros.MIN_
 | `docs/03-software-architecture.md` | the loop contract, package map, per-subsystem API, Limelight and colour-sensor specs, lessons-learned rules, and §20's practical notes |
 | `docs/01-libraries-pedro-3.0.0-ivy-1.1.1.md` | the two libraries' real APIs, verified from bytecode: read before touching `Drivetrain`, `Macros` or `AutoRoutine` |
 | `docs/04-biobuzz-season-analysis.md` | sourced game/field/rule facts, and §9 "implications for our robot" |
-| `fixthese.md` | all three reviews: 2026-09-14 (status table at the top), Round 2, 2026-09-15 ("Round 2 status", with a verdict on each claim), and Round 3, 2026-09-16 (the Pedro/Ivy usage audit) |
+| `fixthese.md` | all four reviews: 2026-09-14 (status table at the top), Round 2, 2026-09-15 ("Round 2 status", with a verdict on each claim), Round 3, 2026-09-16 (the Pedro/Ivy usage audit) and Round 4, 2026-09-16 (simplify and speed up: the evidence and the numbers) |
 | `opmodes/teleop/Controls.java` | every binding and the help card; change a button there and nowhere else |
 | `opmodes/test/*Bench.java` | how each constant in §9 gets measured |
 | `game/Field.java` Javadoc | the field frame (origin corner, axes, heading) every pose and path depends on |
@@ -152,7 +180,8 @@ Robot.java                     impl  composition root: readSensors()/writeActuat
 opmodes/
   MatchOpMode.java             impl  abstract base (extends OpMode); final lifecycle read→decide→execute→write;
                                      buildRobot()/openLogger() seams let tests run the real lifecycle on the JVM;
-                                     init card warns on a tuning build and lists tunables changed this session
+                                     init card warns on a tuning build and lists tunables changed this session;
+                                     the log row every LOG_EVERY_N_LOOPS loops
   RobotTunables.java           impl  the classes whose public statics are tunables (for util/diagnostics/Tunables)
   teleop/
     Controls.java              impl  enum of every gamepad binding + help card + what each needs (Needs);
@@ -176,7 +205,7 @@ opmodes/
     ShooterBench.java          impl  "Bench: Shooter": ticks/rev, rpm, spin-up, shot dip + recovery, PIDF toggle
                                      (shows what the hub holds), live second-motor direction flip
     ColorSensorBench.java      impl  "Bench: Color sensors": HSV, hue windows, NECTAR alliance, presence distance
-    LimelightBench.java        impl  "Bench: Limelight": pipelines, tags, blob, mount check
+    LimelightBench.java        impl  "Bench: Limelight": fps, frame freshness, every tag in view with its tx
     SelfTest.java              impl  "SelfTest": PASS / FAIL / SKIP per subsystem; run first at every event
 subsystems/
   PathFollower.java            impl  interface: the slice of Pedro 3 Follower the Drivetrain calls
@@ -191,28 +220,31 @@ subsystems/
   Transfer.java                impl  liftOne / feed (sensor-or-pulse) and feedForMs commands
   Shooter.java                 impl  RPM flywheel; latched atSpeed; waitForSpeed / holdSpeed / idle; optional PIDF;
                                      fixed, fires out the rear (HEADING_OFFSET_RAD)
-  Limelight.java               impl  AprilTag tx aiming (getTagTx), colour blobs, gated botpose (null this season)
-  ColorSensor.java             impl  NormalizedColorSensor wrapper, one per sensor point; caches colour + distance
-  templates/                   impl  Mechanism<S>, PositionalMotor<S>, PositionalServo<S>, VelocityMotor (writes on change,
-                                     refresh every 12 loops; SDK PIDF read and restorable; live direction)
-commands/Macros.java           impl  bounded, always-reporting multi-subsystem macros (Ivy groups + Pedro paths); aimHeading law
+  Limelight.java               impl  the target CELL's tag tx for aiming (getTagTx) and nothing else; front-mounted
+  ColorSensor.java             impl  NormalizedColorSensor wrapper, one per sensor point; reads the half the loop asks for
+  templates/VelocityMotor.java impl  intent then write; writes on change, refresh every 12 loops; SDK PIDF read and
+                                     restorable; live direction
+commands/Macros.java           impl  bounded, always-reporting multi-subsystem macros (Ivy groups + Pedro paths); the aim
+                                     law with the tag correction that survives the turn
+commands/ShootCycle.java       impl  the shooting cycle as one state-machine command: no Ivy hand-off loops, every
+                                     sensor variant, requires storage + transfer only
 commands/Waits.java            impl  Clock-based waitMs / bounded (Ivy's own waitMs is wall-clock)
-game/Field.java                impl  field frame (origin A1), tiles, HIVE/CELLs, tag IDs, FLOWERs, zones, element counts
-game/Scoring.java              impl  point values and ranking-point thresholds
+game/Field.java                impl  field frame (origin A1), tiles, HIVE CELLs, tag ranges, LOADING ZONE, pre-loads:
+                                     only what the code uses (the rest of the field is in docs/04)
 game/FieldPoses.java           impl  BLUE poses (two starts, shooting spot, park, garden approach); RED via FieldConstants.forAlliance
 game/PieceType.java            part  POLLEN / NECTAR sizes, target height, placeholder hue windows, HUES_CALIBRATED,
                                      nectarAllianceAt
 pedro/Constants.java           part  drivetrainConfig filled; localizerConfig / foresightConfig null until AutoTune
 pedro/Tuning.java              impl  @Tuner factories (tuning build only)
-pedro/procedures/*.java        impl  Quickstart tuners (tuning build only)
+pedro/procedures/*.java        impl  the four Quickstart tuners the robot uses (tuning build only)
 util/
   control/JamDetector          impl  current-based stall detection, healthy-current window before attempts reset
-  diagnostics/LoopTimer, MatchLogger (KEEP_NEWEST prune), RateLimiter, Tunables (snapshot / changed / restore),
+  diagnostics/LoopTimer, MatchLogger (KEEP_NEWEST prune), Tunables (snapshot / changed / restore),
              BuildFlavor (is AutoTune in this APK?)
-  field/Alliance, FieldConstants (SYMMETRY = ROTATE_180), PoseFusion, PoseStorage (+ piece count), StartPosition
+  field/Alliance, FieldConstants (SYMMETRY = ROTATE_180), PoseStorage (+ piece count), StartPosition
   hardware/Hardware (fail-soft lookup), HardwareNames (every config name, V1 + 5 sensor points)
-  math/Angles, ColorMath, DriveScaling, MedianFilter, VisionMath
-  time/Clock, SystemClock, MatchClock (BIOBUZZ timing, no endgame, isFlowerUnlocked at 1:00)
+  math/Angles, ColorMath, DriveScaling
+  time/Clock, SystemClock, MatchClock (BIOBUZZ timing, no endgame)
 ```
 
 Tests live in `TeamCode/src/test/java/.../teamcode/` mirroring the tree; fakes are
@@ -233,9 +265,8 @@ JVM with real `Gamepad`s driven by `copy()`; `AutoRoutineTest` runs the whole au
 |---|---|---|
 | driver | L-stick / R-stick X | drive (field-centric with the alliance's driver frame and a heading hold when Pedro is tuned; robot-centric open loop before that) |
 | driver | L-trigger (hold) | precision slow mode |
-| driver | **R-trigger (hold)** | **aim lock**: heading hold points the shooter at the current up-CELL while the sticks still translate (Pedro tuned only) |
+| driver | **R-trigger (hold)** | **aim lock**: heading hold points the shooter at the current up-CELL while the sticks still translate (Pedro tuned only); tag-corrected when the front camera saw the CELL's tags in the last few seconds |
 | driver | LB / Y / BACK | field ↔ robot centric / re-zero heading (face away from your wall) / abort macro (moving a stick also aborts a drive macro) |
-| driver | A / X | collect a piece / turn to face a piece (camera; refused until `Limelight.MOUNT_CALIBRATED`) |
 | driver | B / RB | Pedro path to the shooting spot / to park (Pedro tuned only) |
 | driver | dpad | snap to 90 / 0 / 270 / 180° (Pedro tuned only) |
 | operator | RB / LB / B / X | intake / outtake / eject / stop intake (X also cancels any macro) |
@@ -251,7 +282,7 @@ JVM with real `Gamepad`s driven by `copy()`; `AutoRoutineTest` runs the whole au
 | Feel | Pads | Meaning |
 |---|---|---|
 | 1 blip | driver, or both for a piece | a macro succeeded, or the count went up |
-| 3 blips | driver | a macro failed (TIMED_OUT / NO_TARGET), or a press was refused (a drive macro with no follower, a camera macro before `Limelight.MOUNT_CALIBRATED`) |
+| 3 blips | driver | a macro failed (TIMED_OUT / NO_TARGET), or a press was refused (a drive macro with no follower) |
 | 2 blips | both | storage is full |
 | one long buzz | both | 20 s left in the period |
 
@@ -277,8 +308,8 @@ left, loop stats, and `started UNLOCKED` if A was never pressed.
 | `FieldConstants.SYMMETRY = ROTATE_180` | The BIOBUZZ field is 180° rotationally symmetric (GARDEN A1/F6, LOADING ZONE A5/F2). A mirror puts every blue auto in the wrong place. |
 | Field frame origin = A1 corner (audience-side red), +X toward column F, +Y toward row 6 | Pinned by the 180° rotation mapping A5→F2 and A1→F6; written once in `Field`'s Javadoc, checked by `FieldTest`. |
 | Driver frame per alliance (`Drivetrain.setDriverHeadingOffset`, `Field.driverForwardHeading`) | +X points at the blue driver, so field-centric "forward" for blue is −X. Aim lock and macros stay in the true frame. Y re-zeroes to the driver's forward. |
-| No AprilTag localisation; tags are aiming targets | Every tag rides on a moving HIVE CELL; the SDK v12 notes say they are unsuitable for localisation. `PoseFusion` stays for a future static reference; `Limelight.getBotposeAsPedroPose()` is gated to null until `BOTPOSE_FRAME_VERIFIED`. |
-| Pose write-back only on `PoseFusion.Result.ACCEPTED` | Writing the fused pose every loop released the heading hold every loop (it never corrected anything) and re-wrote the Pinpoint over I2C for nothing. |
+| No AprilTag localisation; tags are aiming targets only, and the localisation stack is gone (Round 4) | Every tag rides on a moving HIVE CELL; the SDK v12 notes say they are unsuitable for localisation. The Kalman blend, the relocalize macro and the botpose conversion were gated to null all season and were deleted; git has them if a static reference ever appears. |
+| The camera faces front and is for AprilTags only; the tag correction is kept through the turn | Team decision 2026-09-16. The tags are in view only while the robot faces the HIVE and the rear shooter needs it turned away, so `Macros.aimHeading` remembers the tags' disagreement with odometry for `AIM_BIAS_MAX_AGE_MS` or until the pose is rewritten. No piece detection: the blob stack was deleted. |
 | One motor layer at a time | `Robot` builds `OpenLoopDrive` on the real motors only when `Constants.create()` returns null; two Pedro `Mecanum` objects can never share the four drive motors. `Teleop` schedules exactly one drive default. |
 | `PathFollower` seam over Pedro | Every drivetrain command runs on the JVM against `FakePathFollower`; Pedro's behaviour changes are caught by `DrivetrainCommandTest`, not on the field. |
 | Keep `Drivetrain.followLazyCommand`, never bare `PedroCommands.follow` | Ivy 1.1.1's `PedroCommands.follow` has no requirement and no `setEnd`; an interrupted follow would keep driving. Ours holds at `path.endPose()` on a natural end with `holdEnd` and hands back with `manual(0,0,0)` otherwise. |
@@ -299,8 +330,10 @@ left, loop stats, and `started UNLOCKED` if A was never pressed.
 | Without a trusted entrance sensor a zero count is "unknown": shoot one fires one pulse, shoot all fires `CAPACITY` (`Macros.ASSUME_FULL_WHEN_UNCOUNTED = true`) | The count only rises on that sensor's edge or through `setCount`; a robot that refuses to shoot because it cannot count is useless at an event. The rule is a named game decision so it can be found and switched off. |
 | `PoseStorage` carries the piece count from auto to teleop | A cut auto that shot two of four must not start teleop believing the robot is empty (G407's interlock would be two pieces off); a sensorless robot has no other way to know. |
 | Flywheel recovery is waited for only between pieces; a 150 ms dwell after the last | Up to 1.65 s of held resources doing nothing after every `shootOne` and at the end of every `shootAll`. |
-| `Shooter.atSpeed()` is latched over `AT_SPEED_LOOPS` consecutive in-band loops, tolerance 5 % | One noisy sample through a ±47 t/s band released shots and the old band never held long enough to latch. |
-| `Shooter.CUSTOM_PIDF = false`, `Intake.REJECT_ENABLED = false`, `Limelight.MOUNT_CALIBRATED = false`, `PieceType.HUES_CALIBRATED = false` | Each needs a measurement before it can be right; off is safer than a guess, and the benches are how they get measured. |
+| `Shooter.atSpeed()` needs the band held for `AT_SPEED_HOLD_MS` (time, read live), tolerance 5 % | One noisy sample through a ±47 t/s band released shots and the old band never held long enough to latch; a time rather than a loop count so a slow loop does not stretch it. |
+| A hold's end leaves the shooter target to the next owner; the default idle command idles the wheel a loop later | The old `idle()` in the hold's end fired one loop before Teleop re-armed the operator's hold, so every armed shot ended with a `setVelocity(0)` and a reset latch. The auto idles the wheel itself because it owns the shooter for the whole run. |
+| Each colour sensor is read only for what the loop consumes; the intake current only while the roller pulls; the log row every second loop | Each half of a colour read and each current read is its own bus transaction, milliseconds on a Control Hub; a faster loop tightens the heading hold and the entrance edge count. Benches read everything (`Robot.setReadAllSensorData`). |
+| `Shooter.CUSTOM_PIDF = false`, `Intake.REJECT_ENABLED = false`, `PieceType.HUES_CALIBRATED = false` | Each needs a measurement before it can be right; off is safer than a guess, and the benches are how they get measured. |
 | No `SensorSet` object for the sensor policy (fixthese R2-B1 proposed one) | The subsystems' `has*Sensor()` methods already say what is wired; moving the *decision* into `Robot.wireSuppliers()` fixed the drift, and a second object would be a second truth to keep in step. |
 | Each `Controls` entry declares `Needs` (NOTHING, DRIVETRAIN, CAMERA); Teleop gates on it | The old gate was a hand-kept list of eight buttons repeated in three places; a new macro left off the list would have run with no follower. A table-driven test fails until a new drive control is covered. |
 | A tuning APK is detected at runtime (`BuildFlavor`), not only at build time | One `tuning=true` line in `gradle.properties` would put AutoTune's web server in every APK with nothing to show it (R704). |
@@ -316,7 +349,7 @@ left, loop stats, and `started UNLOCKED` if A was never pressed.
 | The flywheel hold is a standing operator wish, re-scheduled after any macro | Ivy ends (does not suspend) a preempted priority-0 command; `restoreFlywheelHold()` brings it back. |
 | `MatchOpMode.buildRobot()` / `openLogger()` protected seams; `BenchOpMode.buildRobot()` | The only way to run the real OpMode lifecycle on the JVM (`HardwareMap` and the SD-card logger are Android-only). |
 | First-competition auto is hardcoded and open-loop | No AutoTune before the first event means no localizer, no paths and no aiming; motor names + directions are all `Mecanum` needs, and the same `drivetrainConfig` feeds the tuned follower later. |
-| `shootAll` is unrolled into `CAPACITY + 1` guarded steps, not Ivy's `repeat` | A `sequential` interrupted before reaching a `Repeat` calls `end()` on it and NPEs; the +1 is a piece already in the lift. |
+| The shooting cycle is one hand-written command (`commands/ShootCycle`), not an Ivy group tree | Ivy's `Sequential` hands off one child per loop and never executes the child it just started, so the nine-level tree spent 7 idle loops between "flywheel recovered" and the next pulse and 0.7 s per four-piece run (3.96 s → 3.26 s on the JVM). The state machine chains every zero-duration transition inside one `execute()`, keeps every sensor variant, and sidesteps the `Repeat.end()` NPE for free. |
 | Benches drive subsystems directly, no Ivy | Nothing else is scheduled, so nothing re-asserts idle; a bench that stops calling a mechanism calls its `stop()`. The match code path (config names, directions, velocity, sensors) is still the one exercised. Every bench footer shows loop stats, the sensing summary and changed tunables; BACK restores the defaults. |
 
 ## 7. Rules that bite
@@ -339,8 +372,8 @@ left, loop stats, and `started UNLOCKED` if A was never pressed.
 - A direct hardware call from an `instant` without a requirement is overwritten by the default command before the write.
 - `Scheduler` is static: `Scheduler.reset()` first thing in `init()` and in every test.
 - `deadline` and `parallel` end their unfinished children with the **group's own** end condition, so a child's `ec == NATURALLY` branch fires when the group finishes naturally. Judge by the sensor or condition, never by `EndCondition`, or use `race`.
-- A `sequential` hands off one child per `execute()`: a child's `start()` never runs at `schedule()` time, and every hand-off costs a 20 ms loop (a macro with a dozen groups is ~0.5 s of pure hand-offs).
-- **Never put `repeat(...)` inside a group that can be interrupted before reaching it**: `Repeat.end()` NPEs. Unroll into guarded `conditional` steps (`Macros.shootAllCore`).
+- A `sequential` hands off one child per `execute()`: a child's `start()` never runs at `schedule()` time, and every hand-off costs a 20 ms loop (a macro with a dozen groups is ~0.5 s of pure hand-offs). The shooting cycle is one hand-written command for exactly this reason (Round 4).
+- **Never put `repeat(...)` inside a group that can be interrupted before reaching it**: `Repeat.end()` NPEs. Unroll into guarded `conditional` steps, or write the loop as one command (`commands/ShootCycle`).
 - **`setEnd` on a group replaces the group's own end**, the one that ends its children. Run interrupt work as a child: `deadline(body, onInterrupt(cb))` (`Macros.reporting`).
 
 **SDK gamepads and OpModes** (bytecode-verified on 11.2.1)
@@ -357,12 +390,13 @@ left, loop stats, and `started UNLOCKED` if A was never pressed.
 - AUTO 30 s → 8 s no-motion transition (G403: do not INIT a twitchy TeleOp early) → TELEOP 120 s; no endgame; FLOWER unlock at 1:00.
 
 **The robot** (docs/03 §20 has the long form)
-- Camera facing decides whether tag-aiming exists: a front camera only sees the tags while the robot is *not* aimed, so `aimHeading` runs on odometry; a rear camera needs `CAMERA_YAW_OFFSET_DEGREES = 180`.
+- The camera faces front. It sees the tags only while the robot faces the HIVE; `aimHeading` keeps the correction it took then for `AIM_BIAS_MAX_AGE_MS` (or until the pose is rewritten) and aims the turn by it. Drive up facing the HIVE, then pull the aim lock; the card says `tag-corrected` while the correction is in force.
 - `Macros.SENSORLESS_FEED_PULSE_MS` is the pulse the robot uses; `Transfer.*_PULSE_MS` only apply to direct `liftOne/feed` commands.
 - Shot counts and `SUCCESS` are pulse counts without sensors.
-- Colour sensors are I2C outside the bulk read. The entrance is read every loop; the fitted presence sensors (full, transfer, feed) one per loop in rotation, so with three fitted each is up to ~60 ms old. Watch `Loop` on any bench footer.
+- Colour sensors are I2C outside the bulk read, and each half (colour, distance) is a transaction. The loop reads only what it consumes: a trusted entrance every loop (distance on a V3; hue only once the G408 reject is wired), the fitted presence sensors (full, transfer, feed) one per loop in rotation (distance only), an untrusted entrance not at all; benches read everything. With three presence sensors each is up to ~60 ms old. Watch `Loop` on any bench footer.
+- The intake current reads NaN unless the roller is pulling: not sampled, not a fault.
 - **Tunables are `public static` and live until the Robot Controller app restarts.** A value changed on a bench is what Teleop runs with; the init card lists every such value (`!! TUNED THIS SESSION`). BACK on a bench restores them all.
-- `SECOND_MOTOR_DIRECTION` applies live; `PieceType.HUES_CALIBRATED` and `Limelight.MOUNT_CALIBRATED` are read when the robot is built, so change them and re-INIT.
+- `SECOND_MOTOR_DIRECTION` applies live; `PieceType.HUES_CALIBRATED` is read when the robot is built, so change it and re-INIT.
 - Entrance edge counting samples at loop rate. `Bench: Storage` shows how many loops a passing piece stays in view (two or more to count reliably), **but its counter still uses a hue match**, so it reads 0 on a V3 before the hues are measured even though the robot counts by distance (§8.3).
 - **On a sensorless robot the operator is the G407 system.** Nothing stops the intake at four unless `sensor_storage_full` is fitted or the operator presses dpad up. Fit that sensor first.
 - The init card's `Sensors:` line is the truth about what each sensor point is doing. "Fitted, NOT trusted" means it is in the configuration but ignored until measured.
@@ -377,7 +411,7 @@ left, loop stats, and `started UNLOCKED` if A was never pressed.
 | A2, D7, D12 | `Tuning.java` four `@Tuner` factories + `NotReady`; `Constants.localizerConfig/foresightConfig` placeholders with `HardwareNames.PINPOINT` | compiles under `-Ptuning` |
 | A3, D11 | baseline commit; `.claude/` ignored | git log |
 | A4 | `tuning` dependency and `pedro/Tuning.java`, `pedro/procedures/**` only with `-Ptuning` | both builds succeed |
-| B1 | `Robot.updateLocalization` writes back only on `ACCEPTED` | `RobotTest.headingHoldCorrectsThroughTheFullLoop`, `updateLocalizationLeavesTheFollowerAloneWithoutAFix` |
+| B1 | `Robot.updateLocalization` wrote back only on `ACCEPTED`; the whole localisation stack was deleted in Round 4 | `RobotTest.headingHoldCorrectsThroughTheFullLoop` |
 | B2, C9 | metered sensorless feed: storage + transfer together for `SENSORLESS_FEED_PULSE_MS`, recovery between pieces | `MacrosTest.sensorlessShootAllOfFourFinishesInsideThirteenSeconds`, `AutoRoutineTest.storageNeverPushesIntoAStoppedTransferWithoutSensors` |
 | B3 | `Drivetrain.setDriverHeadingOffset`, `Field.driverForwardHeading`, `resetHeading()` to the driver's forward | `DrivetrainCommandTest`, `TeleopTest.redForwardIsFieldPlusX` |
 | B4 | dpad always flips the alliance in `Teleop.onInitLoop` | `TeleopTest.dpadOverridesTheAllianceLeftByAuto` |
@@ -385,15 +419,13 @@ left, loop stats, and `started UNLOCKED` if A was never pressed.
 | B7 | `Drivetrain.LOCALIZER_SETTLE_MS`, `onStart()`, deferred pose re-apply; `MainAuto.onStart` seeds the start pose | `MainAutoTest.startSeedsTheStartPoseForTheSelectedAlliance` |
 | C1 | `ColorSensor.getDistanceInches()` cached per loop; `Robot.pieceNear` for the three presence points; `PRESENCE_DISTANCE_INCHES` | `ColorSensorTest`, `RobotTest.presenceUsesDistanceWhenTheSensorHasIt` |
 | C2 | `PieceType.nectarAllianceAt`, `Robot.setAlliance`, `Intake.setRejectSupplier` / `REJECT_ENABLED = false` / `REJECT_MS` | `IntakeCommandTest.opponentPieceAtTheEntranceIsThrownBackOutForRejectMs`, `RobotTest.opponentNectarTriggersRejectOnlyForTheOtherAlliance` |
-| C3 | `Shooter.AT_SPEED_TOLERANCE_RPM = 150`, `AT_SPEED_LOOPS = 5`, `CUSTOM_PIDF` + `PIDF_*` + `applyPidf()`, `VelocityMotor.setVelocityPidf` | `ShooterTest.atSpeedNeedsConsecutiveInBandLoops`, `customPidfIsWrittenOnlyWhenEnabled` |
+| C3 | `Shooter.AT_SPEED_TOLERANCE_RPM = 150`, `AT_SPEED_HOLD_MS = 100` (a time since Round 4), `CUSTOM_PIDF` + `PIDF_*` + `applyPidf()`, `VelocityMotor.setVelocityPidf` | `ShooterTest.atSpeedNeedsTheBandHeldForAtSpeedHoldMs`, `customPidfIsWrittenOnlyWhenEnabled` |
 | C4 | `Intake.STALL_CURRENT_AMPS = 7.0`, `STALL_TIMEOUT_MS = 300` | measure with `Bench: Intake` |
 | C5 | `JamDetector.configure(..., healthyResetMs)`, `Intake.HEALTHY_RESET_MS = 500` | `JamDetectorTest.aBriefDipBetweenPulsesDoesNotResetTheAttempts` |
 | C6 | `Macros.reporting()` wraps every macro | `MacrosTest.boundedTimeoutLeavesATerminalOutcome` |
 | C7 | `Shooter.waitForSpeedCommand()` requires nothing; only the hold owns the shooter | `MacrosTest` shooting tests |
 | C8 | `Macros.INTAKE_RUNS_STORAGE = false` | `MacrosTest.intakeUntilFullTimesOutAndStopsEverything` |
-| C10 | `Limelight.MOUNT_CALIBRATED = false` gates COLLECT/ALIGN | `TeleopTest.cameraMacrosAreIgnoredUntilTheMountIsMeasured` |
-| C11 | `Limelight.BOTPOSE_FRAME_VERIFIED = false` gates the botpose | Javadoc names the frame mismatch |
-| C12 | `Teleop.onInitLoop` localizes only with a camera, every `LOCALIZE_RETRY_MS` | `TeleopTest` |
+| C10, C11, C12 | superseded in Round 4: the collect/align macros, the botpose and the init-loop localise attempt were deleted | — |
 | C13 | SDK 12.0 upgrade | **deferred**: its own task before any SDK AprilTag work |
 | D1 | `AutoRoutineTest` asserts the captured leave powers | `AutoRoutineTest.shootsFourPreloadsThenLeavesTheWall` |
 | D2, D3, D4 | this file, `docs/03` §11 and §20, `docs/specs/` | — |
@@ -406,7 +438,7 @@ left, loop stats, and `started UNLOCKED` if A was never pressed.
 | G2 | `PoseStorage.save(..., pieceCount)`; `MainAuto` writes, `Teleop.onInit` applies | `MainAutoTest.handsThePieceCountToTeleop`, `TeleopTest.inheritsThePieceCountLeftByAuto` |
 | G3 | `HEADING_HOLD_STICK_DEADBAND = 0.001` | `DrivetrainCommandTest.aSmallDeliberateTurnReleasesTheHold`, `TeleopTest.aLightTurnStickIsNotSwallowedByTheHold` |
 | G4 | `aimAndShootAll` bounds its aim | `MacrosTest.aimAndShootAllGivesUpAimingAfterTheTimeoutAndStillShoots` |
-| G5 | `shootAllCore` builds `CAPACITY + 1` feed steps | `MacrosTest.shootAllShootsAPieceWaitingInTheLiftToo` |
+| G5 | `ShootCycle` fires `piecesOnBoard()` pieces, a piece already in the lift included | `MacrosTest.shootAllShootsAPieceWaitingInTheLiftToo` |
 | G6 | recovery only between pieces (`afterShot`) | `MacrosTest.shootOneDoesNotWaitForRecoveryAfterItsOnlyShot`, `shootAllWaitsForRecoveryOnlyBetweenPieces` |
 | G7 | `Shooter.SECOND_MOTOR_DIRECTION`, `Storage.SECOND_MOTOR_DIRECTION` | `ShooterTest.secondFlywheelTakesItsOwnDirection` |
 | G8 | `markCancelled` guard | `MacrosTest.markCancelledLeavesAFinishedMacroAlone` |
@@ -442,6 +474,18 @@ now with a warning.
 | R3-2 | `Macros.MIN_PATH_INCHES`; `lineTo` / `approachPath` return null inside it | `MacrosTest.driveToAlreadyThereFinishesWithoutAPath` |
 | R3-3 | docs/01 records where the official docs are wrong (A.4, A.6, B.1); §7 above points at it | — |
 
+**Round 4** (2026-09-16, simplify and speed up; the evidence and numbers are in `fixthese.md` "Round 4"):
+
+| Item | Change | Proof |
+|---|---|---|
+| R4-1 | delete what cannot run on this robot (tuners for localizers not owned, positional templates, `RateLimiter`, `Scoring`, most of `Field`, unused `MatchClock` / `HardwareNames` members, members with no caller); `Docs-master/` ignored | `6ef83ee`; both APKs build; 344 tests |
+| R4-2 | the AprilTag field-localisation stack deleted | `3434607` |
+| R4-3 | the colour-blob stack deleted; the camera is front-mounted for AprilTags only | `5a22392`; `TeleopTest.aStickAbortsADriveMacro` keeps the stick-abort behaviour it used to prove on collect |
+| R4-4 | intake current only while pulling; colour reads only where hue is used, untrusted entrance not read; log every second loop; aim target on change | `674cde8`; `IntakeCommandTest.currentIsReadOnceALoopWhilePullingAndNeverWhenIdle`, `ColorSensorTest.colourIsSkippedWhenNotAsked`, `RobotTest.presenceSensorsAreReadInRotationAndTheEntranceEveryLoop`, `anUntrustedEntranceSensorIsNotReadAtAll`, `benchesReadEverySensorInFull` |
+| R4-5 | `commands/ShootCycle`; `Shooter.AT_SPEED_HOLD_MS`; a hold's end leaves its target; the auto idles the wheel | `62174cf`; `MacrosTest.theNextPulseStartsTheLoopTheFlywheelRecovers`, `anArmedWheelFeedsWithinTwoLoopsOfThePress`, `sensorlessShootAllOfFourFinishesInsideTheSumOfItsTimers` (3.26 s; the old tree took 3.96 s), `TeleopTest.anArmedFlywheelIsNeverStoppedAcrossAShot`, `ShooterTest.holdSpeedLeavesTheTargetAndTheDefaultIdlesItNextLoop`, `AutoRoutineTest.shootsAllFourThenLeavesInsideThePeriod` (wheel idle before the leave) |
+| R4-6 | the tag-derived aim correction survives the turn (`AIM_BIAS_MAX_AGE_MS`, `Drivetrain.getPoseWrites()`, `Macros.TagBearingSource` seam) | `e9ab335`; `MacrosTest.aimHeadingKeepsTheTagCorrectionAfterTheTagLeavesView`, `theAimCorrectionExpires`, `theAimCorrectionIsDroppedWhenThePoseIsRewritten` |
+| R4-7 | this file, `fixthese.md` Round 4, docs/01..04 | — |
+
 ### 8.2 Before the first event, on the real robot, in this order
 
 0. **Fit `sensor_storage_full` first** (a REV Color Sensor V3 at the fourth slot). It is one config
@@ -467,8 +511,9 @@ now with a warning.
    piece into `Robot.PRESENCE_DISTANCE_INCHES`; then consider `Intake.REJECT_ENABLED` (and whether
    the roller alone can eject from the entrance). Read the footer's loop p95 with 0, 1 and all
    sensors fitted: the anti-jam window needs `STALL_TIMEOUT_MS / p95` of at least 10 samples.
-8. **`Bench: Limelight`** if fitted: fps, tag tx, and the mount check against a tape measure; then
-   `Limelight.MOUNT_CALIBRATED = true`. Decide the facing (§10).
+8. **`Bench: Limelight`** if fitted: fps and the target CELL's tag tx from the front-mounted camera
+   (a tag dead ahead reads tx ≈ 0). Then on the practice field: face the HIVE, pull the aim lock, turn,
+   and check the card says `tag-corrected` through the turn.
 9. Set `AutoRoutine.LEAVE_DIRECTION` / `LEAVE_POWER` / `LEAVE_MS` for the real placement: the robot
    must clearly stop touching the wall and never reach the HIVE structure.
 10. Run `Auto: shoot 4 + leave` once on the practice field with the 30 s clock, then `Teleop`: the
@@ -502,28 +547,29 @@ now with a warning.
 | `Intake` | `MOTOR_FREE_SPEED_TICKS_PER_SEC`, `INTAKE_TICKS_PER_SEC`, `STALL_CURRENT_AMPS`, `STALL_TIMEOUT_MS` | `Bench: Intake`: peak velocity unloaded; peak amps of a clean capture vs a deliberate jam |
 | `Intake` | `REJECT_MS`, `REJECT_ENABLED` | `Bench: Color sensors` for the hues first, then a piece of the other colour at the entrance in `Bench: Intake` |
 | `Storage`, `Transfer`, `Macros` | `ADVANCE_TICKS_PER_SEC`, `LIFT/FEED_TICKS_PER_SEC`, **`SENSORLESS_FEED_PULSE_MS`** | `Bench: Storage` / `Bench: Transfer`: one pulse moves exactly one piece |
-| `Shooter` | `TICKS_PER_REV`, `SHOOT_RPM`, `AT_SPEED_TOLERANCE_RPM`, `SHOT_RECOVERY_MIN_MS`, `SHOT_RECOVERY_TIMEOUT_MS`, `CUSTOM_PIDF` + `PIDF_*` | `Bench: Shooter` |
+| `Shooter` | `TICKS_PER_REV`, `SHOOT_RPM`, `AT_SPEED_TOLERANCE_RPM`, `AT_SPEED_HOLD_MS`, `SHOT_RECOVERY_MIN_MS`, `SHOT_RECOVERY_TIMEOUT_MS`, `CUSTOM_PIDF` + `PIDF_*` | `Bench: Shooter` |
 | `Shooter`, `Storage` | `SECOND_MOTOR_DIRECTION` | `Bench: Shooter` / `Bench: Storage` dpad right flips it live; opposite measured signs = fighting |
 | `Shooter` | `HEADING_OFFSET_RAD` | which way the flywheel fires relative to the intake (π = out the rear); confirm on the built robot |
 | `Robot` | `PRESENCE_DISTANCE_INCHES` | `Bench: Color sensors`: distance with and without a piece at the entrance/full/transfer/feed points |
 | (loop) | loop p95 with 0, 1 and all colour sensors fitted | any bench footer; `Intake.STALL_TIMEOUT_MS / p95` must be at least 10, or drop a presence sensor |
 | `game/PieceType` | hue windows (`POLLEN`, `NECTAR_RED_HUE_DEGREES`, `NECTAR_BLUE_HUE_DEGREES`), `HUE_TOLERANCE_DEGREES`, `MIN_SATURATION`, `MIN_VALUE`, then **`HUES_CALIBRATED`** | `Bench: Color sensors` on real pieces under match lighting (hold Y for min/max) |
 | `Macros` | `ASSUME_FULL_WHEN_UNCOUNTED`, `INTAKE_TIMEOUT_MS` | a strategy call, not a measurement: `true` shoots blind when nothing can count; the timer is how long a sensorless intake runs |
-| `Limelight` | `CAMERA_HEIGHT_INCHES`, `CAMERA_PITCH_DEGREES` (positive down), offsets, `CAMERA_YAW_OFFSET_DEGREES`, then `MOUNT_CALIBRATED` | tape measure after the mount is final; `Bench: Limelight` estimate vs tape |
+| `Limelight` | `CAMERA_YAW_OFFSET_DEGREES` (0 = front; confirm the mount) | `Bench: Limelight`: a tag dead ahead must read tx ≈ 0 |
+| `Macros` | `AIM_BIAS_MAX_AGE_MS` | how long the tag correction may be trusted after the tags leave view: a strategy call, 5 s is a drive-up-and-turn |
+| `MatchOpMode` | `LOG_EVERY_N_LOOPS` | a strategy call: 2 = 25 rows a second |
 | `Drivetrain` | `HEADING_HOLD_P/I/D` (also the aim lock's gains) | on the field with the drivetrain tuned |
 | `Macros` | `AIM_TOLERANCE_DEGREES`, the `*_TIMEOUT_MS` values | on the field; a shot that misses wide is the aim tolerance, a shot that never fires is a timeout |
 | `pedro/Constants` | `drivetrainConfig` directions (TestHardware / Mecanum Tuner), then `PinpointConfig`, `ForesightConfig` | `-Ptuning` build, AutoTune web UI at `http://192.168.43.1:10158` |
 | `AutoRoutine` | `LEAVE_DIRECTION`, `LEAVE_POWER`, `LEAVE_MS`, `SETTLE_MS`, `SHOOT_BUDGET_MS` | on the practice field |
-| `game/Field` | `HIVE_LATERAL_OFFSET_INCHES`, `UP_CELL_OPENING_HEIGHT_INCHES`, `FLOWER_INSET_INCHES`, LOADING ZONE / GARDEN placement | Onshape field CAD (docs/04 §10), then a tape measure at the first event |
+| `game/Field` | `HIVE_LATERAL_OFFSET_INCHES`, `UP_CELL_OPENING_HEIGHT_INCHES`, LOADING ZONE placement | Onshape field CAD (docs/04 §10), then a tape measure at the first event |
 | `game/FieldPoses` | every pose (start standoffs, `ROBOT_HALF_LENGTH_INCHES` incl. pre-load protrusion, `BLUE_SHOOTING_SPOT`, `BLUE_PARK`, `BLUE_GARDEN_APPROACH`) | drive the real field; correct the BLUE value in place and red follows |
-| `PositionalServo` | `TRAVEL_MS_PER_UNIT` | V2 only |
 
 ## 10. Open hardware questions
 
 - Motor count: two storage motors and two flywheels together would be nine; which one is single,
   or which pair shares a motor. Directions for a pair: `SECOND_MOTOR_DIRECTION`.
-- **Camera: fitted on V1, and facing which way?** Front = piece detection only, aim on odometry.
-  Rear = tag-refined aiming while aimed. Undecided; the code defaults to "not measured".
+- **Camera: front-facing, AprilTags only** (answered 2026-09-16; `CAMERA_YAW_OFFSET_DEGREES = 0`).
+  Confirm on the built robot that a tag dead ahead reads tx ≈ 0.
 - Whether the storage side wheels must run while intaking (`Macros.INTAKE_RUNS_STORAGE`, off).
 - Which way is "off the wall" for LEAVE given how the robot is placed (`AutoRoutine.LEAVE_DIRECTION`).
 - Sensor type at each of the five reserved points (`HardwareNames.SENSOR_*`). Recommended order:

@@ -723,7 +723,8 @@ Schedule it exactly once, after `Scheduler.reset()`, in `init()`. Unchanged in 1
    an ordinary `sequential(a, repeat(b, n))` that is interrupted, for example by a timeout `race`,
    before it reaches the repeat: the sequential ends its unstarted children and `Repeat.end()`
    dereferences the null list (reproduced in `AutoRoutineTest`, 2026-09-13). Unroll into guarded
-   `conditional` steps instead (`Macros.shootAllCore`).
+   `conditional` steps, or better, write the loop as one command: the shooting cycle is
+   `commands/ShootCycle`, a state machine, both for this and for the hand-off cost (trap 11).
 9. **`PedroCommands.hold(follower)`** captures the pose when the command is **built**, not started. A
    hold built in `init()` drives back to the init pose. Use `lazy(() -> hold(f, f.pose())).requiring(...)`.
 10. **`PedroCommands.hold(...)` is an `instant`**: it finishes on tick one and leaves the follower

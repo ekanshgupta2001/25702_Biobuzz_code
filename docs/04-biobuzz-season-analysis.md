@@ -141,8 +141,8 @@ AUTO 0:30 → transition 0:08 (**no powered movement, G403**) → TELEOP 2:00. D
 2:30 → 0:00. **No endgame period.** Timed events: **1:00 remaining = FLOWER ownership unlocked**
 (NECTAR may enter a FLOWER, G410; all remaining NECTAR may be loaded, G426); **0:20 = final
 warning** (train whistle). The visual field timer is authoritative over audio (§9.11).
-Code: `MatchClock` (AUTONOMOUS_MS 30 s, TRANSITION_MS 8 s, TELEOP_MS 120 s, FLOWER_UNLOCK_MS 60 s,
-FINAL_WARNING_MS 20 s; `isFlowerUnlocked()`, `isFinalSeconds()`).
+Code: `MatchClock` (AUTONOMOUS_MS 30 s, TELEOP_MS 120 s, FINAL_WARNING_MS 20 s; `isFinalSeconds()`,
+`isExpired()`). The FLOWER window has no code until a FLOWER mechanism exists.
 
 ### 5.2 Scoring [OFFICIAL Table 10-2]
 
@@ -189,7 +189,7 @@ the cap gifts the points; cap late.
 | **G407** | **CONTROL at most 4 SCORING ELEMENTS at a time**; teams are told to build guards and "systems to prevent active pickup/intaking of more than 4" | `Storage.count()` hard-stops the intake at 4; a momentary 5th reversed out is "likely not STRATEGIC" |
 | **G408** | may not CONTROL the opponent's NECTAR | colour classification at the intake or storage entrance, or a 3.6 in reject gate |
 | **G409** | may not catch or deflect elements released by a tipping HIVE | do not park under the HIVE; no open-top hopper |
-| **G410** | **no NECTAR into a FLOWER until ≤ 60 s remain**, MAJOR FOUL per NECTAR | V1 has no Flower mechanism; `MatchClock.isFlowerUnlocked()` already exposes the window for a V2 macro |
+| **G410** | **no NECTAR into a FLOWER until ≤ 60 s remain**, MAJOR FOUL per NECTAR | V1 has no Flower mechanism; a V2 macro would gate on 60 s remaining (`MatchClock.getRemainingMs()`) |
 | G411 | no hoarding to deny the opponent | — |
 | G415 | no grabbing/entangling field elements; a concave alignment shape around a FLOWER is allowed | FLOWER alignment guide is legal |
 | G416 / R105 | expansion limits must be **physically** constrained; software limits do not satisfy R105 | soft limits are a convenience only |

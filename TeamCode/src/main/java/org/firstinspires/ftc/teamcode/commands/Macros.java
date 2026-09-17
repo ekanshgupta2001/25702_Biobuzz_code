@@ -23,6 +23,7 @@ import org.firstinspires.ftc.teamcode.util.math.Angles;
 
 import java.util.Locale;
 import java.util.function.BooleanSupplier;
+import java.util.function.IntSupplier;
 import java.util.function.Supplier;
 
 /**
@@ -40,7 +41,9 @@ import java.util.function.Supplier;
  *       {@link Outcome#RUNNING}.</li>
  *   <li><b>Declares its resources through what it composes.</b> Requirements come from the
  *       subsystem commands inside the group, so scheduling a macro suspends the default commands
- *       it needs and ending it restores them. Nothing here touches hardware directly.</li>
+ *       it needs and ending it restores them. Nothing here touches hardware directly: the two
+ *       hand-written commands ({@link ShootCycle}, {@link #aimCore}) call subsystem intent setters
+ *       under an explicit requirement.</li>
  *   <li><b>Builds paths at start.</b> Paths are built inside {@code followLazyCommand} suppliers
  *       when the command starts, from where the robot is then, never stored.</li>
  * </ol>
@@ -55,10 +58,12 @@ import java.util.function.Supplier;
  * translating. {@link #shootOne()} and {@link #shootAll()} never require the drivetrain, so driving
  * and aiming continue through a shot; {@link #aimAndShootAll} does both in sequence for autonomous.
  *
- * <p><b>Shooting without sensors</b> (the first-event robot) is metered by time: for each piece the
- * storage transport and the transfer run <em>together</em> for {@link #SENSORLESS_FEED_PULSE_MS},
- * then the macro waits for the flywheel to recover before the next piece. The side wheels never push
- * the queue into a stopped transfer, and {@link #getShotsFired()} is honestly a pulse count.
+ * <p><b>The shooting cycle is one command</b>, {@link ShootCycle}, a state machine with no Ivy
+ * hand-off loops between its steps (each costs a whole loop). <b>Without sensors</b> (the first-event
+ * robot) it is metered by time: for each piece the storage transport and the transfer run
+ * <em>together</em> for {@link #SENSORLESS_FEED_PULSE_MS}, then the flywheel recovers before the
+ * next piece. The side wheels never push the queue into a stopped transfer, and
+ * {@link #getShotsFired()} is honestly a pulse count.
  *
  * <p><b>Without a storage-entrance sensor the count is unknowable in teleop</b> (it only rises on
  * that sensor's edge or through {@code setCount}), so {@link #piecesOnBoard()} treats a zero count as
@@ -231,10 +236,9 @@ public class Macros {
     /**
      * The flywheel hold that rides alongside a shooting macro from its first tick to its last. It
      * starts inside {@code Scheduler.schedule()}, right after the hold it displaces (Teleop's armed
-     * flywheel, ended by Ivy's OVERRIDE with an {@code idle()}), so the wheel never sees a zero
-     * target between the two holds and {@code Shooter.atSpeed()}'s latch is not reset. Before this
-     * the macro's own hold started two hand-off ticks later and every armed shot began with one
-     * loop of {@code setVelocity(0)} (review of 2026-09-16). With nothing on board it is a no-op:
+     * flywheel, ended by Ivy's OVERRIDE), so the wheel never sees a zero target between the two
+     * holds and {@code Shooter.atSpeed()}'s latch is not reset; the hold's end leaves the target to
+     * the next owner for the same reason on the way out. With nothing on board it is a no-op:
      * NO_TARGET never touches the shooter.
      */
     private Command heldFlywheel() {
@@ -279,27 +283,29 @@ public class Macros {
 
     // ---- Shooting ----
 
+    /** One {@link ShootCycle} for {@code pieces}; every counted shot bumps {@link #getShotsFired()}. */
+    private Command shootCycle(IntSupplier pieces) {
+        return ShootCycle.command(robot, pieces, () -> shotsFired++);
+    }
+
     /**
-     * Spins up, moves one piece storage → transfer → flywheel, and idles the wheel. The shooter is
-     * held by {@link #heldFlywheel()} from the macro's first tick to its last, so the default
-     * command cannot wind it down under the piece and an already-armed wheel is never told to stop
-     * on the way in; the spin-up wait itself requires nothing. NO_TARGET with nothing on board.
+     * Spins up, moves one piece storage → transfer → flywheel ({@link ShootCycle}), and hands the
+     * wheel back. The shooter is held by {@link #heldFlywheel()} from the macro's first tick to its
+     * last, so the default command cannot wind it down under the piece and an already-armed wheel
+     * is never told to stop on the way in. NO_TARGET with nothing on board; the conditional is
+     * what guarantees that case never touches the storage or transfer.
      */
     public Command shootOne() {
-        final int[] shots = new int[1];
         final boolean[] hadPieces = new boolean[1];
-        Command work = bounded(
-                sequential(robot.shooter.waitForSpeedCommand(), feedOneCore(shots, () -> false)),
-                SHOOT_ONE_TIMEOUT_MS);
         return reporting("shootOne",
                 sequential(
                         instant(() -> {
-                            shots[0] = 0;
                             shotsFired = 0;
                             hadPieces[0] = piecesOnBoard() > 0;
                         }),
-                        conditional(() -> hadPieces[0], work, noop())),
-                () -> shots[0] >= 1 ? Outcome.SUCCESS
+                        conditional(() -> hadPieces[0],
+                                bounded(shootCycle(() -> 1), SHOOT_ONE_TIMEOUT_MS), noop())),
+                () -> shotsFired >= 1 ? Outcome.SUCCESS
                         : hadPieces[0] ? Outcome.TIMED_OUT : Outcome.NO_TARGET,
                 heldFlywheel());
     }
@@ -309,17 +315,16 @@ public class Macros {
      * as were on board at the start; {@link #getShotsFired()} reports a partial run.
      */
     public Command shootAll() {
-        final int[] shots = new int[1];
         final int[] onBoard = new int[1];
         return reporting("shootAll",
                 sequential(
                         instant(() -> {
-                            shots[0] = 0;
                             shotsFired = 0;
                             onBoard[0] = piecesOnBoard();
                         }),
-                        conditional(() -> onBoard[0] > 0, shootAllCore(shots, onBoard), noop())),
-                () -> shootAllOutcome(shots[0], onBoard[0]),
+                        conditional(() -> onBoard[0] > 0,
+                                bounded(shootCycle(() -> onBoard[0]), SHOOT_ALL_TIMEOUT_MS), noop())),
+                () -> shootAllOutcome(shotsFired, onBoard[0]),
                 heldFlywheel());
     }
 
@@ -330,12 +335,10 @@ public class Macros {
      * spins up during the aim ({@link #heldFlywheel()}), not after it.
      */
     public Command aimAndShootAll(Pose target, int minTagId, int maxTagId) {
-        final int[] shots = new int[1];
         final int[] onBoard = new int[1];
         return reporting("aimShootAll",
                 sequential(
                         instant(() -> {
-                            shots[0] = 0;
                             shotsFired = 0;
                             onBoard[0] = piecesOnBoard();
                         }),
@@ -344,124 +347,16 @@ public class Macros {
                         // piece kept on board scores nothing, a near miss might.
                         conditional(() -> onBoard[0] > 0,
                                 sequential(bounded(aimCore(target, minTagId, maxTagId), AIM_TIMEOUT_MS),
-                                        shootAllCore(shots, onBoard)),
+                                        bounded(shootCycle(() -> onBoard[0]), SHOOT_ALL_TIMEOUT_MS)),
                                 noop())),
-                () -> shootAllOutcome(shots[0], onBoard[0]),
+                () -> shootAllOutcome(shotsFired, onBoard[0]),
                 heldFlywheel());
-    }
-
-    private Command shootAllCore(int[] shots, int[] onBoard) {
-        // Unrolled to CAPACITY guarded steps rather than Ivy's repeat(): a sequential that is
-        // interrupted (by the timeout) before it reaches a Repeat child calls end() on the
-        // never-started Repeat, which NPEs on its null command list (docs/01 B.5 trap 8).
-        // CAPACITY + 1 feed steps: the queue holds CAPACITY and the lift can hold one more.
-        final int[] attempts = new int[1];
-        final int feedSteps = Storage.CAPACITY + 1;
-        Command[] steps = new Command[feedSteps + 1];
-        steps[0] = sequential(instant(() -> attempts[0] = 0), robot.shooter.waitForSpeedCommand());
-        for (int i = 1; i <= feedSteps; i++) {
-            // attempts is bumped before the feed, so "more pieces" is judged after this one.
-            steps[i] = conditional(() -> attempts[0] < onBoard[0],
-                    sequential(instant(() -> attempts[0]++),
-                            feedOneCore(shots, () -> attempts[0] < onBoard[0])),
-                    noop());
-        }
-        // Nothing in here requires the shooter: heldFlywheel() in the enclosing reporting group owns
-        // it for the whole macro, so no two siblings ever set its target (fixthese C7).
-        return bounded(sequential(steps), SHOOT_ALL_TIMEOUT_MS);
     }
 
     private static Outcome shootAllOutcome(int shots, int onBoard) {
         if (onBoard == 0) return Outcome.NO_TARGET;
         if (shots == 0) return Outcome.TIMED_OUT;
         return shots >= onBoard ? Outcome.SUCCESS : Outcome.TIMED_OUT;
-    }
-
-    /**
-     * The storage → transfer → flywheel hand-off for one piece, then the flywheel's recovery;
-     * requires storage and transfer. The caller holds the shooter. Every per-shot flag is reset in
-     * the leading instant so no step can inherit a previous piece's state.
-     *
-     * <p>With an exit sensor the advance ends on the edge that says the piece reached the transfer,
-     * and the transfer leg follows. Without one there is no edge to end on, so the advance is a
-     * timed pulse run <em>together</em> with the transfer leg: the side wheels never push the queue
-     * into a stopped transfer for seconds at a time (fixthese B2). Either way the shot is counted
-     * only when the sensors that exist agree, and without an exit sensor the storage count is
-     * dead-reckoned down by one so the intake interlock releases.
-     *
-     * @param morePieces read after the hand-off: true when another piece follows, so the flywheel
-     *                   recovery is waited for; false after the last piece, when only the short
-     *                   dwell runs (nothing is fed into a slowed wheel, so nothing to wait for).
-     */
-    private Command feedOneCore(int[] shots, BooleanSupplier morePieces) {
-        final int[] exitsAtStart = new int[1];
-        final boolean[] preloaded = new boolean[1];
-        final boolean[] staged = new boolean[1];
-        Command handoff = robot.storage.hasExitSensor()
-                ? sequential(
-                        conditional(() -> preloaded[0], noop(), robot.storage.advanceOneCommand()),
-                        transferLeg(staged))
-                : parallel(
-                        robot.storage.advanceForMsCommand(SENSORLESS_FEED_PULSE_MS),
-                        transferLeg(staged));
-        return sequential(
-                instant(() -> {
-                    exitsAtStart[0] = robot.storage.getExitEvents();
-                    preloaded[0] = robot.transfer.hasPieceInLift() || robot.transfer.pieceAtFeed();
-                    // Without a feed sensor the timed pulse is taken to have staged the piece; with
-                    // one, the sensed leg records what the sensor saw after the lift.
-                    staged[0] = !robot.transfer.hasFeedSensor();
-                }),
-                handoff,
-                afterShot(morePieces),
-                instant(() -> {
-                    if (!pieceWasShot(exitsAtStart[0], preloaded[0], staged[0])) return;
-                    shots[0]++;
-                    shotsFired = shots[0];
-                    if (!robot.storage.hasExitSensor()) robot.storage.markExited();
-                }));
-    }
-
-    /**
-     * One piece through the transfer into the flywheel. With a feed sensor: lift until staged, note
-     * it, feed until clear. Without one: a single {@link #SENSORLESS_FEED_PULSE_MS} pulse at feed
-     * speed ("lift" and "feed" are the same motor, so two timed speeds would be theatre). The
-     * sensorless leg is the bare command, not a sequential: a sequential hands off one child per
-     * tick, and the storage must start in the same tick as the transfer, never a loop before it.
-     */
-    private Command transferLeg(boolean[] staged) {
-        if (robot.transfer.hasFeedSensor()) {
-            return sequential(
-                    robot.transfer.liftOneCommand(),
-                    instant(() -> staged[0] = robot.transfer.pieceAtFeed()),
-                    robot.transfer.feedCommand());
-        }
-        return robot.transfer.feedForMsCommand(SENSORLESS_FEED_PULSE_MS);
-    }
-
-    /**
-     * After a piece has gone through the wheel. With another piece to come: a short minimum so the
-     * speed dip has begun, then wait for the wheel to come back up, bounded (a second piece fed into
-     * a slowed wheel is a short shot). After the last piece: only the minimum dwell, so the wheel is
-     * never idled with the piece still in it, but no time is spent waiting for a recovery nobody
-     * needs. Nothing to wait for without a shooter.
-     */
-    private Command afterShot(BooleanSupplier morePieces) {
-        if (!robot.shooter.isAvailable()) return noop();
-        return conditional(morePieces, flywheelRecovery(), waitMs(Shooter.SHOT_RECOVERY_MIN_MS));
-    }
-
-    private Command flywheelRecovery() {
-        return sequential(
-                waitMs(Shooter.SHOT_RECOVERY_MIN_MS),
-                race(waitUntil(robot.shooter::atSpeed), waitMs(Shooter.SHOT_RECOVERY_TIMEOUT_MS)));
-    }
-
-    private boolean pieceWasShot(int exitsAtStart, boolean preloaded, boolean staged) {
-        boolean left = !robot.storage.hasExitSensor() || preloaded
-                || robot.storage.getExitEvents() > exitsAtStart;
-        boolean fed = !robot.transfer.hasFeedSensor() || (staged && !robot.transfer.pieceAtFeed());
-        return left && fed;
     }
 
     // ---- Aiming ----

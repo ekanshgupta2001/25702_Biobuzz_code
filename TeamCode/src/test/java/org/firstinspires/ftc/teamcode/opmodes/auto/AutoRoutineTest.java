@@ -121,6 +121,7 @@ public class AutoRoutineTest {
             if (motors.moving) {
                 leaveTicks[0]++;
                 lastMoving[0] = motors.lastPowers;
+                assertEquals("the wheel is idled before the leave, not left to stopMechanisms", 0, robot.shooter.getTargetRpm(), EPS);
             }
         });
 

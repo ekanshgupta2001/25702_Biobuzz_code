@@ -64,7 +64,12 @@ public final class AutoRoutine {
                 Waits.bounded(robot.getClock(), robot.macros.shootAll(), SHOOT_BUDGET_MS),
                 // If the budget cut the macro, the macro itself reports CANCELLED (Macros.reporting).
                 Waits.waitMs(robot.getClock(), SETTLE_MS),
-                instant(() -> setPhase("leave")),
+                instant(() -> {
+                    // This routine owns the shooter for the whole run, so the default idle command
+                    // cannot; a hold's end leaves the target to the next owner (Shooter), and that is us.
+                    robot.shooter.idle();
+                    setPhase("leave");
+                }),
                 leaveCommand(leave),
                 instant(() -> {
                     robot.stopMechanisms();

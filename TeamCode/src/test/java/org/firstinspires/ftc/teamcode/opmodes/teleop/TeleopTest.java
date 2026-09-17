@@ -513,7 +513,40 @@ public class TeleopTest {
         assertEquals("still armed", Shooter.SHOOT_RPM, robot.shooter.getTargetRpm(), EPS);
         press(op.gamepad2, g -> g.left_trigger = 1f);
         loop();
+        loop();     // the hold leaves the target; the shooter default idles it on its next loop
         assertEquals(0, robot.shooter.getTargetRpm(), EPS);
+    }
+
+    @Test
+    public void anArmedFlywheelIsNeverStoppedAcrossAShot() {
+        // Round 4: a macro's hold used to idle the wheel in its end, one loop before Teleop re-armed
+        // it, so every armed shot ended with a setVelocity(0) and a reset at-speed latch.
+        initAndStart();
+        robot.storage.setCount(2);
+        shooterMotor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM);
+        press(op.gamepad2, g -> g.left_trigger = 1f);       // ARM_FLYWHEEL
+        loop();
+        release(op.gamepad2);
+        for (int i = 0; i < 10; i++) loop();
+        assertTrue(robot.shooter.atSpeed());
+
+        press(op.gamepad2, g -> g.right_trigger = 1f);      // SHOOT_ONE
+        loop();
+        release(op.gamepad2);
+        assertEquals("shootOne", robot.macros.getActiveName());
+        boolean stopped = false;
+        boolean latchLost = false;
+        int after = 0;
+        for (int i = 0; i < 600; i++) {
+            loop();
+            if (shooterMotor.commandedVelocity == 0) stopped = true;
+            if (!robot.shooter.atSpeed()) latchLost = true;
+            if (robot.macros.getOutcome() != Macros.Outcome.RUNNING && ++after >= 5) break;
+        }
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        assertFalse("the wheel was told to stop somewhere across the shot", stopped);
+        assertFalse("the at-speed latch was lost", latchLost);
+        assertEquals("still armed afterwards", Shooter.SHOOT_RPM, robot.shooter.getTargetRpm(), EPS);
     }
 
     @Test

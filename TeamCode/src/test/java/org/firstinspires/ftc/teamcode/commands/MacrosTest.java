@@ -59,6 +59,11 @@ public class MacrosTest {
         shooterMotor = new FakeDcMotorEx();
         robot = buildRobot(new Drivetrain(follower, clock));
         resetTunables();
+        // As Teleop.onInit does: the defaults are what idle a mechanism once nothing owns it.
+        robot.intake.defaultIdleCommand().schedule();
+        robot.storage.defaultIdleCommand().schedule();
+        robot.transfer.defaultIdleCommand().schedule();
+        robot.shooter.defaultIdleCommand().schedule();
     }
 
     @After
@@ -108,6 +113,7 @@ public class MacrosTest {
         Transfer.FEED_PULSE_MS = 300;
         Transfer.FEED_CLEAR_DWELL_MS = 100;
         Shooter.SPINUP_TIMEOUT_MS = 3000;
+        Shooter.AT_SPEED_HOLD_MS = 100;
         Intake.ANTI_JAM_ENABLED = true;
         Drivetrain.MIN_PATH_MS = 60;
         Drivetrain.TURN_TIMEOUT_MS = 2500;
@@ -167,6 +173,7 @@ public class MacrosTest {
         assertEquals("the timed feed ran at feed speed", Transfer.FEED_TICKS_PER_SEC, transferMotor.maxCommandedVelocity, EPS);
         assertEquals("shooter held at speed during the feed",
                 Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM), shooterMotor.maxCommandedVelocity, EPS);
+        tick();     // the hold leaves the target; the shooter default idles it on its next loop
         assertEquals("everything stopped afterwards", 0, shooterMotor.commandedVelocity, EPS);
         assertEquals(0, transferMotor.commandedVelocity, EPS);
         assertEquals(0, storageMotor.commandedVelocity, EPS);
@@ -241,6 +248,7 @@ public class MacrosTest {
         assertEquals(0, robot.storage.count());
         assertTrue("the flywheel spun up", spinning[0]);
         assertFalse("the flywheel never wound down between pieces", droppedMidRun[0]);
+        tick();     // the default idles the wheel on its next loop
         assertEquals(0, shooterMotor.commandedVelocity, EPS);
     }
 
@@ -387,6 +395,7 @@ public class MacrosTest {
         assertEquals(Macros.Outcome.CANCELLED, robot.macros.getOutcome());
         assertEquals("idle", robot.macros.getActiveName());
         assertFalse((robot.macros.getOutcome() == Macros.Outcome.RUNNING));
+        tick();     // the default idles the wheel on its next loop
         assertEquals("the flywheel was let go", 0, shooterMotor.commandedVelocity, EPS);
     }
 
@@ -417,7 +426,94 @@ public class MacrosTest {
         assertEquals(1, robot.macros.getShotsFired());
         assertFalse("the wheel was told to stop between the two holds", dropped[0]);
         assertFalse("the at-speed latch was reset by a zero target", latchLost[0]);
+        assertEquals("the target is left to the next owner, never zeroed by the hand-over",
+                Shooter.SHOOT_RPM, robot.shooter.getTargetRpm(), EPS);
+        tick();     // nothing re-arms here, so the default idles it on its next loop
         assertEquals("released once the macro is over", 0, shooterMotor.commandedVelocity, EPS);
+    }
+
+    @Test
+    public void theNextPulseStartsTheLoopTheFlywheelRecovers() {
+        // Round 4: the old group tree spent seven idle loops between "flywheel recovered" and the
+        // next pulse. Now the storage and transfer are commanded in the loop atSpeed() turns true.
+        // (atSpeed() ages the band entry live but notices a band exit only in update(), so the dip
+        // is applied and the recovery watched in separate loops.)
+        robot.storage.setCount(2);
+        shooterAtSpeed();
+        final int[] phase = {0};
+        final long[] dipUntil = {0};
+        final boolean[] pulsedOnRecovery = {false};
+        runToCompletion(robot.macros.shootAll(), () -> {
+            long now = clock.nowMs();
+            switch (phase[0]) {
+                case 0:                                              // the first piece just went through
+                    if (robot.macros.getShotsFired() == 1) {
+                        shooterMotor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM / 2);
+                        dipUntil[0] = now + 400;                     // the wheel slows for 400 ms
+                        phase[0] = 1;
+                    }
+                    break;
+                case 1:
+                    if (now >= dipUntil[0]) {
+                        shooterAtSpeed();
+                        phase[0] = 2;
+                    }
+                    break;
+                case 2:                                              // first loop atSpeed() reads true
+                    if (robot.shooter.atSpeed()) phase[0] = 3;
+                    break;
+                case 3:                                              // one loop later: both legs run
+                    pulsedOnRecovery[0] = robot.storage.getMode() == Storage.Mode.ADVANCING
+                            && robot.transfer.getMode() == Transfer.Mode.FEEDING;
+                    phase[0] = 4;
+                    break;
+                default:
+                    break;
+            }
+        });
+        assertEquals("the recovery was observed", 4, phase[0]);
+        assertTrue("the second pulse started in the loop the wheel recovered", pulsedOnRecovery[0]);
+        assertEquals(2, robot.macros.getShotsFired());
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+    }
+
+    @Test
+    public void anArmedWheelFeedsWithinTwoLoopsOfThePress() {
+        robot.storage.setCount(1);
+        shooterAtSpeed();
+        Command armed = robot.shooter.holdSpeedCommand();
+        armed.schedule();
+        for (int i = 0; i < 10; i++) tick();
+        assertTrue(robot.shooter.atSpeed());
+
+        Command shot = robot.macros.shootOne();
+        shot.schedule();
+        tick();     // begin -> the snapshot instant
+        tick();     // the cycle starts and, with the wheel latched, feeds in this same loop
+        assertEquals("the storage pulse is commanded", Storage.Mode.ADVANCING, robot.storage.getMode());
+        assertEquals("with the transfer, in the same loop", Transfer.Mode.FEEDING, robot.transfer.getMode());
+        int ticks = 2;
+        while (Scheduler.isScheduled(shot)) {
+            tick();
+            if (++ticks > MAX_TICKS) fail("macro did not finish");
+        }
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+    }
+
+    @Test
+    public void sensorlessShootAllOfFourFinishesInsideTheSumOfItsTimers() {
+        // Round 4: with no idle hand-off loops the run is its timers plus the at-speed latch and a
+        // handful of loops for the reporting group; the old tree took about 0.7 s more.
+        robot.storage.setCount(4);
+        shooterAtSpeed();
+        int ticks = runToCompletion(robot.macros.shootAll());
+        long ms = ticks * 20L;
+        long timers = 4 * (Macros.SENSORLESS_FEED_PULSE_MS + Shooter.SHOT_RECOVERY_MIN_MS);
+        assertEquals(4, robot.macros.getShotsFired());
+        assertEquals(Macros.Outcome.SUCCESS, robot.macros.getOutcome());
+        assertTrue("four pieces in " + ms + " ms", ms >= timers);
+        assertTrue("four pieces in " + ms + " ms: idle loops crept back in",
+                ms <= timers + Shooter.AT_SPEED_HOLD_MS + 12 * 20);
     }
 
     // ---- Collecting ----

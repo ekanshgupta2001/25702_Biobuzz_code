@@ -33,7 +33,7 @@ public class ShooterTest {
         Shooter.SHOOT_RPM = 3000;
         Shooter.IDLE_RPM = 0;
         Shooter.AT_SPEED_TOLERANCE_RPM = 150;
-        Shooter.AT_SPEED_LOOPS = 5;
+        Shooter.AT_SPEED_HOLD_MS = 100;
         Shooter.SPINUP_TIMEOUT_MS = 3000;
         Shooter.CUSTOM_PIDF = false;
         Shooter.SECOND_MOTOR_DIRECTION = DcMotorSimple.Direction.FORWARD;
@@ -44,6 +44,11 @@ public class ShooterTest {
         Scheduler.reset();
         Shooter.CUSTOM_PIDF = false;
         Shooter.SECOND_MOTOR_DIRECTION = DcMotorSimple.Direction.FORWARD;
+    }
+
+    /** Loops of the 20 ms tick that make up the at-speed hold. */
+    private static int latchLoops() {
+        return (int) (Shooter.AT_SPEED_HOLD_MS / 20);
     }
 
     private void ticks(int n) {
@@ -74,7 +79,7 @@ public class ShooterTest {
         assertTrue(Scheduler.isScheduled(wait));
 
         motor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM - 50);
-        ticks(Shooter.AT_SPEED_LOOPS);                    // in band, held for the latch
+        ticks(latchLoops());                    // in band, held for the latch
         tick();
         assertFalse(Scheduler.isScheduled(wait));
         assertEquals(Shooter.Mode.READY, shooter.getMode());
@@ -92,7 +97,7 @@ public class ShooterTest {
     }
 
     @Test
-    public void holdSpeedIdlesTheWheelWhenInterruptedAndTheDefaultResumes() {
+    public void holdSpeedLeavesTheTargetAndTheDefaultIdlesItNextLoop() {
         shooter.defaultIdleCommand().schedule();
         tick();
         assertEquals(0, motor.commandedVelocity, EPS);
@@ -102,36 +107,41 @@ public class ShooterTest {
         tick();
         assertEquals(Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM), motor.commandedVelocity, EPS);
 
+        // Round 4: the hold's end leaves the target to whoever takes the wheel next, so a macro's
+        // hold handing over to the operator's re-armed hold never writes a zero in between.
         Scheduler.cancel(hold);
         tick();
-        assertEquals("idle again once nothing owns the shooter", 0, motor.commandedVelocity, EPS);
+        assertEquals("the target is left to the next owner", Shooter.SHOOT_RPM, shooter.getTargetRpm(), EPS);
+        tick();
+        assertEquals("idle again once the default has had its loop", 0, motor.commandedVelocity, EPS);
         assertEquals(Shooter.Mode.IDLE, shooter.getMode());
     }
 
     @Test
     public void atSpeedIsFalseForAZeroTargetEvenIfTheWheelIsTurning() {
         motor.measuredVelocity = 500;
-        ticks(Shooter.AT_SPEED_LOOPS + 1);
+        ticks(latchLoops() + 1);
         assertFalse(shooter.atSpeed());
         assertEquals(Shooter.Mode.IDLE, shooter.getMode());
     }
 
     @Test
-    public void atSpeedNeedsConsecutiveInBandLoops() {
-        // fixthese C3: one noisy sample through the band must not release a shot.
+    public void atSpeedNeedsTheBandHeldForAtSpeedHoldMs() {
+        // fixthese C3: one noisy sample through the band must not release a shot. Round 4: the hold
+        // is a time, read live, so a slow loop does not stretch it.
         shooter.spinUp();
         motor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM);
-        ticks(Shooter.AT_SPEED_LOOPS - 1);
+        ticks(latchLoops() - 1);
         assertTrue(shooter.inBandNow());
-        assertFalse("four in a row is not yet ready", shooter.atSpeed());
+        assertFalse("80 ms in band is not yet ready", shooter.atSpeed());
         tick();
-        assertTrue("five in a row is", shooter.atSpeed());
+        assertTrue("100 ms is", shooter.atSpeed());
 
         motor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM - 2 * Shooter.AT_SPEED_TOLERANCE_RPM);
         tick();
         assertFalse("one sample out of band resets the latch", shooter.atSpeed());
         motor.measuredVelocity = Shooter.rpmToTicksPerSec(Shooter.SHOOT_RPM);
-        ticks(Shooter.AT_SPEED_LOOPS - 1);
+        ticks(latchLoops() - 1);
         assertFalse(shooter.atSpeed());
     }
 

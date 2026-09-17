@@ -22,9 +22,9 @@ import org.firstinspires.ftc.teamcode.util.time.Clock;
  * <h2>Ready means at speed</h2>
  * A shot released before the wheel is at speed is a short shot. {@link #atSpeed()} is the
  * contract every shooting macro waits on, and {@link #holdSpeedCommand()} is how a macro keeps
- * the wheel owned (and spinning) for the whole feed: the default command idles the wheel the
- * moment nothing holds the resource, so a spin-up that ends before the feed would let the wheel
- * wind down under the piece.
+ * the wheel owned (and spinning) for the whole feed: the default command idles the wheel on its
+ * next loop once nothing holds the resource, so a spin-up that ends before the feed would let the
+ * wheel wind down under the piece.
  *
  * <p>Speeds are in RPM at the flywheel encoder, converted with {@link #TICKS_PER_REV}, which must
  * be measured for the motor fitted.
@@ -51,10 +51,11 @@ public class Shooter {
     /**
      * At 3000 RPM on a 28-tick encoder (1400 t/s) the hub's velocity estimate wanders more than the
      * old 100 RPM (47 t/s) band, so the wait always ran to its timeout. 5 % of target, and it must
-     * hold for {@link #AT_SPEED_LOOPS} consecutive loops before the wheel counts as ready.
+     * hold for {@link #AT_SPEED_HOLD_MS} before the wheel counts as ready.
      */
     public static double AT_SPEED_TOLERANCE_RPM = 150;
-    public static int AT_SPEED_LOOPS = 5;
+    /** How long the speed must stay in band before {@link #atSpeed()}: time, so the loop rate does not change it. */
+    public static long AT_SPEED_HOLD_MS = 100;
     /**
      * Velocity-loop gains for the flywheel motor(s), applied only when {@link #CUSTOM_PIDF} is true.
      * Off until measured with {@code Bench: Shooter}: the SDK's per-motor-type defaults may well be
@@ -85,8 +86,8 @@ public class Shooter {
     private final VelocityMotor flywheel2;
     private final Clock clock;
     private double targetRpm = 0;
-    /** Consecutive {@link #update()} loops with the measured speed inside the tolerance band. */
-    private int inBandLoops = 0;
+    /** Clock time the measured speed entered the tolerance band, or -1 while it is outside. */
+    private long inBandSince = -1;
 
     public Shooter(HardwareMap hardwareMap) {
         this(hardwareMap, HardwareNames.SHOOTER_MOTOR, HardwareNames.SHOOTER_MOTOR_2, Clock.system());
@@ -187,11 +188,12 @@ public class Shooter {
 
     /**
      * True once the measured speed has been within {@link #AT_SPEED_TOLERANCE_RPM} of a non-zero
-     * target for {@link #AT_SPEED_LOOPS} consecutive loops (counted in {@link #update()}), so one
-     * noisy sample through the band cannot release a shot.
+     * target for {@link #AT_SPEED_HOLD_MS} (the band entry is noted in {@link #update()}, the age
+     * read live against the clock, so a slow loop does not lengthen it), so one noisy sample
+     * through the band cannot release a shot.
      */
     public boolean atSpeed() {
-        return inBandLoops >= AT_SPEED_LOOPS;
+        return inBandSince >= 0 && clock.nowMs() - inBandSince >= AT_SPEED_HOLD_MS;
     }
 
     /** The raw, single-sample band check; {@link #atSpeed()} is the latched version macros use. */
@@ -208,7 +210,8 @@ public class Shooter {
         flywheel2.setDirection(SECOND_MOTOR_DIRECTION);   // no-op unless it changed (fixthese R2-A9)
         flywheel.update();
         flywheel2.update();
-        inBandLoops = inBandNow() ? inBandLoops + 1 : 0;
+        if (!inBandNow()) inBandSince = -1;
+        else if (inBandSince < 0) inBandSince = clock.nowMs();
     }
 
     // ---- Ivy commands ----
@@ -227,12 +230,18 @@ public class Shooter {
                         || clock.nowMs() - startedAt[0] >= SPINUP_TIMEOUT_MS);
     }
 
-    /** Holds {@link #SHOOT_RPM} until interrupted, then idles. */
+    /**
+     * Holds {@link #SHOOT_RPM} until interrupted. Its end leaves the target alone on purpose: the
+     * next owner (a macro's hold, or the operator's re-armed hold) takes the wheel over inside the
+     * same {@code Scheduler.schedule()} and never sees a zero target, so the at-speed latch
+     * survives the hand-over in both directions; when nothing re-holds, {@link #defaultIdleCommand()}
+     * idles the wheel on its next loop. A routine that owns the shooter for longer than a shot (the
+     * auto) must call {@link #idle()} itself once it is done shooting.
+     */
     public Command holdSpeedCommand() {
         return Command.build()
                 .setStart(this::spinUp)
                 .setDone(() -> false)
-                .setEnd(ec -> idle())
                 .requiring(this);
     }
 

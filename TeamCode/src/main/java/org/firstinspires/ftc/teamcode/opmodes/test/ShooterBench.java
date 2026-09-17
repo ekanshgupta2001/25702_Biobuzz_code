@@ -113,8 +113,8 @@ public class ShooterBench extends BenchOpMode {
         telemetry.addData("Flywheel", "%s  target %.0f rpm (dpad)  measured %.0f rpm = %.0f t/s",
                 spinning ? "ON" : "off", Shooter.SHOOT_RPM, rpm, Shooter.rpmToTicksPerSec(rpm));
         telemetry.addData("Ticks/rev", "%.0f assumed: check measured t/s x 60 / true rpm", Shooter.TICKS_PER_REV);
-        telemetry.addData("Ready", "in band now %s   atSpeed (latched %d loops) %s   tolerance +/-%.0f rpm",
-                shooter.inBandNow(), Shooter.AT_SPEED_LOOPS, shooter.atSpeed(), Shooter.AT_SPEED_TOLERANCE_RPM);
+        telemetry.addData("Ready", "in band now %s   atSpeed (held %d ms) %s   tolerance +/-%.0f rpm",
+                shooter.inBandNow(), Shooter.AT_SPEED_HOLD_MS, shooter.atSpeed(), Shooter.AT_SPEED_TOLERANCE_RPM);
         telemetry.addData("Spin-up", spinUpMs >= 0 ? fmt("%d ms", spinUpMs) : (spinning ? "..." : "n/a"));
         telemetry.addData("Settled rpm", rpmWhileReady.status("%.0f") + "  (spread -> AT_SPEED_TOLERANCE_RPM)");
         telemetry.addData("Last shot", "dip to %s rpm   recovery %s   (-> SHOT_RECOVERY_MIN_MS / TIMEOUT_MS)",

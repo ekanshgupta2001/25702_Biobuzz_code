@@ -214,7 +214,7 @@ public class BenchOpModesTest {
 
         shooterMotor.measuredVelocity = Shooter.rpmToTicksPerSec(3100);
         press(op.gamepad1, g -> { });
-        for (int i = 0; i <= Shooter.AT_SPEED_LOOPS; i++) loop(op);
+        for (int i = 0; i <= Shooter.AT_SPEED_HOLD_MS / 20; i++) loop(op);
         assertTrue(robot.shooter.atSpeed());
         assertTrue(telemetry.joined(), telemetry.contains("Spin-up:"));
 

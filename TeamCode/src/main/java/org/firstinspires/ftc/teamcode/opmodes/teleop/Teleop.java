@@ -70,6 +70,15 @@ public class Teleop extends MatchOpMode {
     private boolean inheritedCount = false;
     /** TIPs of our HIVE the operator has counted; the up-CELL flips on each. */
     private int tipsCounted = 0;
+    /**
+     * The CELL the shooter is aimed at, its ground-plane pose and its tag range, recomputed by
+     * {@link #retarget()} only when the alliance or the TIP count changes: the aim-lock supplier
+     * runs every centred-stick loop and used to rebuild all three (two or three {@code Pose}s and
+     * an array) each time.
+     */
+    private Field.CellSide targetSide = Field.CellSide.FAR;
+    private Pose targetCell = null;
+    private int[] targetTags = {0, 0};
 
     private Command activeMacro = null;
     private boolean flywheelArmed = false;
@@ -142,6 +151,14 @@ public class Teleop extends MatchOpMode {
     private void applyAlliance() {
         robot.drivetrain.setDriverHeadingOffset(Field.driverForwardHeading(alliance));
         robot.setAlliance(alliance);                    // G408: which NECTAR is the opponent's
+        retarget();
+    }
+
+    /** The up-CELL for this alliance after the TIPs counted so far, from {@code game/}. */
+    private void retarget() {
+        targetSide = Field.upCellSide(alliance, tipsCounted);
+        targetCell = Field.cell(alliance, targetSide);
+        targetTags = Field.tagRange(alliance, targetSide);
     }
 
     @Override
@@ -163,8 +180,7 @@ public class Teleop extends MatchOpMode {
         telemetry.addData("Pose from auto?", inheritedPose ? "yes" : "no - press Y once facing away from the driver wall");
         telemetry.addData("Pieces", piecesLine() + (inheritedCount ? "  (from auto)" : ""));
         telemetry.addData("Sensors", robot.sensingSummary());
-        int[] tags = tagRange();
-        telemetry.addData("Aim target", alliance + " " + targetSide() + " CELL, tags " + tags[0] + "-" + tags[1]);
+        telemetry.addData("Aim target", alliance + " " + targetSide + " CELL, tags " + targetTags[0] + "-" + targetTags[1]);
         telemetry.addData("Pose", robot.drivetrain.getPose());
         telemetry.addData("Drive", driveStatus());
         if (loggerError != null) telemetry.addData("!! Logger FAILED", loggerError);
@@ -278,7 +294,8 @@ public class Teleop extends MatchOpMode {
             if (!flywheelArmed) stopFlywheelHold();
         }
         if (in.pressed(Controls.HIVE_TIPPED)) {
-            tipsCounted++;       // the aim lock reads the target live, so it re-targets at once
+            tipsCounted++;
+            retarget();          // the aim lock reads the fields live, so it re-targets at once
         }
         // The sensorless weeks: the operator is the entrance sensor. Four on board makes isFull()
         // true, which holds the intake roller (the G407 system) and makes Shoot All fire exactly
@@ -298,10 +315,7 @@ public class Teleop extends MatchOpMode {
     private void updateAimLock(Controls.Snapshot in) {
         boolean wanted = robot.drivetrain.isAvailable() && in.axis(Controls.AIM_LOCK) > AIM_LOCK_TRIGGER;
         if (wanted && !robot.drivetrain.isAimLocked()) {
-            robot.drivetrain.setAimLock(() -> {
-                int[] tags = tagRange();
-                return robot.macros.aimHeading(targetCell(), tags[0], tags[1]);
-            });
+            robot.drivetrain.setAimLock(() -> robot.macros.aimHeading(targetCell, targetTags[0], targetTags[1]));
         } else if (!wanted && robot.drivetrain.isAimLocked()) {
             robot.drivetrain.clearAimLock();
         }
@@ -377,18 +391,6 @@ public class Teleop extends MatchOpMode {
 
     // ---- Season targets, from game/ ----
 
-    private Field.CellSide targetSide() {
-        return Field.upCellSide(alliance, tipsCounted);
-    }
-
-    private Pose targetCell() {
-        return Field.cell(alliance, targetSide());
-    }
-
-    private int[] tagRange() {
-        return Field.tagRange(alliance, targetSide());
-    }
-
     private Pose alliancePose(Pose bluePose) {
         return FieldConstants.forAlliance(bluePose, alliance);
     }
@@ -446,7 +448,7 @@ public class Teleop extends MatchOpMode {
         telemetry.addData("Macro", robot.macros.getStatus());
         telemetry.addData("Drive", driveStatus());
         telemetry.addData("Aim", (robot.drivetrain.isAimLocked() ? "LOCKED on " : Controls.AIM_LOCK.button() + " aims at ")
-                + alliance + " " + targetSide() + " CELL");
+                + alliance + " " + targetSide + " CELL");
         telemetry.addData("Flywheel", flywheelArmed
                 ? String.format(Locale.US, "ARMED  %.0f rpm", robot.shooter.getRpm()) : "off");
 
@@ -503,16 +505,14 @@ public class Teleop extends MatchOpMode {
                 robot.storage.getExitEvents(), robot.storage.hasExitSensor() ? "" : "  (no exit sensor)");
         telemetry.addData("Transfer", "%s  lift %s  feed %s", robot.transfer.getMode(),
                 robot.transfer.hasPieceInLift(), robot.transfer.hasFeedSensor() ? robot.transfer.pieceAtFeed() : "n/a");
-        int[] aimTags = tagRange();
-        double aim = robot.macros.aimHeading(targetCell(), aimTags[0], aimTags[1]);
+        double aim = robot.macros.aimHeading(targetCell, targetTags[0], targetTags[1]);
         telemetry.addData("Aim heading", Double.isNaN(aim) ? "n/a"
                 : String.format(Locale.US, "%.1f deg (%s)", Math.toDegrees(aim), robot.drivetrain.isAimLocked() ? "locked" : "off"));
         telemetry.addData("Shooter", "%.0f / %.0f rpm  %s", robot.shooter.getRpm(),
                 robot.shooter.getTargetRpm(), robot.shooter.getMode());
         telemetry.addLine();
-        int[] tags = tagRange();
         telemetry.addData("Limelight", "%s  tag tx %.1f", robot.limelight.isAvailable() ? "ok" : "MISSING",
-                robot.limelight.getTagTx(tags[0], tags[1]));
+                robot.limelight.getTagTx(targetTags[0], targetTags[1]));
         telemetry.addData("Sensors hue", "entrance %.0f  full %.0f  transfer %.0f  feed %.0f",
                 robot.storageEntranceSensor.getHue(), robot.storageFullSensor.getHue(),
                 robot.transferSensor.getHue(), robot.shooterFeedSensor.getHue());

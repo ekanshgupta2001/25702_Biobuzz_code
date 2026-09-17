@@ -232,17 +232,58 @@ public class RobotTest {
         FakeColorRangeSensor feed = new FakeColorRangeSensor();
         robot = robotWithSensors(entrance, full, transfer, feed);
         for (int i = 0; i < 6; i++) robot.readSensors();
-        assertEquals(6, entrance.colorReads);
-        assertEquals(2, full.colorReads);
-        assertEquals(2, transfer.colorReads);
-        assertEquals(2, feed.colorReads);
-        assertEquals("distance rides along with each colour read", 2, feed.distanceReads);
+        assertEquals(6, entrance.distanceReads);
+        assertEquals(2, full.distanceReads);
+        assertEquals(2, transfer.distanceReads);
+        assertEquals(2, feed.distanceReads);
+        // Round 4: presence is judged by distance, so the colour half of every V3 read is skipped;
+        // the entrance reads colour only once the hues are measured and the G408 reject is wired.
+        assertEquals("no hue consumer: no colour transaction", 0, entrance.colorReads);
+        assertEquals(0, full.colorReads);
+        assertEquals(0, transfer.colorReads);
+        assertEquals(0, feed.colorReads);
 
         // With one presence sensor fitted it is read every loop, so nothing changes on today's robot.
         FakeColorRangeSensor onlyFull = new FakeColorRangeSensor();
         robot = robotWithSensors(null, onlyFull, null, null);
         for (int i = 0; i < 6; i++) robot.readSensors();
-        assertEquals(6, onlyFull.colorReads);
+        assertEquals(6, onlyFull.distanceReads);
+        assertEquals(0, onlyFull.colorReads);
+    }
+
+    @Test
+    public void anUntrustedEntranceSensorIsNotReadAtAll() {
+        // A hue-only sensor with unmeasured windows is wired to nothing (R2-A3), so the loop does not
+        // pay its I2C transaction either; once the hues are measured it is read, colour and all.
+        assertFalse(PieceType.HUES_CALIBRATED);
+        FakeColorOnlySensor entrance = new FakeColorOnlySensor();
+        robot = robotWithSensors(entrance, null, null, null);
+        assertFalse(robot.storage.hasEntranceSensor());
+        for (int i = 0; i < 6; i++) robot.readSensors();
+        assertEquals("fitted, not trusted, not read", 0, entrance.colorReads);
+
+        PieceType.HUES_CALIBRATED = true;
+        try {
+            robot = robotWithSensors(entrance, null, null, null);
+            assertTrue(robot.storage.hasEntranceSensor());
+            for (int i = 0; i < 6; i++) robot.readSensors();
+            assertEquals("hue is the presence signal here, so it is read every loop", 6, entrance.colorReads);
+        } finally {
+            PieceType.HUES_CALIBRATED = false;
+        }
+    }
+
+    @Test
+    public void benchesReadEverySensorInFull() {
+        FakeColorRangeSensor entrance = new FakeColorRangeSensor();
+        FakeColorRangeSensor full = new FakeColorRangeSensor();
+        robot = robotWithSensors(entrance, full, null, null);
+        robot.setReadAllSensorData(true);
+        for (int i = 0; i < 6; i++) robot.readSensors();
+        assertEquals(6, entrance.colorReads);
+        assertEquals(6, entrance.distanceReads);
+        assertEquals(6, full.colorReads);
+        assertEquals(6, full.distanceReads);
     }
 
     @Test

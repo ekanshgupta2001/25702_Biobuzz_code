@@ -87,8 +87,8 @@ public class Intake {
     private boolean rejecting = false;
     private long rejectUntilMs = 0;
     private int rejections = 0;
-    /** Sampled once per {@link #update()}: a motor current read is its own bus transaction. */
-    private double currentAmps = 0;
+    /** Sampled by {@link #update()} while the roller pulls; NaN otherwise (a current read is its own bus transaction). */
+    private double currentAmps = Double.NaN;
 
     /** The stall/un-jam state machine. Lives in {@code util/} so it can be unit tested. */
     private final JamDetector jamDetector = new JamDetector();
@@ -165,7 +165,10 @@ public class Intake {
         return mode == Mode.INTAKING && fullSupplier.getAsBoolean();
     }
 
-    /** The current sampled by this loop's {@link #update()}; free to read as often as wanted. */
+    /**
+     * The current sampled by this loop's {@link #update()}, free to read as often as wanted; NaN on
+     * a loop the roller was idle, blocked or reversing, when nothing sampled it.
+     */
     public double getCurrentAmps() {
         return currentAmps;
     }
@@ -208,9 +211,6 @@ public class Intake {
     public void update() {
         if (!motor.isAvailable()) return;
         long now = clock.nowMs();
-        // Motor current is not in the hub's bulk read: one ADC transaction here, and the jam
-        // detector, the match log and the telemetry all read this field (fixthese R2-A1).
-        currentAmps = motor.getCurrentAmps();
 
         // G408 first: a piece being thrown back out is neither a capture nor a stall.
         if (rejecting && now >= rejectUntilMs) rejecting = false;
@@ -221,22 +221,28 @@ public class Intake {
             rejections++;
         }
         if (rejecting) {
+            currentAmps = Double.NaN;
             jamDetector.resetTiming();
             motor.write(EJECT_TICKS_PER_SEC);
             return;
         }
 
-        // Pushed in every loop so edits to the public statics reach the detector.
-        jamDetector.configure(
-                STALL_CURRENT_AMPS, STALL_TIMEOUT_MS, UNJAM_DURATION_MS, MAX_UNJAM_ATTEMPTS,
-                HEALTHY_RESET_MS);
-
+        // Motor current is not in the hub's bulk read: one ADC transaction per sample. It only means
+        // anything while the roller is actually pulling (anti-jam, the stall bench), so an idle or
+        // blocked roller is not sampled at all; the jam detector, the match log and the telemetry
+        // all read this one sample (fixthese R2-A1, Round 4).
+        boolean blocked = isBlockedByFullStorage();
+        boolean pulling = mode == Mode.INTAKING && !blocked;
+        currentAmps = pulling ? motor.getCurrentAmps() : Double.NaN;
+        if (pulling) {
+            // Pushed on every pulling loop so edits to the public statics reach the detector.
+            jamDetector.configure(
+                    STALL_CURRENT_AMPS, STALL_TIMEOUT_MS, UNJAM_DURATION_MS, MAX_UNJAM_ATTEMPTS,
+                    HEALTHY_RESET_MS);
+        }
         // Anti-jam applies while actively intaking only; a roller held still against a full
         // storage draws no current worth interpreting.
-        boolean blocked = isBlockedByFullStorage();
-        boolean antiJamEligible = ANTI_JAM_ENABLED && mode == Mode.INTAKING && !blocked;
-
-        if (jamDetector.update(now, antiJamEligible, currentAmps)) {
+        if (jamDetector.update(now, ANTI_JAM_ENABLED && pulling, pulling ? currentAmps : 0)) {
             motor.write(UNJAM_TICKS_PER_SEC);
             return;
         }

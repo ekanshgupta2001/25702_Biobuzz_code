@@ -60,10 +60,15 @@ public class IntakeCommandTest {
     }
 
     @Test
-    public void currentIsReadOnceALoop() {
+    public void currentIsReadOnceALoopWhilePullingAndNeverWhenIdle() {
         // fixthese R2-A1: the jam detector, the match log and the telemetry each used to read the
-        // motor current themselves, and a current read is not in the bulk cache.
+        // motor current themselves, and a current read is not in the bulk cache. Round 4: an idle
+        // roller is not sampled at all, and says so with NaN.
         motor.currentAmps = 2.5;
+        tick();
+        tick();
+        assertEquals("idle: no ADC transaction", 0, motor.currentReads);
+        assertTrue(Double.isNaN(intake.getCurrentAmps()));
         intake.intakeCommand().schedule();
         tick();
         tick();
@@ -211,6 +216,6 @@ public class IntakeCommandTest {
         none.intake();
         none.update();
         assertEquals(0, none.getVelocityTicksPerSec(), EPS);
-        assertEquals(0, none.getCurrentAmps(), EPS);
+        assertTrue("never sampled", Double.isNaN(none.getCurrentAmps()));
     }
 }

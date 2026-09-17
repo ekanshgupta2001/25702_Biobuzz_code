@@ -95,6 +95,14 @@ public class Robot {
     /** The fitted presence sensors, read one per loop in turn (see {@link #readSensors()}). */
     private final List<ColorSensor> presenceSensors = new ArrayList<>();
     private int nextPresenceSensor = 0;
+    /** Whether anything consumes the entrance sensor, and whether its hue is trusted; {@link #wireSuppliers()}. */
+    private boolean entranceRead = false;
+    private boolean classifyTrusted = false;
+    /**
+     * Benches set this so every fitted sensor is read in full (hue and distance) whatever the loop
+     * would consume: the benches are how the hues get measured. Match OpModes leave it false.
+     */
+    private boolean readAllSensorData = false;
 
     private final Clock clock;
     private final List<LynxModule> hubs;
@@ -216,7 +224,8 @@ public class Robot {
     private void wireSuppliers() {
         boolean countTrusted = storageEntranceSensor.isAvailable()
                 && (storageEntranceSensor.hasDistance() || PieceType.HUES_CALIBRATED);
-        boolean classifyTrusted = countTrusted && PieceType.HUES_CALIBRATED;
+        classifyTrusted = countTrusted && PieceType.HUES_CALIBRATED;
+        entranceRead = countTrusted;
         intake.setFullSupplier(storage::isFull);                    // G407: roller held still at 4
         intake.setRejectSupplier(classifyTrusted ? this::opponentNectarAtEntrance : null);   // G408
         storage.setEntranceSupplier(countTrusted ? this::pieceEnteringStorage : null);  // rising edge -> count + 1
@@ -224,6 +233,11 @@ public class Robot {
         transfer.setInLiftSupplier(this::pieceInTransfer);
         storage.setExitSupplier(transferSensor.isAvailable() ? this::pieceInTransfer : null);
         transfer.setAtFeedSupplier(shooterFeedSensor.isAvailable() ? this::pieceAtShooterFeed : null);
+    }
+
+    /** Benches read every fitted sensor in full; see {@link #readSensors()}. */
+    public void setReadAllSensorData(boolean all) {
+        readAllSensorData = all;
     }
 
     /** Which alliance we are, for the G408 reject. The OpMode sets it whenever it changes. */
@@ -307,28 +321,39 @@ public class Robot {
      *
      * <p>Clearing the bulk caches here is what makes the whole loop see one consistent snapshot.
      *
-     * <p>Colour sensors are I2C and outside the bulk read: each costs two transactions (colour and
-     * distance), several milliseconds on a Control Hub. The entrance sensor is read every loop
-     * because a passing piece is a short edge and the count must not miss it. The three presence
-     * points (full, transfer, feed) watch pieces that sit for hundreds of milliseconds, so the
-     * <em>fitted</em> ones are read one per loop in rotation: with one fitted it is read every
-     * loop, with three each is refreshed every third loop, about 60 ms of latency at most, for
-     * half the bus time (fixthese R2-A1). Watch the loop line in {@code Bench: Color sensors}.
+     * <p>Colour sensors are I2C and outside the bulk read: each half (colour, distance) is its own
+     * transaction, milliseconds on a Control Hub, so the loop asks only for what it consumes
+     * (fixthese R2-A1, Round 4). The entrance sensor is read every loop because a passing piece
+     * is a short edge and the count must not miss it, but only when {@link #wireSuppliers()}
+     * trusted it, and its colour half only where hue is the presence signal (no distance) or the
+     * G408 reject is wired. The three presence points (full, transfer, feed) watch pieces that sit
+     * for hundreds of milliseconds, so the <em>fitted</em> ones are read one per loop in rotation
+     * (with three fitted each is refreshed every third loop, about 60 ms of latency at most),
+     * distance only where they have it. Benches read everything ({@link #setReadAllSensorData}).
+     * Watch the loop line in {@code Bench: Color sensors}.
      */
     public void readSensors() {
         for (LynxModule hub : hubs) {
             hub.clearBulkCache();
         }
         limelight.update();
-        storageEntranceSensor.update();
+        if (readAllSensorData || entranceRead) {
+            storageEntranceSensor.update(readAllSensorData || entranceNeedsHue());
+        }
         if (!presenceSensors.isEmpty()) {
-            presenceSensors.get(nextPresenceSensor).update();
+            ColorSensor next = presenceSensors.get(nextPresenceSensor);
+            next.update(readAllSensorData || !next.hasDistance());
             nextPresenceSensor = (nextPresenceSensor + 1) % presenceSensors.size();
         }
 
         long now = clock.nowMs();
         if (matchClock != null) matchClock.update(now);
         sampleBattery(now);
+    }
+
+    /** Hue is the presence signal without a distance reading, and the G408 classifier with one. */
+    private boolean entranceNeedsHue() {
+        return !storageEntranceSensor.hasDistance() || (classifyTrusted && Intake.REJECT_ENABLED);
     }
 
     /**

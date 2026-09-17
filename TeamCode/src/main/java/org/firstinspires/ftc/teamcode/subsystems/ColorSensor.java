@@ -66,20 +66,28 @@ public class ColorSensor {
     }
 
     /**
-     * One colour read and, on a device that has one, one distance read per loop. Each is its own
-     * I2C transaction (external I2C is not in the hub's bulk cache), so a robot with four sensors
-     * fitted pays for up to eight per loop here; watch the loop time in the debug telemetry.
+     * One distance read on a device that has one and, when {@code colour} is true, one colour
+     * read. Each is its own I2C transaction (external I2C is not in the hub's bulk cache), so the
+     * loop asks only for what it consumes: presence is judged by distance wherever a sensor has
+     * it, and the hue is read only where it classifies ({@code Robot.readSensors()}).
      */
-    public void update() {
+    public void update(boolean colour) {
         if (sensor == null) return;
-        NormalizedRGBA reading = sensor.getNormalizedColors();
-        if (reading != null) {
-            colors = reading;
-            ColorMath.toHsv(colors.red, colors.green, colors.blue, hsv);
+        if (colour) {
+            NormalizedRGBA reading = sensor.getNormalizedColors();
+            if (reading != null) {
+                colors = reading;
+                ColorMath.toHsv(colors.red, colors.green, colors.blue, hsv);
+            }
         }
         if (sensor instanceof DistanceSensor) {
             distanceInches = ((DistanceSensor) sensor).getDistance(DistanceUnit.INCH);
         }
+    }
+
+    /** Both halves: what the benches read, and any caller that wants everything. */
+    public void update() {
+        update(true);
     }
 
     /**

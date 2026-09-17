@@ -33,6 +33,22 @@ public class ColorSensorTest {
     }
 
     @Test
+    public void colourIsSkippedWhenNotAsked() {
+        FakeColorRangeSensor device = new FakeColorRangeSensor().showing(1f, 0f, 0f);
+        device.distanceInches = 1.5;
+        ColorSensor sensor = new ColorSensor(device, 2f, true);
+        sensor.update(false);
+        assertEquals("distance alone: one transaction", 1, device.distanceReads);
+        assertEquals(0, device.colorReads);
+        assertEquals(1.5, sensor.getDistanceInches(), EPS);
+        assertEquals("no colour read, so no hue", 0f, sensor.getHue(), EPS);
+        sensor.update(true);
+        assertEquals(1, device.colorReads);
+        assertEquals(0f, sensor.getHue(), EPS);     // pure red is hue 0 either way; the read happened
+        assertEquals(1f, sensor.getRed(), EPS);
+    }
+
+    @Test
     public void noDistanceWithoutADistanceSensor() {
         NormalizedColorSensor colourOnly = new NormalizedColorSensor() {
             @Override public NormalizedRGBA getNormalizedColors() { return new NormalizedRGBA(); }

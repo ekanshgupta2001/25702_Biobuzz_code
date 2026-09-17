@@ -47,6 +47,12 @@ public abstract class MatchOpMode extends OpMode {
      * 250 ms; set explicitly so the rate is a decision, and so it can be lowered while debugging.
      */
     public static int TELEMETRY_INTERVAL_MS = 100;
+    /**
+     * The match log is written every this many loops. Every loop is 50 rows a second of a
+     * 26-column CSV, and formatting the row is the largest fixed CPU cost in the loop; every second
+     * loop keeps the same picture at half the cost and half the file.
+     */
+    public static int LOG_EVERY_N_LOOPS = 2;
 
     protected Robot robot;
     protected MatchLogger logger;
@@ -59,6 +65,7 @@ public abstract class MatchOpMode extends OpMode {
     protected final LoopTimer loopStats = new LoopTimer();
 
     private final ElapsedTime loopTimer = new ElapsedTime();
+    private int loopCount = 0;
 
     // ---- Subclass contract ----
 
@@ -157,7 +164,8 @@ public abstract class MatchOpMode extends OpMode {
         robot.writeActuators();       // 3. act
 
         onAfterAct();
-        if (logger != null) logger.logRow(robot.logCells(loopMs));
+        loopCount++;
+        if (logger != null && loopCount % LOG_EVERY_N_LOOPS == 0) logger.logRow(robot.logCells(loopMs));
         onTelemetry();
     }
 

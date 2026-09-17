@@ -68,6 +68,7 @@ public abstract class BenchOpMode extends OpMode {
         RobotTunables.snapshot();     // first: the defaults must be on record before this bench edits any
         Scheduler.reset();
         robot = buildRobot();
+        robot.setReadAllSensorData(true);     // the benches are how the hues get measured
         telemetry.setMsTransmissionInterval(TELEMETRY_INTERVAL_MS);
         onBenchInit();
         telemetry.addLine(title());

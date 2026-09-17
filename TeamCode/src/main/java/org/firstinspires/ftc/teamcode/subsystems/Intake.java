@@ -29,8 +29,7 @@ import java.util.function.BooleanSupplier;
  * Pull pieces off the floor and onto the ramp; that is all. The storage counts pieces and
  * decides when the robot is full ({@link #setFullSupplier}); while it is, an intaking command
  * keeps its mode and resource but the roller sits still, so the fifth piece that would break
- * BIOBUZZ G407 is never pulled in. Whether a piece was captured comes from the intake-entrance
- * or storage-entrance sensor through {@link #setCapturedSupplier}, wired by {@code Robot}.
+ * BIOBUZZ G407 is never pulled in.
  */
 public class Intake {
     /**
@@ -83,8 +82,6 @@ public class Intake {
     private final Clock clock;
     private double targetVelocity = 0;
     private Mode mode = Mode.IDLE;
-    private boolean hasPiece = false;
-    private BooleanSupplier capturedSupplier = () -> false;
     private BooleanSupplier fullSupplier = () -> false;
     private BooleanSupplier rejectSupplier = () -> false;
     private boolean rejecting = false;
@@ -114,11 +111,6 @@ public class Intake {
     /** False when the motor is missing from the robot configuration. All calls then no-op. */
     public boolean isAvailable() {
         return motor.isAvailable();
-    }
-
-    /** "A piece has just come in": the intake-entrance or storage-entrance sensor. */
-    public void setCapturedSupplier(BooleanSupplier supplier) {
-        this.capturedSupplier = supplier == null ? () -> false : supplier;
     }
 
     /** "The storage is full": while true, intaking commands hold the roller still. */
@@ -155,12 +147,10 @@ public class Intake {
 
     public void outtake() {
         setMode(Mode.OUTTAKING, OUTTAKE_TICKS_PER_SEC);
-        markEmpty();
     }
 
     public void eject() {
         setMode(Mode.EJECTING, EJECT_TICKS_PER_SEC);
-        markEmpty();
     }
 
     public void stop() {
@@ -169,19 +159,6 @@ public class Intake {
 
     public Mode getMode() {
         return mode;
-    }
-
-    /** True once a piece has been seen entering while intaking, until cleared. */
-    public boolean hasPiece() {
-        return hasPiece;
-    }
-
-    public void markCaptured() {
-        hasPiece = true;
-    }
-
-    public void markEmpty() {
-        hasPiece = false;
     }
 
     public boolean isBlockedByFullStorage() {
@@ -249,10 +226,6 @@ public class Intake {
             return;
         }
 
-        if (mode == Mode.INTAKING && !hasPiece && capturedSupplier.getAsBoolean()) {
-            hasPiece = true;
-        }
-
         // Pushed in every loop so edits to the public statics reach the detector.
         jamDetector.configure(
                 STALL_CURRENT_AMPS, STALL_TIMEOUT_MS, UNJAM_DURATION_MS, MAX_UNJAM_ATTEMPTS,
@@ -290,28 +263,6 @@ public class Intake {
                 .setStart(this::stop)
                 .setDone(() -> true)
                 .requiring(this);
-    }
-
-    /**
-     * Intakes until {@code captured} reports a piece, marking possession only when it finishes
-     * naturally; an interrupted capture does not claim a piece.
-     */
-    public Command captureCommand(BooleanSupplier captured) {
-        return Command.build()
-                .setStart(this::intake)
-                .setDone(captured)
-                .setEnd(ec -> {
-                    // Judge by the sensor, not the end condition: a deadline or parallel group
-                    // that finishes forwards its own NATURALLY to unfinished children.
-                    if (captured.getAsBoolean()) markCaptured();
-                    stop();
-                })
-                .requiring(this);
-    }
-
-    /** {@link #captureCommand(BooleanSupplier)} on the wired captured supplier. */
-    public Command captureCommand() {
-        return captureCommand(() -> capturedSupplier.getAsBoolean());
     }
 
     /**

@@ -72,53 +72,53 @@ public class ControlsTest {
         assertEquals("stick left is +strafe (Pedro: +strafe is left)", 1.0, Controls.DRIVE_STRAFE.axis(driver, operator), EPS);
         assertEquals("stick right is a clockwise, negative turn", -1.0, Controls.DRIVE_TURN.axis(driver, operator), EPS);
         assertEquals(0.6, Controls.SLOW_MODE.axis(driver, operator), 1e-6);
-        assertEquals("a button has no axis", 0, Controls.COLLECT.axis(driver, operator), EPS);
+        assertEquals("a button has no axis", 0, Controls.RESET_HEADING.axis(driver, operator), EPS);
         assertFalse("an axis has no edge", Controls.DRIVE_FORWARD.wasPressed(driver, operator));
         assertTrue(Controls.SLOW_MODE.isAnalog());
-        assertFalse(Controls.COLLECT.isAnalog());
+        assertFalse(Controls.RESET_HEADING.isAnalog());
     }
 
     @Test
     public void buttonsRouteToTheirOwnPad() {
         Gamepad driver = idle();
-        Gamepad operator = after(g -> g.a = true);
-        assertFalse("A on the operator pad is not COLLECT", Controls.COLLECT.wasPressed(driver, operator));
-        assertTrue(Controls.SHOOT_ALL.wasPressed(driver, operator));
+        Gamepad operator = after(g -> g.y = true);
+        assertFalse("Y on the operator pad is not RESET_HEADING", Controls.RESET_HEADING.wasPressed(driver, operator));
+        assertTrue(Controls.INTAKE_UNTIL_FULL.wasPressed(driver, operator));
     }
 
     @Test
     public void readConsumesEveryEdgeExactlyOnce() {
-        Gamepad driver = after(g -> g.a = true);
+        Gamepad driver = after(g -> g.y = true);
         Gamepad operator = after(g -> {
             g.b = true;
             g.left_trigger = 1f;
         });
         Controls.Snapshot in = Controls.read(driver, operator);
-        assertTrue(in.pressed(Controls.COLLECT));
+        assertTrue(in.pressed(Controls.RESET_HEADING));
         assertTrue(in.pressed(Controls.EJECT));
         assertTrue("a trigger past the threshold is an edge", in.pressed(Controls.ARM_FLYWHEEL));
-        assertFalse(in.pressed(Controls.ALIGN));
+        assertFalse(in.pressed(Controls.TOGGLE_DRIVE_FRAME));
 
-        assertFalse("consumed by the snapshot", Controls.COLLECT.wasPressed(driver, operator));
-        assertFalse(driver.aWasPressed());
-        assertFalse(Controls.read(driver, operator).pressed(Controls.COLLECT));
+        assertFalse("consumed by the snapshot", Controls.RESET_HEADING.wasPressed(driver, operator));
+        assertFalse(driver.yWasPressed());
+        assertFalse(Controls.read(driver, operator).pressed(Controls.RESET_HEADING));
     }
 
     @Test
     public void aHeldButtonFiresOnceUntilReleasedAndPressedAgain() {
-        Gamepad driver = after(g -> g.a = true);
+        Gamepad driver = after(g -> g.y = true);
         Gamepad operator = idle();
-        assertTrue(Controls.read(driver, operator).pressed(Controls.COLLECT));
+        assertTrue(Controls.read(driver, operator).pressed(Controls.RESET_HEADING));
 
         Gamepad stillHeld = new Gamepad();
-        stillHeld.a = true;
+        stillHeld.y = true;
         driver.copy(stillHeld);
-        assertFalse("held, not re-pressed", Controls.read(driver, operator).pressed(Controls.COLLECT));
+        assertFalse("held, not re-pressed", Controls.read(driver, operator).pressed(Controls.RESET_HEADING));
 
         driver.copy(new Gamepad());          // released
         Gamepad pressedAgain = new Gamepad();
-        pressedAgain.a = true;
+        pressedAgain.y = true;
         driver.copy(pressedAgain);
-        assertTrue(Controls.read(driver, operator).pressed(Controls.COLLECT));
+        assertTrue(Controls.read(driver, operator).pressed(Controls.RESET_HEADING));
     }
 }

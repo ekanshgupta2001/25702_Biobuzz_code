@@ -144,7 +144,6 @@ public class RobotTest {
         assertEquals("idle", robot.macros.getActiveName());
         assertEquals(0, robot.getBatteryVolts(), EPS);
         assertNull("null before startMatch()", robot.getMatchClock());
-        assertEquals(PieceType.POLLEN, robot.getBlobTarget());
         assertEquals(clock, robot.getClock());
     }
 
@@ -160,7 +159,6 @@ public class RobotTest {
         tick();
         assertFalse(robot.intake.isBlockedByFullStorage());
         assertEquals(Intake.INTAKE_TICKS_PER_SEC, intakeMotor.commandedVelocity, EPS);
-        assertFalse("no entrance sensor, so nothing is ever captured", robot.intake.hasPiece());
     }
 
     @Test
@@ -194,7 +192,6 @@ public class RobotTest {
         entrance.distanceInches = 1.0;
         tick();
         assertEquals("one piece, by distance alone", 1, robot.storage.count());
-        assertTrue(robot.intake.hasPiece());
         entrance.distanceInches = 100;
         tick();
         entrance.distanceInches = 1.0;
@@ -300,7 +297,6 @@ public class RobotTest {
         assertTrue("red robot, blue piece: throw it back", robot.intake.isRejecting());
         assertEquals(Intake.EJECT_TICKS_PER_SEC, intakeMotor.commandedVelocity, EPS);
         assertEquals("a rejected piece is not counted into the queue", 0, robot.storage.count());
-        assertFalse(robot.intake.hasPiece());
 
         robot = robotWithSensors(entrance, null, null, null);
         robot.setAlliance(Alliance.BLUE);
@@ -309,7 +305,6 @@ public class RobotTest {
         assertFalse("blue robot, blue piece: ours", robot.intake.isRejecting());
         assertEquals(Intake.INTAKE_TICKS_PER_SEC, intakeMotor.commandedVelocity, EPS);
         assertEquals("and it is counted", 1, robot.storage.count());
-        assertTrue(robot.intake.hasPiece());
     }
 
     @Test
@@ -408,11 +403,4 @@ public class RobotTest {
         robot.stop();   // no camera, no sensors: must not throw
     }
 
-    @Test
-    public void blobTargetCanBeChangedAndNeverNulled() {
-        robot.setBlobTarget(PieceType.NECTAR);
-        assertEquals(PieceType.NECTAR, robot.getBlobTarget());
-        robot.setBlobTarget(null);
-        assertEquals(PieceType.NECTAR, robot.getBlobTarget());
-    }
 }

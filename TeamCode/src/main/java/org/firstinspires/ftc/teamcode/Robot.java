@@ -89,7 +89,6 @@ public class Robot {
     public final Macros macros;
 
     private MatchClock matchClock;
-    private PieceType blobTarget = PieceType.POLLEN;
     /** Our alliance, set by the OpMode; {@code null} until known. Drives the G408 reject. */
     private Alliance alliance = null;
 
@@ -218,7 +217,6 @@ public class Robot {
         boolean countTrusted = storageEntranceSensor.isAvailable()
                 && (storageEntranceSensor.hasDistance() || PieceType.HUES_CALIBRATED);
         boolean classifyTrusted = countTrusted && PieceType.HUES_CALIBRATED;
-        intake.setCapturedSupplier(countTrusted ? this::pieceEnteringStorage : null);
         intake.setFullSupplier(storage::isFull);                    // G407: roller held still at 4
         intake.setRejectSupplier(classifyTrusted ? this::opponentNectarAtEntrance : null);   // G408
         storage.setEntranceSupplier(countTrusted ? this::pieceEnteringStorage : null);  // rising edge -> count + 1
@@ -321,9 +319,6 @@ public class Robot {
         for (LynxModule hub : hubs) {
             hub.clearBulkCache();
         }
-        // Pushed every loop so an edit to the target piece (or its size) reaches the camera
-        // geometry without a redeploy.
-        limelight.setTargetHeightInches(blobTarget.targetHeightInches());
         limelight.update();
         storageEntranceSensor.update();
         if (!presenceSensors.isEmpty()) {
@@ -367,15 +362,6 @@ public class Robot {
         return clock;
     }
 
-    /** The piece the colour pipeline is looking for; its height is pushed to the camera each loop. */
-    public PieceType getBlobTarget() {
-        return blobTarget;
-    }
-
-    public void setBlobTarget(PieceType target) {
-        if (target != null) blobTarget = target;
-    }
-
     /** Lowest volts across all sensors, refreshed at most every {@link #VOLTAGE_SAMPLE_MS}; 0 if unreadable. */
     public double getBatteryVolts() {
         return batteryVolts;
@@ -402,12 +388,11 @@ public class Robot {
     // ---- Shared cancel and shutdown paths ----
 
     /**
-     * Cleanup shared by the natural end of a vision macro and by an operator abort: hands the
-     * follower back to the sticks, restores the AprilTag pipeline, and marks the macro cancelled.
+     * Cleanup shared by an operator abort and the auto's buzzer stop: hands the follower back to
+     * the sticks (Ivy cannot stop a follower that was handed a path) and marks the macro cancelled.
      */
     public void abortMacro() {
         drivetrain.cancelPath();
-        limelight.activateAprilTagPipeline();
         macros.markCancelled();
     }
 

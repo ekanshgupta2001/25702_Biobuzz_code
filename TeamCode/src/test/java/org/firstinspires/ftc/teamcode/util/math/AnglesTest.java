@@ -5,25 +5,10 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
-/**
- * The 0/2pi seam, in isolation.
- *
- * <p>These cases used to live in {@code VisionMathTest}, which was the clue that the functions
- * themselves were in the wrong class: none of them involve a camera.
- */
+/** The 0/2pi seam, in isolation. */
 public class AnglesTest {
     private static final double LOOSE = 1e-6;
     private static final double EPS = 1e-9;
-
-    @Test
-    public void headingTowardIsNormalizedAndCorrect() {
-        // Straight ahead while facing 0 -> heading 0.
-        assertEquals(0, Angles.headingToward(0, 10, 0), LOOSE);
-        // Directly left while facing 0 -> 90 degrees.
-        assertEquals(Math.PI / 2, Angles.headingToward(0, 0, 10), LOOSE);
-        // Directly right while facing 0 -> 270 degrees, not -90.
-        assertEquals(3 * Math.PI / 2, Angles.headingToward(0, 0, -10), LOOSE);
-    }
 
     @Test
     public void normalizeAngleAlwaysLandsInZeroToTwoPi() {

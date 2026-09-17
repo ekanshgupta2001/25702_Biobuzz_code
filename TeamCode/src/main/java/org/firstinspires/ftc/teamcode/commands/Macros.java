@@ -2,7 +2,6 @@ package org.firstinspires.ftc.teamcode.commands;
 
 import static com.pedropathing.ivy.commands.Commands.conditional;
 import static com.pedropathing.ivy.commands.Commands.instant;
-import static com.pedropathing.ivy.commands.Commands.lazy;
 import static com.pedropathing.ivy.commands.Commands.onInterrupt;
 import static com.pedropathing.ivy.commands.Commands.waitUntil;
 import static com.pedropathing.ivy.groups.Groups.deadline;
@@ -42,11 +41,11 @@ import java.util.function.Supplier;
  *   <li><b>Declares its resources through what it composes.</b> Requirements come from the
  *       subsystem commands inside the group, so scheduling a macro suspends the default commands
  *       it needs and ending it restores them. Nothing here touches hardware directly.</li>
- *   <li><b>Builds vision paths lazily.</b> Paths are built inside {@code followLazyCommand}
- *       suppliers at command start, never stored.</li>
+ *   <li><b>Builds paths at start.</b> Paths are built inside {@code followLazyCommand} suppliers
+ *       when the command starts, from where the robot is then, never stored.</li>
  * </ol>
  *
- * <p>Nothing here names a field location or a game piece: the season-specific targets (which HIVE
+ * <p>Nothing here names a field location: the season-specific targets (which HIVE
  * CELL, which AprilTag IDs) are passed in by the OpMode from {@code game/}.
  *
  * <p><b>Aiming is the drivetrain's job on V1.</b> The shooter is fixed and fires out the rear
@@ -98,12 +97,6 @@ public class Macros {
     public static double AIM_TOLERANCE_DEGREES = 2.0;
     /** A one-shot aim re-issues Pedro's hold when the wanted heading moves by more than this. */
     public static double AIM_REISSUE_DEGREES = 1.0;
-    /** A seen piece closer than this to the crosshair counts as aligned. */
-    public static double ALIGN_TOLERANCE_DEGREES = 1.5;
-    public static long PIPELINE_WARMUP_MS = 250;
-    public static long SEARCH_TIMEOUT_MS = 2000;
-    public static long APPROACH_TIMEOUT_MS = 4000;
-    public static long ALIGN_TIMEOUT_MS = 1500;
     public static long SNAP_TIMEOUT_MS = 1500;
     public static double SNAP_TOLERANCE_DEGREES = 3.0;
     public static long DRIVE_TO_TIMEOUT_MS = 6000;
@@ -282,57 +275,6 @@ public class Macros {
                     if (robot.storage.count() > countAtStart[0] || robot.storage.isFull()) return Outcome.SUCCESS;
                     return canDetectFull ? Outcome.TIMED_OUT : Outcome.SUCCESS;
                 });
-    }
-
-    /**
-     * Blob pipeline, wait for a stable detection, drive to the piece while capturing, then restore
-     * the AprilTag pipeline. Success is a <em>new</em> piece: the storage count rose, or the intake
-     * captured something it did not already hold. With no camera this times out in
-     * {@link #PIPELINE_WARMUP_MS} + {@link #SEARCH_TIMEOUT_MS} without moving.
-     */
-    public Command collectPiece() {
-        final int[] countAtStart = new int[1];
-        final boolean[] hadPieceAtStart = new boolean[1];
-        BooleanSupplier capturedNew = () -> robot.storage.count() > countAtStart[0]
-                || (robot.intake.hasPiece() && !hadPieceAtStart[0]);
-        return reporting("collect",
-                sequential(
-                        instant(() -> {
-                            countAtStart[0] = robot.storage.count();
-                            hadPieceAtStart[0] = robot.intake.hasPiece();
-                        }),
-                        instant(robot.limelight::activateBlobPipeline),
-                        waitMs(PIPELINE_WARMUP_MS),
-                        race(waitUntil(robot.limelight::hasStableBlob), waitMs(SEARCH_TIMEOUT_MS)),
-                        // A race, not a deadline: race ends its losers INTERRUPTED, whereas deadline and
-                        // parallel forward their own end condition, so a capture command inside a
-                        // deadline that finished NATURALLY would be told it captured something.
-                        race(
-                                robot.drivetrain.followLazyCommand(this::approachPath, false),
-                                robot.intake.captureCommand(),
-                                waitUntil(capturedNew),
-                                waitMs(APPROACH_TIMEOUT_MS)),
-                        instant(robot.limelight::activateAprilTagPipeline)),
-                Outcome.SUCCESS, Outcome.TIMED_OUT, capturedNew);
-    }
-
-    /**
-     * Turns in place to face the seen piece (no path: a zero-length line is degenerate). NO_TARGET
-     * unless a stable blob ends up within {@link #ALIGN_TOLERANCE_DEGREES} of the crosshair.
-     */
-    public Command alignToPiece() {
-        Command turn = lazy(() -> {
-            double heading = headingToBlob();
-            return Double.isNaN(heading) ? null : robot.drivetrain.turnToCommand(heading);
-        }).requiring(robot.drivetrain);   // lazy contributes no requirements of its own
-        return reporting("align",
-                sequential(
-                        instant(robot.limelight::activateBlobPipeline),
-                        waitMs(PIPELINE_WARMUP_MS),
-                        race(waitUntil(robot.limelight::hasStableBlob), waitMs(SEARCH_TIMEOUT_MS)),
-                        bounded(turn, ALIGN_TIMEOUT_MS),
-                        instant(robot.limelight::activateAprilTagPipeline)),
-                Outcome.SUCCESS, Outcome.NO_TARGET, this::alignedToBlob);
     }
 
     // ---- Shooting ----
@@ -631,29 +573,6 @@ public class Macros {
         if (current == null || target == null) return null;
         if (current.distance(target) < MIN_PATH_INCHES) return null;
         return Paths.line(current, target).linear(current.heading(), target.heading());
-    }
-
-    /** Straight line from the current pose to the standoff pose in front of the seen piece. */
-    private Path approachPath() {
-        Pose current = robot.drivetrain.getPose();
-        if (current == null || !robot.limelight.hasStableBlob()) return null;
-        Pose target = robot.limelight.estimateBlobApproachPose(current);
-        if (target == null) return null;
-        if (current.distance(target) < MIN_PATH_INCHES) return null;
-        return Paths.line(current, target).linear(current.heading(), target.heading());
-    }
-
-    private double headingToBlob() {
-        Pose current = robot.drivetrain.getPose();
-        if (current == null || !robot.limelight.hasStableBlob()) return Double.NaN;
-        double[] robotFrame = robot.limelight.estimateBlobInRobotFrame();
-        if (robotFrame == null) return Double.NaN;
-        return Angles.headingToward(current.heading(), robotFrame[0], robotFrame[1]);
-    }
-
-    private boolean alignedToBlob() {
-        return robot.limelight.hasStableBlob()
-                && Math.abs(robot.limelight.getFilteredBlobTx()) <= ALIGN_TOLERANCE_DEGREES;
     }
 
 }

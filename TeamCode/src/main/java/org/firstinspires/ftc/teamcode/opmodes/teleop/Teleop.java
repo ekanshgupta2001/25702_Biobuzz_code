@@ -10,7 +10,6 @@ import org.firstinspires.ftc.teamcode.commands.Macros;
 import org.firstinspires.ftc.teamcode.game.Field;
 import org.firstinspires.ftc.teamcode.game.FieldPoses;
 import org.firstinspires.ftc.teamcode.opmodes.MatchOpMode;
-import org.firstinspires.ftc.teamcode.subsystems.Limelight;
 import org.firstinspires.ftc.teamcode.subsystems.Storage;
 import org.firstinspires.ftc.teamcode.util.field.Alliance;
 import org.firstinspires.ftc.teamcode.util.field.FieldConstants;
@@ -168,10 +167,6 @@ public class Teleop extends MatchOpMode {
         telemetry.addData("Aim target", alliance + " " + targetSide() + " CELL, tags " + tags[0] + "-" + tags[1]);
         telemetry.addData("Pose", robot.drivetrain.getPose());
         telemetry.addData("Drive", driveStatus());
-        if (!Limelight.MOUNT_CALIBRATED) {
-            telemetry.addLine("Camera macros (" + Controls.buttonsNeeding(Controls.Needs.CAMERA)
-                    + ") off until the mount is measured: Bench: Limelight, then Limelight.MOUNT_CALIBRATED");
-        }
         if (loggerError != null) telemetry.addData("!! Logger FAILED", loggerError);
         telemetry.addLine();
         for (String line : Controls.helpLines()) telemetry.addLine(line);
@@ -232,18 +227,7 @@ public class Teleop extends MatchOpMode {
             return;
         }
 
-        if (!Limelight.MOUNT_CALIBRATED && in.anyPressed(Controls::requiresCamera)) {
-            // The approach geometry is built from unmeasured mount constants: a wrong estimate is
-            // four seconds of the robot driving somewhere unexpected before the timeout.
-            gamepad1.rumbleBlips(RUMBLE_FAILURE_BLIPS);
-            return;
-        }
-
-        if (in.pressed(Controls.COLLECT)) {
-            startMacro(robot.macros.collectPiece());
-        } else if (in.pressed(Controls.ALIGN)) {
-            startMacro(robot.macros.alignToPiece());
-        } else if (in.pressed(Controls.DRIVE_TO_SHOOT)) {
+        if (in.pressed(Controls.DRIVE_TO_SHOOT)) {
             startMacro(robot.macros.driveTo(alliancePose(FieldPoses.BLUE_SHOOTING_SPOT)));
         } else if (in.pressed(Controls.DRIVE_TO_PARK)) {
             startMacro(robot.macros.driveTo(alliancePose(FieldPoses.BLUE_PARK)));
@@ -527,8 +511,8 @@ public class Teleop extends MatchOpMode {
                 robot.shooter.getTargetRpm(), robot.shooter.getMode());
         telemetry.addLine();
         int[] tags = tagRange();
-        telemetry.addData("Limelight", "%s  pipeline %s  tag tx %.1f", robot.limelight.isAvailable() ? "ok" : "MISSING",
-                robot.limelight.getPipelineName(), robot.limelight.getTagTx(tags[0], tags[1]));
+        telemetry.addData("Limelight", "%s  tag tx %.1f", robot.limelight.isAvailable() ? "ok" : "MISSING",
+                robot.limelight.getTagTx(tags[0], tags[1]));
         telemetry.addData("Sensors hue", "entrance %.0f  full %.0f  transfer %.0f  feed %.0f",
                 robot.storageEntranceSensor.getHue(), robot.storageFullSensor.getHue(),
                 robot.transferSensor.getHue(), robot.shooterFeedSensor.getHue());

@@ -86,7 +86,6 @@ public class TeleopTest {
         Teleop.DEBUG_TELEMETRY = false;
         Storage.CAPACITY = 4;
         Drivetrain.MIN_PATH_MS = 60;
-        Limelight.MOUNT_CALIBRATED = true;      // most tests exercise the camera macros as if measured
 
         clock = new FakeClock();
         follower = new FakePathFollower();
@@ -119,7 +118,6 @@ public class TeleopTest {
         PoseStorage.clear();
         Tunables.resetForTests();
         Teleop.DEBUG_TELEMETRY = false;
-        Limelight.MOUNT_CALIBRATED = false;
     }
 
     // ---- Helpers ----
@@ -249,8 +247,6 @@ public class TeleopTest {
     /** How a test presses each drive control; kept complete by {@link #everyDriveMacroIsRefusedWithoutAFollower}. */
     private static final java.util.Map<Controls, Consumer<Gamepad>> DRIVE_PRESSES = new java.util.LinkedHashMap<>();
     static {
-        DRIVE_PRESSES.put(Controls.COLLECT, g -> g.a = true);
-        DRIVE_PRESSES.put(Controls.ALIGN, g -> g.x = true);
         DRIVE_PRESSES.put(Controls.DRIVE_TO_SHOOT, g -> g.b = true);
         DRIVE_PRESSES.put(Controls.DRIVE_TO_PARK, g -> g.right_bumper = true);
         DRIVE_PRESSES.put(Controls.SNAP_90, g -> g.dpad_up = true);
@@ -267,8 +263,6 @@ public class TeleopTest {
             if (c.requiresDrivetrain()) assertTrue("no press for " + c, DRIVE_PRESSES.containsKey(c));
             else assertFalse(c + " is not a drive control", DRIVE_PRESSES.containsKey(c));
         }
-        assertTrue(Controls.COLLECT.requiresCamera());
-        assertEquals("A/X", Controls.buttonsNeeding(Controls.Needs.CAMERA));
 
         useUntunedRobot();
         initAndStart();
@@ -282,19 +276,9 @@ public class TeleopTest {
             loop();
         }
 
-        // With a follower but no measured camera mount, exactly the camera macros are refused.
+        // With a follower the same press is accepted.
         setUp();
-        Limelight.MOUNT_CALIBRATED = false;
         initAndStart();
-        for (Controls c : Controls.needing(Controls.Needs.CAMERA)) {
-            op.gamepad1.stopRumble();
-            press(op.gamepad1, DRIVE_PRESSES.get(c));
-            loop();
-            assertEquals(c + " must not start", "idle", robot.macros.getActiveName());
-            assertTrue(c + " refused", op.gamepad1.isRumbling());
-            release(op.gamepad1);
-            loop();
-        }
         op.gamepad1.stopRumble();
         press(op.gamepad1, DRIVE_PRESSES.get(Controls.SNAP_90));
         loop();
@@ -344,11 +328,11 @@ public class TeleopTest {
     }
 
     @Test
-    public void driverAStartsCollectAndAStickAbortsIt() {
+    public void aStickAbortsADriveMacro() {
         initAndStart();
-        press(op.gamepad1, g -> g.a = true);
+        press(op.gamepad1, g -> g.b = true);               // DRIVE_TO_SHOOT
         loop();
-        assertEquals("collect", robot.macros.getActiveName());
+        assertEquals("driveTo", robot.macros.getActiveName());
         assertEquals(Macros.Outcome.RUNNING, robot.macros.getOutcome());
         release(op.gamepad1);
         loop();
@@ -362,22 +346,6 @@ public class TeleopTest {
         loop();
         assertEquals("driver control resumed by itself", Follower.Mode.MANUAL, follower.mode);
         assertEquals(1.0, follower.lastForward, EPS);
-    }
-
-    @Test
-    public void cameraMacrosAreIgnoredUntilTheMountIsMeasured() {
-        Limelight.MOUNT_CALIBRATED = false;
-        op.init();
-        op.init_loop();
-        assertTrue(telemetry.joined(), telemetry.contains("Camera macros"));
-        op.start();
-        press(op.gamepad1, g -> g.a = true);                // COLLECT
-        loop();
-        assertEquals("no macro from unmeasured geometry", "idle", robot.macros.getActiveName());
-        assertTrue("the driver is told", op.gamepad1.isRumbling());
-        press(op.gamepad1, g -> g.b = true);                // a Pedro path needs no camera
-        loop();
-        assertEquals("driveTo", robot.macros.getActiveName());
     }
 
     @Test

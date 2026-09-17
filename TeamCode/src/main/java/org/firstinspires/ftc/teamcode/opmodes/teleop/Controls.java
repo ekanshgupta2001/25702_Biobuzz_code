@@ -43,8 +43,6 @@ public enum Controls {
     RESET_HEADING(Pad.DRIVER, "Y", "re-zero field heading", Gamepad::yWasPressed, null),
     ABORT(Pad.DRIVER, "BACK", "abort macro (or just move a stick)", Gamepad::backWasPressed, null),
 
-    COLLECT(Pad.DRIVER, "A", "collect a piece (camera)", Gamepad::aWasPressed, null, Needs.CAMERA),
-    ALIGN(Pad.DRIVER, "X", "turn to face a piece (camera)", Gamepad::xWasPressed, null, Needs.CAMERA),
     DRIVE_TO_SHOOT(Pad.DRIVER, "B", "path to the shooting spot", Gamepad::bWasPressed, null, Needs.DRIVETRAIN),
     DRIVE_TO_PARK(Pad.DRIVER, "RB", "path to park", Gamepad::rightBumperWasPressed, null, Needs.DRIVETRAIN),
 
@@ -76,9 +74,9 @@ public enum Controls {
     /**
      * What a control needs before it is safe to act on. {@code Teleop} gates on this generically,
      * so a new macro cannot be added without saying what it needs, and cannot escape the gate by
-     * being left out of a hand-written list (fixthese R2-B4). CAMERA implies DRIVETRAIN.
+     * being left out of a hand-written list (fixthese R2-B4).
      */
-    public enum Needs { NOTHING, DRIVETRAIN, CAMERA }
+    public enum Needs { NOTHING, DRIVETRAIN }
 
     private final Pad pad;
     private final String button;
@@ -134,32 +132,9 @@ public enum Controls {
         return needs;
     }
 
-    /** True for anything that steers the robot: paths, snaps and the camera macros. */
+    /** True for anything that steers the robot: paths and snaps. */
     public boolean requiresDrivetrain() {
         return needs != Needs.NOTHING;
-    }
-
-    public boolean requiresCamera() {
-        return needs == Needs.CAMERA;
-    }
-
-    /** Every control with exactly this need, in card order. */
-    public static List<Controls> needing(Needs needs) {
-        List<Controls> out = new ArrayList<>();
-        for (Controls c : values()) {
-            if (c.needs == needs) out.add(c);
-        }
-        return out;
-    }
-
-    /** The buttons of {@link #needing}, joined with "/", for a card line. */
-    public static String buttonsNeeding(Needs needs) {
-        StringBuilder sb = new StringBuilder();
-        for (Controls c : needing(needs)) {
-            if (sb.length() > 0) sb.append('/');
-            sb.append(c.button);
-        }
-        return sb.toString();
     }
 
     public Pad pad() {

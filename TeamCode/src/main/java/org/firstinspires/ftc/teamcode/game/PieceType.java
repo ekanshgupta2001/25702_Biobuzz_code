@@ -5,9 +5,8 @@ import org.firstinspires.ftc.teamcode.util.field.Alliance;
 
 /**
  * The BIOBUZZ scoring elements: POLLEN (~2.8 in, yellow, neutral) and NECTAR (~3.6 in, red or
- * blue, alliance-specific). Carries per-type colour signatures, diameter, the camera target height,
- * and the driver-facing name. The only place the code says "pollen" or "nectar"; subsystems speak
- * of "piece" and "blob". {@code Robot} is the only production reader.
+ * blue, alliance-specific). Carries per-type colour signatures. The only place the code says
+ * "pollen" or "nectar"; subsystems speak of "piece". {@code Robot} is the only production reader.
  *
  * <p>Classification is on hue, gated on saturation and value (see {@link ColorSensor#matchesHue}).
  * NECTAR carries two hue windows because it comes in two colours; telling red from blue for G408
@@ -19,16 +18,16 @@ import org.firstinspires.ftc.teamcode.util.field.Alliance;
  */
 public enum PieceType {
     /** Yellow, neutral, about 2.8 in. Forty on the field. */
-    POLLEN(2.8, new float[] {55f}),
+    POLLEN(new float[] {55f}),
     /** Red or blue, alliance-specific, about 3.6 in. Eight of each colour. */
-    NECTAR(3.6, new float[] {0f, 220f});
+    NECTAR(new float[] {0f, 220f});
 
     /**
      * True once the hue windows below have been measured on real POLLEN and NECTAR under venue
      * lighting ({@code Bench: Color sensors}). Until then a hue match is not trusted to count pieces
      * (a hue-only entrance sensor is treated as not fitted, and one with a distance reading counts
-     * by distance) or to drive the G408 reject. Same pattern as {@code Limelight.MOUNT_CALIBRATED}:
-     * a sensor is trusted because it was measured, not because it is in the configuration
+     * by distance) or to drive the G408 reject: a sensor is trusted because it was measured, not
+     * because it is in the configuration
      * (fixthese R2-A3).
      */
     public static boolean HUES_CALIBRATED = false;
@@ -43,24 +42,10 @@ public enum PieceType {
     /** Below this value the reading is shadow noise. */
     public static float MIN_VALUE = 0.15f;
 
-    private final double diameterInches;
     private final float[] hueDegrees;
 
-    PieceType(double diameterInches, float[] hueDegrees) {
-        this.diameterInches = diameterInches;
+    PieceType(float[] hueDegrees) {
         this.hueDegrees = hueDegrees;
-    }
-
-    public double diameterInches() {
-        return diameterInches;
-    }
-
-    /**
-     * Height of the piece's centre above the floor when it rests on a tile: the plane the camera
-     * ray is intersected with when estimating where a seen piece is.
-     */
-    public double targetHeightInches() {
-        return diameterInches / 2;
     }
 
     /**

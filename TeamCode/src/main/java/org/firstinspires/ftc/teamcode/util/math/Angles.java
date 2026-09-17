@@ -5,7 +5,7 @@ package org.firstinspires.ftc.teamcode.util.math;
  *
  * <h2>Why this is its own class</h2>
  * Field geometry, heading hold, and macro targeting all need this arithmetic, and none of it has
- * anything to do with a camera. Keeping it out of {@link VisionMath} keeps that class's name
+ * anything to do with a camera.
  * honest and shows where general math belongs.
  *
  * <h2>The wrap is the whole point</h2>
@@ -44,14 +44,4 @@ public final class Angles {
         return diff;
     }
 
-    /**
-     * Heading that points from the robot toward a robot-frame offset, normalised to {@code [0, 2pi)}.
-     *
-     * @param robotHeadingRad the robot's current field heading
-     * @param forward         offset ahead of the robot, in any consistent unit
-     * @param left            offset to the robot's left, same unit
-     */
-    public static double headingToward(double robotHeadingRad, double forward, double left) {
-        return normalizeAngle(robotHeadingRad + Math.atan2(left, forward));
-    }
 }

@@ -94,12 +94,7 @@ public class MacrosTest {
         Macros.AIM_TIMEOUT_MS = 2500;
         Macros.AIM_TOLERANCE_DEGREES = 2.0;
         Macros.AIM_REISSUE_DEGREES = 1.0;
-        Macros.ALIGN_TOLERANCE_DEGREES = 1.5;
         Shooter.HEADING_OFFSET_RAD = Math.PI;
-        Macros.PIPELINE_WARMUP_MS = 250;
-        Macros.SEARCH_TIMEOUT_MS = 2000;
-        Macros.APPROACH_TIMEOUT_MS = 4000;
-        Macros.ALIGN_TIMEOUT_MS = 1500;
         Macros.SNAP_TIMEOUT_MS = 1500;
         Macros.SNAP_TOLERANCE_DEGREES = 3.0;
         Macros.DRIVE_TO_TIMEOUT_MS = 6000;
@@ -517,26 +512,6 @@ public class MacrosTest {
         runToCompletion(robot.macros.intakeUntilFull());
         assertEquals(Macros.Outcome.NO_TARGET, robot.macros.getOutcome());
         assertEquals(0, intakeMotor.maxCommandedVelocity, EPS);
-    }
-
-    @Test
-    public void collectPieceTimesOutWhenNothingIsVisible() {
-        Command macro = robot.macros.collectPiece();
-        assertTrue(macro.requirements().contains(robot.drivetrain));
-        assertTrue(macro.requirements().contains(robot.intake));
-
-        runToCompletion(macro);
-        assertEquals(Macros.Outcome.TIMED_OUT, robot.macros.getOutcome());
-        assertEquals("no target, so no path", 0, follower.followCalls);
-        assertEquals(0, intakeMotor.commandedVelocity, EPS);
-        assertFalse(robot.intake.hasPiece());
-    }
-
-    @Test
-    public void alignToPieceReportsNoTargetWithoutACamera() {
-        runToCompletion(robot.macros.alignToPiece());
-        assertEquals(Macros.Outcome.NO_TARGET, robot.macros.getOutcome());
-        assertEquals("no blob, so no turn was started", 0, follower.holdCalls);
     }
 
     // ---- Aiming (fixed shooter: the drivetrain turns) ----

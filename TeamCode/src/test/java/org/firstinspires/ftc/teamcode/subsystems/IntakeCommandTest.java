@@ -127,47 +127,6 @@ public class IntakeCommandTest {
     }
 
     @Test
-    public void captureCommandMarksCapturedOnlyWhenItFinishesNaturally() {
-        boolean[] seen = {false};
-        Command capture = intake.captureCommand(() -> seen[0]);
-        capture.schedule();
-        tick();
-        assertFalse(intake.hasPiece());
-        assertEquals(Intake.INTAKE_TICKS_PER_SEC, motor.commandedVelocity, EPS);
-
-        seen[0] = true;
-        tick();
-        assertTrue(intake.hasPiece());
-        assertEquals(0, motor.commandedVelocity, EPS);
-        assertFalse(Scheduler.isScheduled(capture));
-    }
-
-    @Test
-    public void anInterruptedCaptureDoesNotClaimAPiece() {
-        Command capture = intake.captureCommand(() -> false);
-        capture.schedule();
-        tick();
-        Scheduler.cancel(capture);
-        tick();
-        assertFalse(intake.hasPiece());
-        assertEquals(0, motor.commandedVelocity, EPS);
-    }
-
-    @Test
-    public void updateLatchesPossessionFromTheSupplierWhileIntaking() {
-        boolean[] atSensor = {false};
-        intake.setCapturedSupplier(() -> atSensor[0]);
-        intake.intakeCommand().schedule();
-        tick();
-        assertFalse(intake.hasPiece());
-        atSensor[0] = true;
-        tick();
-        assertTrue(intake.hasPiece());
-        intake.outtake();
-        assertFalse("outtaking clears possession", intake.hasPiece());
-    }
-
-    @Test
     public void fullStorageHoldsTheRollerStillButKeepsTheMode() {
         boolean[] full = {true};
         intake.setFullSupplier(() -> full[0]);
@@ -215,7 +174,6 @@ public class IntakeCommandTest {
         Intake.REJECT_ENABLED = true;
         final boolean[] opponent = {false};
         intake.setRejectSupplier(() -> opponent[0]);
-        intake.setCapturedSupplier(() -> opponent[0]);          // the same sensor sees "a piece"
         intake.intakeCommand().schedule();
         tick();
         assertEquals(Intake.INTAKE_TICKS_PER_SEC, motor.commandedVelocity, EPS);
@@ -225,7 +183,6 @@ public class IntakeCommandTest {
         tick();
         assertTrue(intake.isRejecting());
         assertEquals(Intake.EJECT_TICKS_PER_SEC, motor.commandedVelocity, EPS);
-        assertFalse("a rejected piece is not ours", intake.hasPiece());
         assertEquals(1, intake.getRejections());
         opponent[0] = false;                                     // it left
         while (clock.nowMs() < startedAt + Intake.REJECT_MS) {

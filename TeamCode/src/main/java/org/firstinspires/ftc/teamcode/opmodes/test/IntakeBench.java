@@ -71,8 +71,8 @@ public class IntakeBench extends BenchOpMode {
         telemetry.addData("Anti-jam", "%s  stall suspected %s  unjamming %s  attempts %d%s",
                 Intake.ANTI_JAM_ENABLED ? "ON" : "off", intake.isStallSuspected(), intake.isUnjamming(),
                 intake.getUnjamAttempts(), intake.hasGivenUpUnjamming() ? "  GAVE UP" : "");
-        telemetry.addData("Piece", "hasPiece %s  blocked by full %s  rejecting %s (%d)",
-                intake.hasPiece(), intake.isBlockedByFullStorage(), intake.isRejecting(), intake.getRejections());
+        telemetry.addData("Piece", "blocked by full %s  rejecting %s (%d)",
+                intake.isBlockedByFullStorage(), intake.isRejecting(), intake.getRejections());
         telemetry.addData("Entrance sees", robot.storageEntranceSensor.isAvailable()
                 ? String.valueOf(PieceType.classify(robot.storageEntranceSensor)) : "no sensor");
         telemetry.addData("Custom speed", "%.0f t/s (hold A)", customTicksPerSec);

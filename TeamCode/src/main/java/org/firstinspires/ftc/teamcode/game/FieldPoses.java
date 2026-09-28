@@ -3,7 +3,6 @@ package org.firstinspires.ftc.teamcode.game;
 import com.pedropathing.math.Pose;
 
 import org.firstinspires.ftc.teamcode.util.field.FieldConstants;
-import org.firstinspires.ftc.teamcode.util.field.StartPosition;
 
 /**
  * Where the robot goes on this season's field, in the frame documented on {@link Field}.
@@ -12,14 +11,20 @@ import org.firstinspires.ftc.teamcode.util.field.StartPosition;
  * {@link FieldConstants#forAlliance} rather than writing a second copy: one source of truth per
  * location means a measurement correction is a one-line change instead of a hunt for the rotated
  * twin someone forgot to update. The field is 180-degree symmetric, so the red twin of
- * {@code (x, y, h)} is {@code (144 - x, 144 - y, h + pi)}; {@code FieldPosesTest} checks that the
- * rotated starts land on the tiles the manual names.
+ * {@code (x, y, h)} is {@code (144 - x, 144 - y, h + pi)}.
+ *
+ * <p>Three poses, because the robot has three places it goes on purpose: where it starts, where it
+ * shoots from, and where it parks. There is one start pose because there is one autonomous — the
+ * start-position enum and the selector that chose between two starts are gone, and a second start
+ * belongs here again only when an autonomous actually drives from it.
  *
  * <p>Fields are non-final statics so a value can be corrected from an OpMode on a practice field.
  *
- * <h2>These numbers are placeholders</h2>
- * Wall standoffs use the V1 CAD footprint; the shooting spot and park are reasonable first
- * guesses. Measure the real field and replace them before trusting any path.
+ * <h2>Every number below is a placeholder</h2>
+ * None of this has been measured on a field. The wall standoffs come from the V1 CAD footprint; the
+ * shooting spot and the park are first guesses built on {@link Field} geometry that is itself marked
+ * INFERRED. Measure the real field and replace them. Until then, treat any path or autonomous that
+ * depends on these as untested — because it is.
  */
 public final class FieldPoses {
     private FieldPoses() {}
@@ -32,21 +37,12 @@ public final class FieldPoses {
     /**
      * Start against the far wall at the D6/E6 seam with the shooter (the rear) toward the HIVE:
      * heading 90, front to the wall, rear toward -Y. This is the wall blue's starting up-CELL
-     * points toward, so the first three shots need no move. Red's twin is the audience wall at
-     * B1/C1, heading 270.
+     * points toward, so the first shots need no move — which is the whole reason this is the start.
+     * Red's twin is the audience wall at B1/C1, heading 270.
      */
     public static Pose BLUE_START_FACING_HIVE =
             new Pose(4 * Field.TILE_INCHES, Field.FIELD_SIZE_INCHES - ROBOT_HALF_LENGTH_INCHES,
                     Math.toRadians(90));
-
-    /**
-     * Start against the blue alliance wall at the F3/F4 seam with the shooter toward the HIVE:
-     * heading 0, front to the wall, rear toward -X. Clear of the GARDEN corner and the FLOWER
-     * volume. Red's twin is A3/A4, heading 180.
-     */
-    public static Pose BLUE_START_ALLIANCE_WALL =
-            new Pose(Field.FIELD_SIZE_INCHES - ROBOT_HALF_LENGTH_INCHES, 3 * Field.TILE_INCHES,
-                    Math.toRadians(0));
 
     /**
      * A shooting position in front of the blue far-side CELL (the one that starts up), with the
@@ -64,16 +60,4 @@ public final class FieldPoses {
     public static Pose BLUE_PARK =
             new Pose(Field.FIELD_SIZE_INCHES - ROBOT_HALF_LENGTH_INCHES - WALL_CLEARANCE_INCHES,
                     Field.blueLoadingZoneCenter().y(), 0);
-
-    /** Blue-side start pose for a start position. Adding a position needs a case here and nothing else. */
-    public static Pose startPose(StartPosition position) {
-        switch (position) {
-            case FACING_HIVE:
-                return BLUE_START_FACING_HIVE;
-            case ALLIANCE_WALL:
-                return BLUE_START_ALLIANCE_WALL;
-            default:
-                throw new IllegalArgumentException("no pose for " + position);
-        }
-    }
 }

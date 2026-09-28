@@ -6,11 +6,11 @@ import com.qualcomm.hardware.limelightvision.LLStatus;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
-import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
 import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
 
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * Wraps the Limelight 3A. One job: AprilTag <em>aiming</em> at the HIVE CELL clusters.
@@ -21,6 +21,15 @@ import java.util.List;
  * and the SDK v12.0 notes say they are unsuitable for field localisation, so there is no botpose
  * here. The output is {@link #getTagTx(int, int)}, the horizontal error to the cluster the shooter
  * must hit; which IDs belong to which CELL lives in {@code game/Field}.
+ *
+ * <h2>The one subsystem that still fails soft</h2>
+ * Every other lookup in this codebase is a bare {@code hardwareMap.get} that throws on a bad config
+ * name, because a crash at init is the loudest possible diagnosis. The lookup here is no different.
+ * What <em>is</em> different is that this device is reached over USB-Ethernet: {@code start()} and
+ * {@code getLatestResult()} are calls to another computer, and a correctly configured camera that is
+ * unpowered or booting makes them throw or block on socket timeouts. Killing the OpMode over that
+ * would cost a match for a mechanism the robot can drive and shoot without, so those calls — and
+ * only those — are caught, recorded in {@link #isConnected()}, and reported on the driver station.
  */
 public class Limelight {
     public static int APRILTAG_PIPELINE_INDEX = 0;
@@ -32,33 +41,35 @@ public class Limelight {
     private final Limelight3A limelight;
     private LLResult latestResult;
     private List<LLResultTypes.FiducialResult> tagDetections = Collections.emptyList();
+    /**
+     * Set by the first call the camera does not answer, and never cleared: {@code start()} happens
+     * once, at init, so a camera that was not talking then will not begin on its own. Power-cycle the
+     * camera and restart the OpMode.
+     */
+    private boolean cameraFailed = false;
 
     public Limelight(HardwareMap hardwareMap) {
         this(hardwareMap, HardwareNames.LIMELIGHT);
     }
 
     public Limelight(HardwareMap hardwareMap, String name) {
-        limelight = Hardware.get(hardwareMap, Limelight3A.class, name);
-        if (limelight == null) return;
-        // pipelineSwitch() and start() are synchronous HTTP calls to the camera. If it is unpowered
-        // these block on socket timeouts inside OpMode init(), so fail soft instead.
+        limelight = hardwareMap.get(Limelight3A.class, name);
         try {
             limelight.pipelineSwitch(APRILTAG_PIPELINE_INDEX);
             limelight.start();
         } catch (RuntimeException e) {
-            Hardware.recordFailure(name, "did not respond during init: " + e.getMessage());
+            cameraFailed = true;
         }
-    }
-
-    /** False when the camera is missing from the robot configuration. All reads then return empty. */
-    public boolean isAvailable() {
-        return limelight != null;
     }
 
     /** Takes the camera's latest frame; once per loop from {@code Robot.readSensors()}. */
     public void update() {
-        if (limelight == null) return;
-        latestResult = limelight.getLatestResult();
+        try {
+            latestResult = limelight.getLatestResult();
+        } catch (RuntimeException e) {
+            cameraFailed = true;
+            latestResult = null;
+        }
         if (latestResult == null || !latestResult.isValid()) {
             tagDetections = Collections.emptyList();
             return;
@@ -67,8 +78,19 @@ public class Limelight {
         tagDetections = tags == null ? Collections.<LLResultTypes.FiducialResult>emptyList() : tags;
     }
 
+    /** False once a call to the camera has failed: it is configured but not answering. */
+    public boolean isConnected() {
+        return !cameraFailed;
+    }
+
+    /** Temperature, frame rate, pipeline. Diagnostics only — another call over the wire. */
     public LLStatus getStatus() {
-        return limelight == null ? null : limelight.getStatus();
+        try {
+            return limelight.getStatus();
+        } catch (RuntimeException e) {
+            cameraFailed = true;
+            return null;
+        }
     }
 
     /** True when the last frame carried a target and is fresh. */
@@ -80,23 +102,12 @@ public class Limelight {
         return latestResult != null && latestResult.getStaleness() > MAX_STALENESS_MS;
     }
 
-    /** Raw horizontal offset of the current target in degrees, or NaN with no target. */
-    public double getTx() {
-        return hasTarget() ? latestResult.getTx() : Double.NaN;
-    }
-
-    /** Raw vertical offset in degrees, or NaN with no target. */
-    public double getTy() {
-        return hasTarget() ? latestResult.getTy() : Double.NaN;
-    }
-
-    /** Target area as a percentage of the image (0-100), or NaN with no target. */
-    public double getTa() {
-        return hasTarget() ? latestResult.getTa() : Double.NaN;
-    }
-
     public void stop() {
-        if (limelight != null) limelight.stop();
+        try {
+            limelight.stop();
+        } catch (RuntimeException e) {
+            cameraFailed = true;
+        }
     }
 
     // ---- AprilTags: aiming ----
@@ -125,9 +136,10 @@ public class Limelight {
         return hasTarget() ? tagDetections.size() : 0;
     }
 
-    /** Every tag in the fresh frame (read-only; empty when stale). */
-    public List<LLResultTypes.FiducialResult> getTags() {
-        return hasTarget() ? Collections.unmodifiableList(tagDetections)
-                : Collections.<LLResultTypes.FiducialResult>emptyList();
+    /** One line for a telemetry card: whether the camera is talking, and what it can see. */
+    public String getStatusLine() {
+        if (cameraFailed) return "NOT RESPONDING";
+        if (!hasTarget()) return isStale() ? "stale" : "no target";
+        return String.format(Locale.US, "%d tag(s)  tx %.1f", getTagCount(), latestResult.getTx());
     }
 }

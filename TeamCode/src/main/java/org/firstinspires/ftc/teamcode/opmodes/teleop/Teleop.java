@@ -1,189 +1,104 @@
 package org.firstinspires.ftc.teamcode.opmodes.teleop;
 
-import com.pedropathing.ivy.Command;
 import com.pedropathing.ivy.Scheduler;
 import com.pedropathing.math.Pose;
-import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
-import org.firstinspires.ftc.teamcode.Robot;
 import org.firstinspires.ftc.teamcode.commands.Macros;
 import org.firstinspires.ftc.teamcode.game.Field;
 import org.firstinspires.ftc.teamcode.game.FieldPoses;
 import org.firstinspires.ftc.teamcode.opmodes.MatchOpMode;
-import org.firstinspires.ftc.teamcode.subsystems.Storage;
+import org.firstinspires.ftc.teamcode.subsystems.Intake;
+import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.util.field.Alliance;
 import org.firstinspires.ftc.teamcode.util.field.FieldConstants;
 import org.firstinspires.ftc.teamcode.util.field.PoseStorage;
 import org.firstinspires.ftc.teamcode.util.math.DriveScaling;
 import org.firstinspires.ftc.teamcode.util.time.MatchClock;
 
-import java.util.Locale;
 
 /**
- * The match TeleOp.
+ * The match TeleOp. Concrete per alliance ({@code BlueTeleop}, {@code RedTeleop}) so the side is
+ * chosen by picking the OpMode and can never be stale, unconfirmed, or inherited wrong from a
+ * previous run.
  *
- * <p>Driving is itself an Ivy command ({@code Drivetrain.driverControlCommand}, which feeds Pedro's
- * {@code follower.manual(...)} with field-centric mixing and a heading hold) rather than code in the
- * loop. That is what makes macros safe: scheduling one that needs the drivetrain suspends driver
- * control through the scheduler, and ending or cancelling it restores driver control automatically.
- * There is no "am I in a macro?" flag for the loop to get wrong.
+ * <h2>Two ways to shoot, and the second one always works</h2>
+ * Normally the flywheel speed comes from the pose — distance to the target CELL through
+ * {@code Shooter.setTargetForDistance} — and the aim lock points the rear-firing shooter at that CELL
+ * through {@code Macros.aimHeading}. Both depend on odometry being right.
  *
- * <p>Pedro in teleop: sticks through {@code manual}, heading hold (and the aim lock riding on it) through a Pedro controller, snap
- * turns through {@code hold}, and two one-button paths ({@link Controls#DRIVE_TO_SHOOT},
- * {@link Controls#DRIVE_TO_PARK}) built from the current pose with {@code Paths.line}.
+ * <p><b>Operator dpad-up is the escape hatch.</b> It drops into MANUAL: the speed becomes
+ * {@code Shooter.MANUAL_TICKS_PER_SEC}, trimmed live on dpad left/right, and the aim lock is switched
+ * off so the driver points the robot by hand. Odometry, the distance table and the aim law are all
+ * out of the loop in one press. That matters because every automatic path here is pose-derived, so
+ * one hard collision can make all of them wrong at once, and there is no sensor anywhere that would
+ * notice.
  *
- * <p>The lifecycle lives in {@link MatchOpMode}. What remains here is only what makes this OpMode
- * teleop: the bindings (one {@link Controls.Snapshot} per loop), macro launch and abort, the aim
- * lock the driver holds on the right trigger (the shooter is fixed, so aiming is the drivetrain's
- * heading hold pointed at the HIVE by {@code Macros.aimHeading}), the flywheel arm that comes back
- * by itself after a macro preempts it, haptics on transitions, and the two telemetry modes.
- *
- * <p>Season facts enter only through {@code game/}: which CELL to aim at
- * ({@code Field.upCellSide} after the TIPs the operator has counted), its tag range, and the
- * shooting and park poses, all authored for BLUE and rotated by {@code FieldConstants.forAlliance}.
+ * <h2>Nothing counts pieces</h2>
+ * There is no sensor in the intake or the tunnel. Shoot One fires one tunnel pulse, Shoot All fires
+ * {@code Macros.PIECES_PER_LOAD}, and the operator decides when the robot is empty. The card says
+ * "pulses", never "pieces".
  */
-@TeleOp(name = "Teleop", group = "Main")
-public class Teleop extends MatchOpMode {
-    /** Stick deflection that counts as "the driver wants control back" and aborts a drive macro. */
-    public static double MACRO_ABORT_STICK = 0.25;
-    /**
-     * Whether to show the full engineering readout. Off during a match: nobody reads twenty lines of
-     * subsystem state while driving, and the few things that matter get lost among them.
-     */
-    public static boolean DEBUG_TELEMETRY = false;
-    /** Below this, the pack is sagging enough to change how the robot drives. Warn the drivers. */
-    public static double LOW_BATTERY_VOLTS = 11.5;
-    /** Right-trigger pull past this holds the aim lock. */
-    public static double AIM_LOCK_TRIGGER = 0.5;
+public abstract class Teleop extends MatchOpMode {
+    /** How much dpad left/right moves the manual flywheel speed, in ticks/sec per press. */
+    public static double SPEED_TRIM_TICKS_PER_SEC = 100;
 
-    private static final int RUMBLE_SUCCESS_BLIPS = 1;
-    /** Distinguishable from success without looking. */
-    private static final int RUMBLE_FAILURE_BLIPS = 3;
-    private static final int RUMBLE_FULL_BLIPS = 2;
-    /** One long buzz, not blips: "full" is two blips on the same pads and must feel different. */
-    private static final int RUMBLE_FINAL_MS = 600;
+    private final Alliance side;
 
-    private Alliance alliance = Alliance.BLUE;
-    /** Where the current alliance came from, for the init card: default, auto, or the dpad. */
-    private String allianceSource = "default";
-    private boolean inheritedPose = false;
-    private boolean inheritedCount = false;
-    /** TIPs of our HIVE the operator has counted; the up-CELL flips on each. */
-    private int tipsCounted = 0;
-    /**
-     * The CELL the shooter is aimed at, its ground-plane pose and its tag range, recomputed by
-     * {@link #retarget()} only when the alliance or the TIP count changes: the aim-lock supplier
-     * runs every centred-stick loop and used to rebuild all three (two or three {@code Pose}s and
-     * an array) each time.
-     */
-    private Field.CellSide targetSide = Field.CellSide.FAR;
-    private Pose targetCell = null;
-    private int[] targetTags = {0, 0};
-
-    private Command activeMacro = null;
+    private boolean intakeForward = false;
+    private boolean intakeReverse = false;
     private boolean flywheelArmed = false;
-    private Command spinHold = null;
+    private boolean manualMode = false;
+    /** How many times our HIVE has tipped, which flips the CELL the shooter must hit. */
+    private int tipsCounted = 0;
 
-    // Previous values, for firing haptics on the transition rather than continuously.
+    private Pose targetCell = null;
+    private int minTag = 0;
+    private int maxTag = 0;
+
     private Macros.Outcome lastOutcome = Macros.Outcome.IDLE;
-    private int lastCount = 0;
-    private boolean announcedFull = false;
-    private boolean announcedFinal = false;
+    private boolean warnedFinalSeconds = false;
+    private boolean warnedJam = false;
 
-    @Override
-    protected String logTag() {
-        return "teleop";
+    protected Teleop(Alliance side) {
+        this.side = side;
     }
 
     @Override
-    protected MatchClock.Period matchPeriod() {
+    protected final Alliance alliance() {
+        return side;
+    }
+
+    @Override
+    protected final MatchClock.Period matchPeriod() {
         return MatchClock.Period.TELEOP;
     }
 
-    // ---- Lifecycle hooks ----
-
     @Override
     protected void onInit() {
-        // Default commands: priority -1, SUSPEND, QUEUE. Any command that needs the resource
-        // preempts them and they resume by themselves when it ends. The sticks are read live by the
-        // suppliers, not from the per-loop snapshot: analog values are never consumed.
-        // Exactly one drive default. Before Pedro is tuned there is no follower, so the sticks go
-        // straight to the motors through OpenLoopDrive: robot-centric, no heading hold, and the
-        // drive macros stay off (see handleDriver). Robot builds only one of the two motor layers.
-        if (robot.drivetrain.isAvailable()) {
-            robot.drivetrain.driverControlCommand(
-                    () -> shaped(Controls.DRIVE_FORWARD),
-                    () -> shaped(Controls.DRIVE_STRAFE),
-                    () -> shaped(Controls.DRIVE_TURN)).schedule();
-        } else {
-            robot.openLoopDrive.driverControlCommand(
-                    () -> shaped(Controls.DRIVE_FORWARD),
-                    () -> shaped(Controls.DRIVE_STRAFE),
-                    () -> shaped(Controls.DRIVE_TURN)).schedule();
-        }
-        robot.intake.defaultIdleCommand().schedule();
-        robot.storage.defaultIdleCommand().schedule();
-        robot.transfer.defaultIdleCommand().schedule();
-        robot.shooter.defaultIdleCommand().schedule();
+        // Exactly one drive default, and one idle per mechanism. The drive default reads the sticks
+        // through DriveScaling and applies the slow-mode scale; the heading hold lives inside
+        // Drivetrain and only engages once there is a follower.
+        Scheduler.schedule(
+                robot.drivetrain.driverControlCommand(
+                        () -> shaped(Controls.DRIVE_FORWARD),
+                        () -> shaped(Controls.DRIVE_STRAFE),
+                        () -> shaped(Controls.DRIVE_TURN)),
+                robot.intake.operatorControlCommand(this::intakeMode),
+                robot.shooter.armedControlCommand(() -> flywheelArmed));
 
-        // Inherit where autonomous left off. Without this, teleop starts with an unknown heading
-        // while defaulting to field-centric drive, the mode that depends on heading most, so the
-        // driver's first stick input sends the robot in an arbitrary direction.
-        if (PoseStorage.hasPose()) {
-            robot.drivetrain.setPose(PoseStorage.getPose());
-            inheritedPose = true;
-        }
-        if (PoseStorage.hasAlliance()) {
-            alliance = PoseStorage.getAlliance();
-            allianceSource = "from auto";
-        }
-        // The pieces auto left on board. Without an entrance sensor this is the only way teleop's
-        // count can ever be right; with one it carries a cut auto's remainder across.
-        if (PoseStorage.hasPieceCount()) {
-            robot.storage.setCount(PoseStorage.getPieceCount());
-            inheritedCount = true;
-        }
-        applyAlliance();
-        lastCount = robot.storage.count();
-    }
-
-    /** Everything that depends on the alliance and must follow it when the dpad changes it. */
-    private void applyAlliance() {
-        robot.drivetrain.setDriverHeadingOffset(Field.driverForwardHeading(alliance));
-        robot.setAlliance(alliance);                    // G408: which NECTAR is the opponent's
+        robot.drivetrain.setDriverHeadingOffset(Field.driverForwardHeading(side));
+        // Autonomous leaves its final pose behind, so field-centric drive and the aim law work from
+        // the first second of teleop with no re-init ritual.
+        if (PoseStorage.hasPose()) robot.drivetrain.setPose(PoseStorage.getPose());
         retarget();
-    }
-
-    /** The up-CELL for this alliance after the TIPs counted so far, from {@code game/}. */
-    private void retarget() {
-        targetSide = Field.upCellSide(alliance, tipsCounted);
-        targetCell = Field.cell(alliance, targetSide);
-        targetTags = Field.tagRange(alliance, targetSide);
     }
 
     @Override
     protected void onInitLoop() {
-        // Auto normally chooses the alliance, but PoseStorage outlives the match: a practice run or
-        // the previous match can leave the wrong one behind, so the dpad always wins (fixthese B4).
-        if (gamepad1.dpadLeftWasPressed() || gamepad1.dpadRightWasPressed()) {
-            alliance = alliance.opposite();
-            allianceSource = allianceSource.equals("from auto") || allianceSource.startsWith("dpad, overrode")
-                    ? "dpad, overrode auto" : "dpad";
-            applyAlliance();
-        }
-        reportMissingHardware();
-        reportBuildWarnings();
-        if (robot.drivetrain.isAvailable() && !robot.drivetrain.isLocalizerSettled()) {
-            telemetry.addLine("!! Localizer calibrating: wait a second before START");
-        }
-        telemetry.addData("Alliance", alliance + " (" + allianceSource + ")  dpad left/right to change");
-        telemetry.addData("Pose from auto?", inheritedPose ? "yes" : "no - press Y once facing away from the driver wall");
-        telemetry.addData("Pieces", piecesLine() + (inheritedCount ? "  (from auto)" : ""));
-        telemetry.addData("Sensors", robot.sensingSummary());
-        telemetry.addData("Aim target", alliance + " " + targetSide + " CELL, tags " + targetTags[0] + "-" + targetTags[1]);
-        telemetry.addData("Pose", robot.drivetrain.getPose());
-        telemetry.addData("Drive", driveStatus());
-        if (loggerError != null) telemetry.addData("!! Logger FAILED", loggerError);
+        telemetry.addLine(side + " teleop");
+        telemetry.addLine(robot.drivetrain.hasFollower()
+                ? "Pedro tuned: paths, snaps and aim lock are live."
+                : "NOT TUNED: robot-centric sticks only; paths, snaps and aim lock are off.");
         telemetry.addLine();
         for (String line : Controls.helpLines()) telemetry.addLine(line);
     }
@@ -191,337 +106,198 @@ public class Teleop extends MatchOpMode {
     @Override
     protected void onDecide() {
         Controls.Snapshot in = Controls.read(gamepad1, gamepad2);
-        handleDriver(in);
+        boolean tuned = robot.drivetrain.hasFollower();
+
+        // One generic gate: anything that declared Needs.DRIVETRAIN is refused, with a buzz, when
+        // there is no follower to drive it. A new macro cannot slip past by being left off a list.
+        if (!tuned && in.anyPressed(Controls::requiresDrivetrain)) {
+            gamepad1.rumbleBlips(3);
+        }
+
+        handleDriver(in, tuned);
         handleOperator(in);
-        updateAimLock(in);
-        restoreFlywheelHold();
+        updateShooterTarget();
+        updateAimLock(in, tuned);
     }
 
-    @Override
-    protected void onAfterAct() {
-        updateHaptics();
-    }
-
-    @Override
-    protected void onTelemetry() {
-        matchTelemetry();
-        if (DEBUG_TELEMETRY) debugTelemetry();
-    }
-
-    // ---- Input ----
-
-    private double shaped(Controls control) {
-        return DriveScaling.shape(control.axis(gamepad1, gamepad2)) * slowScale();
-    }
-
-    private double slowScale() {
-        return DriveScaling.slowScale(Controls.SLOW_MODE.axis(gamepad1, gamepad2));
-    }
-
-    private void handleDriver(Controls.Snapshot in) {
+    private void handleDriver(Controls.Snapshot in, boolean tuned) {
         if (in.pressed(Controls.TOGGLE_DRIVE_FRAME)) robot.drivetrain.toggleFieldCentric();
-        if (in.pressed(Controls.RESET_HEADING)) {
-            // Escape hatch when field-centric drive has drifted: the driver faces the robot away
-            // from their wall and presses it. Without this a bad localisation makes the robot undrivable.
-            robot.drivetrain.resetHeading();
+        if (in.pressed(Controls.RESET_HEADING)) robot.drivetrain.resetHeading();
+
+        // A stick abort only cancels a macro that owns the drivetrain: a driver grabbing the sticks
+        // must not cancel a shot in progress.
+        boolean stickMoved = Math.abs(shaped(Controls.DRIVE_FORWARD)) > 0
+                || Math.abs(shaped(Controls.DRIVE_STRAFE)) > 0
+                || Math.abs(shaped(Controls.DRIVE_TURN)) > 0;
+        if (in.pressed(Controls.ABORT) || (stickMoved && robot.drivetrain.isFollowingPath())) {
+            robot.abortMacro();
         }
 
-        // Two ways out of a macro: the abort button, or simply grabbing the sticks. The sticks only
-        // abort a macro that owns the drivetrain; a shot in progress is not the driver's to cancel.
-        if (macroRunning() && (in.pressed(Controls.ABORT)
-                || (macroOwns(robot.drivetrain) && driverWantsControl(in)))) {
-            abortMacro();
-        }
-        if (macroRunning()) return;
+        if (!tuned) return;
 
-        // The gates read each control's declared need (Controls.Needs), not a list kept here, so a
-        // macro added later is gated the day it is bound (fixthese R2-B4).
-        if (!robot.drivetrain.isAvailable()) {
-            // No follower: every drive macro would finish at once with TIMED_OUT and the aim lock has
-            // nothing to steer. Answer the press with the failure rumble instead.
-            if (in.anyPressed(Controls::requiresDrivetrain)) gamepad1.rumbleBlips(RUMBLE_FAILURE_BLIPS);
-            return;
+        if (in.pressed(Controls.RESEED_POSE)) {
+            // The one-button recovery after a hard collision. Both the aim law and the flywheel's
+            // distance lookup are pose-derived, so drift breaks the whole scoring path at once.
+            // The robot has to actually be on its start line for this to mean anything.
+            robot.drivetrain.setPose(FieldConstants.forAlliance(FieldPoses.BLUE_START_FACING_HIVE, side));
         }
-
         if (in.pressed(Controls.DRIVE_TO_SHOOT)) {
-            startMacro(robot.macros.driveTo(alliancePose(FieldPoses.BLUE_SHOOTING_SPOT)));
-        } else if (in.pressed(Controls.DRIVE_TO_PARK)) {
-            startMacro(robot.macros.driveTo(alliancePose(FieldPoses.BLUE_PARK)));
-        } else if (in.pressed(Controls.SNAP_90)) {
-            snapTo(90);
-        } else if (in.pressed(Controls.SNAP_0)) {
-            snapTo(0);
-        } else if (in.pressed(Controls.SNAP_270)) {
-            snapTo(270);
-        } else if (in.pressed(Controls.SNAP_180)) {
-            snapTo(180);
+            Scheduler.schedule(robot.macros.driveTo(
+                    FieldConstants.forAlliance(FieldPoses.BLUE_SHOOTING_SPOT, side)));
         }
+        if (in.pressed(Controls.DRIVE_TO_PARK)) {
+            Scheduler.schedule(robot.macros.driveTo(
+                    FieldConstants.forAlliance(FieldPoses.BLUE_PARK, side)));
+        }
+        if (in.pressed(Controls.SNAP_0)) snap(0);
+        if (in.pressed(Controls.SNAP_90)) snap(90);
+        if (in.pressed(Controls.SNAP_180)) snap(180);
+        if (in.pressed(Controls.SNAP_270)) snap(270);
+    }
+
+    private void snap(double degrees) {
+        Scheduler.schedule(robot.macros.snapToHeading(Math.toRadians(degrees)));
     }
 
     private void handleOperator(Controls.Snapshot in) {
-        // A direct mechanism command while a macro owns that mechanism would interrupt the macro
-        // mid-group; it would report CANCELLED by itself, but the follower and camera pipeline need
-        // abortMacro's cleanup too, so abort it properly first.
         if (in.pressed(Controls.INTAKE)) {
-            abortIfMacroOwns(robot.intake);
-            robot.intake.intakeCommand().schedule();
+            intakeForward = !intakeForward;
+            intakeReverse = false;
         }
         if (in.pressed(Controls.OUTTAKE)) {
-            abortIfMacroOwns(robot.intake);
-            robot.intake.outtakeCommand().schedule();
-        }
-        if (in.pressed(Controls.EJECT)) {
-            abortIfMacroOwns(robot.intake);
-            robot.intake.ejectCommand().schedule();
+            intakeReverse = !intakeReverse;
+            intakeForward = false;
         }
         if (in.pressed(Controls.STOP_INTAKE)) {
-            if (macroRunning()) abortMacro();
-            robot.intake.stopCommand().schedule();
+            intakeForward = false;
+            intakeReverse = false;
+            robot.abortMacro();
         }
 
-        if (!macroRunning()) {
-            if (in.pressed(Controls.INTAKE_UNTIL_FULL)) {
-                startMacro(robot.macros.intakeUntilFull());
-            } else if (in.pressed(Controls.SHOOT_ONE)) {
-                startMacro(robot.macros.shootOne());
-            } else if (in.pressed(Controls.SHOOT_ALL)) {
-                startMacro(robot.macros.shootAll());
-            }
-        }
-
-        if (in.pressed(Controls.ARM_FLYWHEEL)) {
-            flywheelArmed = !flywheelArmed;
-            if (!flywheelArmed) stopFlywheelHold();
-        }
+        if (in.pressed(Controls.ARM_FLYWHEEL)) flywheelArmed = !flywheelArmed;
+        if (in.pressed(Controls.TOGGLE_MANUAL)) manualMode = !manualMode;
         if (in.pressed(Controls.HIVE_TIPPED)) {
             tipsCounted++;
-            retarget();          // the aim lock reads the fields live, so it re-targets at once
+            retarget();
         }
-        // The sensorless weeks: the operator is the entrance sensor. Four on board makes isFull()
-        // true, which holds the intake roller (the G407 system) and makes Shoot All fire exactly
-        // four; zero forgets it, back to "unknown" (fixthese R2-A2, R2-A3).
-        if (in.pressed(Controls.MARK_FULL)) robot.storage.setCount(Storage.CAPACITY);
-        if (in.pressed(Controls.MARK_EMPTY)) robot.storage.setCount(0);
-        if (in.pressed(Controls.TOGGLE_DEBUG)) DEBUG_TELEMETRY = !DEBUG_TELEMETRY;
+        if (in.pressed(Controls.SPEED_UP)) Shooter.MANUAL_TICKS_PER_SEC += SPEED_TRIM_TICKS_PER_SEC;
+        if (in.pressed(Controls.SPEED_DOWN)) Shooter.MANUAL_TICKS_PER_SEC -= SPEED_TRIM_TICKS_PER_SEC;
+
+        if (in.pressed(Controls.SHOOT_ONE)) Scheduler.schedule(robot.macros.shootOne());
+        if (in.pressed(Controls.SHOOT_ALL)) Scheduler.schedule(robot.macros.shootAll());
+
     }
 
     /**
-     * The aim lock is held, not toggled: while the driver pulls the trigger the drivetrain's
-     * heading hold takes its setpoint from {@code Macros.aimHeading} on the current up-CELL (read
-     * live, so a counted TIP re-targets at once); releasing the trigger returns the hold to normal.
-     * It rides inside the driver-control default command, so it survives shots and resumes after
-     * any macro without being rescheduled.
+     * What the operator currently wants the intake to do. Read every loop by the default command
+     * rather than pushed on a press: the rest state is then enforced continuously, so a missed edge
+     * or a preempting shot can never leave a mechanism running.
      */
-    private void updateAimLock(Controls.Snapshot in) {
-        boolean wanted = robot.drivetrain.isAvailable() && in.axis(Controls.AIM_LOCK) > AIM_LOCK_TRIGGER;
+    private Intake.Mode intakeMode() {
+        if (intakeForward) return Intake.Mode.IN;
+        if (intakeReverse) return Intake.Mode.OUT;
+        return Intake.Mode.OFF;
+    }
+
+    /**
+     * The flywheel speed, chosen every loop. Manual wins outright; otherwise the distance table is
+     * consulted, and with no pose at all the manual value is the only thing left.
+     */
+    private void updateShooterTarget() {
+        Pose pose = robot.drivetrain.getPose();
+        if (manualMode || pose == null || targetCell == null) {
+            robot.shooter.setManualTarget();
+        } else {
+            robot.shooter.setTargetForDistance(pose.distance(targetCell));
+        }
+    }
+
+    /**
+     * The aim lock, held on the right trigger: the heading hold points the rear-firing shooter at the
+     * target CELL while the sticks still translate. Off in manual mode, by design — that is what
+     * makes manual an override and not a partial one.
+     */
+    private void updateAimLock(Controls.Snapshot in, boolean tuned) {
+        boolean wanted = tuned && !manualMode
+                && Controls.AIM_LOCK.axis(gamepad1, gamepad2) > 0.5
+                && targetCell != null;
         if (wanted && !robot.drivetrain.isAimLocked()) {
-            robot.drivetrain.setAimLock(() -> robot.macros.aimHeading(targetCell, targetTags[0], targetTags[1]));
+            robot.drivetrain.setAimLock(() -> robot.macros.aimHeading(targetCell, minTag, maxTag));
         } else if (!wanted && robot.drivetrain.isAimLocked()) {
             robot.drivetrain.clearAimLock();
         }
     }
 
-    /**
-     * The flywheel hold is the operator's standing wish, not a one-shot. A shot macro preempts it
-     * (Ivy ends, it does not suspend, a priority-0 command), so once no macro is running it is
-     * scheduled again.
-     */
-    private void restoreFlywheelHold() {
-        if (macroRunning()) return;
-        if (flywheelArmed && !isScheduled(spinHold)) {
-            spinHold = robot.shooter.holdSpeedCommand();
-            spinHold.schedule();
-        }
+    /** Recomputed only when the alliance's up-CELL changes, not every loop. */
+    private void retarget() {
+        Field.CellSide up = Field.upCellSide(side, tipsCounted);
+        targetCell = Field.cell(side, up);
+        int[] range = Field.tagRange(side, up);
+        minTag = range[0];
+        maxTag = range[1];
     }
 
-    private void stopFlywheelHold() {
-        if (spinHold != null) Scheduler.cancel(spinHold);
-        spinHold = null;
-    }
-
-    private static boolean isScheduled(Command command) {
-        return command != null && Scheduler.isScheduled(command);
-    }
-
-    private void snapTo(double degrees) {
-        startMacro(robot.macros.snapToHeading(Math.toRadians(degrees)));
-    }
-
-    private void startMacro(Command macro) {
-        activeMacro = macro;
-        macro.schedule();
-    }
-
-    private boolean macroRunning() {
-        return isScheduled(activeMacro);
-    }
-
-    private boolean macroOwns(Object subsystem) {
-        return macroRunning() && activeMacro.requirements().contains(subsystem);
-    }
-
-    private void abortIfMacroOwns(Object subsystem) {
-        if (macroOwns(subsystem)) abortMacro();
-    }
-
-    private boolean driverWantsControl(Controls.Snapshot in) {
-        return Math.abs(in.axis(Controls.DRIVE_FORWARD)) > MACRO_ABORT_STICK
-                || Math.abs(in.axis(Controls.DRIVE_STRAFE)) > MACRO_ABORT_STICK
-                || Math.abs(in.axis(Controls.DRIVE_TURN)) > MACRO_ABORT_STICK;
-    }
-
-    private void abortMacro() {
-        Scheduler.cancel(activeMacro);
-        // Cancelling the command releases the Ivy resources, but the Pedro follower drives itself
-        // once handed a path: this is the call that actually stops the robot.
-        robot.abortMacro();
-        activeMacro = null;
-    }
-
-    /** Which motor layer the sticks reach, and what that costs the driver. */
-    private String driveStatus() {
-        if (robot.drivetrain.isAvailable()) {
-            return robot.drivetrain.isFieldCentric() ? "Pedro, field-centric" : "Pedro, robot-centric";
-        }
-        if (robot.openLoopDrive.isAvailable()) {
-            return "OPEN LOOP (Pedro not tuned): robot-centric, no heading hold, drive macros off";
-        }
-        return "!! NO DRIVE MOTORS";
-    }
-
-    // ---- Season targets, from game/ ----
-
-    private Pose alliancePose(Pose bluePose) {
-        return FieldConstants.forAlliance(bluePose, alliance);
-    }
-
-    // ---- Feedback ----
-
-    /**
-     * Haptic feedback for things a driver cannot see. Telemetry reports outcomes accurately and no
-     * driver reads it mid-match. Each of these fires on a transition, so a held state never buzzes
-     * continuously. CANCELLED is deliberately silent: the driver just cancelled it and knows.
-     */
-    private void updateHaptics() {
-        Macros.Outcome outcome = robot.macros.getOutcome();
-        if (outcome != lastOutcome) {
-            if (outcome == Macros.Outcome.SUCCESS) {
-                gamepad1.rumbleBlips(RUMBLE_SUCCESS_BLIPS);
-            } else if (outcome == Macros.Outcome.TIMED_OUT || outcome == Macros.Outcome.NO_TARGET) {
-                gamepad1.rumbleBlips(RUMBLE_FAILURE_BLIPS);
-            }
-            lastOutcome = outcome;
+    @Override
+    protected void onAfterAct() {
+        // Haptics fire on transitions, because a driver cannot read telemetry mid-match.
+        Macros.Outcome now = robot.macros.getOutcome();
+        if (now != lastOutcome) {
+            if (now == Macros.Outcome.SUCCESS) gamepad1.rumbleBlips(1);
+            else if (now == Macros.Outcome.TIMED_OUT) gamepad1.rumbleBlips(3);
+            lastOutcome = now;
         }
 
-        // Possession is the one piece of state both drivers act on, so both get told.
-        boolean full = robot.storage.isFull();
-        int count = robot.storage.count();
-        if (full && !announcedFull) {
-            gamepad1.rumbleBlips(RUMBLE_FULL_BLIPS);
-            gamepad2.rumbleBlips(RUMBLE_FULL_BLIPS);
-        } else if (count > lastCount) {
-            gamepad1.rumbleBlips(RUMBLE_SUCCESS_BLIPS);
-            gamepad2.rumbleBlips(RUMBLE_SUCCESS_BLIPS);
+        // A jam the anti-jam logic has given up on needs a human to reverse it.
+        if (robot.intake.hasGivenUpUnjamming() && !warnedJam) {
+            warnedJam = true;
+            gamepad2.rumbleBlips(3);
+        } else if (!robot.intake.hasGivenUpUnjamming()) {
+            warnedJam = false;
         }
-        announcedFull = full;
-        lastCount = count;
 
         MatchClock clock = robot.getMatchClock();
-        if (!announcedFinal && clock != null && clock.isFinalSeconds()) {
-            announcedFinal = true;
-            gamepad1.rumble(RUMBLE_FINAL_MS);
-            gamepad2.rumble(RUMBLE_FINAL_MS);
+        if (clock != null && clock.isFinalSeconds() && !warnedFinalSeconds) {
+            warnedFinalSeconds = true;
+            // One long buzz, deliberately unlike any other pattern: 20 seconds left.
+            gamepad1.rumble(600);
+            gamepad2.rumble(600);
         }
     }
 
-    // ---- Telemetry ----
-
-    /**
-     * What a driver can actually use mid-match: time, pieces, what the last macro did, how the
-     * robot is aiming, and anything broken. Faults render only when present, so their presence is
-     * itself the signal.
-     */
-    private void matchTelemetry() {
+    @Override
+    protected void onTelemetry() {
         MatchClock clock = robot.getMatchClock();
+        // Loop rate first: it is the number that explains everything else going wrong.
+        telemetry.addData("Loop", "%.0f Hz (%.1f ms)", robot.getLoopHz(), robot.getLoopMs());
         telemetry.addData("Time", clock == null ? "-" : clock.getStatus());
-        telemetry.addData("Pieces", piecesLine());
-        telemetry.addData("Macro", robot.macros.getStatus());
-        telemetry.addData("Drive", driveStatus());
-        telemetry.addData("Aim", (robot.drivetrain.isAimLocked() ? "LOCKED on " : Controls.AIM_LOCK.button() + " aims at ")
-                + alliance + " " + targetSide + " CELL"
-                + (robot.macros.hasAimBias()
-                        ? String.format(Locale.US, "  (tag-corrected %+.1f deg)", robot.macros.getAimBiasDegrees()) : ""));
-        telemetry.addData("Flywheel", flywheelArmed
-                ? String.format(Locale.US, "ARMED  %.0f rpm", robot.shooter.getRpm()) : "off");
+        telemetry.addData("Battery", "%.1f V", robot.getBatteryVolts());
+        telemetry.addLine();
 
-        for (String missing : robot.getMissingHardware()) telemetry.addData("!! MISSING", missing);
-        if (loggerError != null) telemetry.addData("!! Logger FAILED", loggerError);
-        if (robot.intake.hasGivenUpUnjamming()) {
-            telemetry.addLine("!! INTAKE JAMMED - anti-jam gave up. Use "
-                    + Controls.OUTTAKE.button() + " on gamepad 2 to outtake.");
-        }
-        if (robot.intake.isRejecting()) telemetry.addLine("REJECTING opponent NECTAR (G408)");
-        double volts = robot.getBatteryVolts();
-        if (volts > 0 && volts < LOW_BATTERY_VOLTS) {
-            telemetry.addData("!! BATTERY LOW", "%.2f V", volts);
-        }
-        if (!DEBUG_TELEMETRY) {
-            telemetry.addLine("(" + Controls.TOGGLE_DEBUG.button() + " on gamepad 2 for debug)");
-        }
+        telemetry.addData("Mode", manualMode ? "MANUAL (odometry ignored)" : "auto aim + table");
+        telemetry.addData("Flywheel", "%s  %s", flywheelArmed ? "ARMED" : "off",
+                robot.shooter.getStatusLine());
+        telemetry.addData("Intake", intakeForward ? "IN" : intakeReverse ? "REVERSE" : "off");
+        telemetry.addData("Macro", "%s  (%d pulses)", robot.macros.getStatus(),
+                robot.macros.getShotsFired());
+
+        String aim = !robot.drivetrain.hasFollower() ? "no follower"
+                : robot.drivetrain.isAimLocked()
+                        ? (robot.macros.hasAimBias()
+                                ? String.format("LOCKED, tag-corrected %+.1f deg",
+                                        robot.macros.getAimBiasDegrees())
+                                : "LOCKED, odometry only")
+                        : "free";
+        telemetry.addData("Aim", aim);
+        telemetry.addData("Target", "CELL %s, tags %d-%d, %d tip(s)",
+                Field.upCellSide(side, tipsCounted), minTag, maxTag, tipsCounted);
+        telemetry.addData("Drive", robot.drivetrain.isFieldCentric() ? "field centric" : "robot centric");
+
+        if (robot.intake.hasGivenUpUnjamming()) telemetry.addLine("!! INTAKE JAMMED - reverse it");
+        if (!robot.limelight.isConnected()) telemetry.addLine("!! no Limelight: odometry aim only");
     }
 
-    /**
-     * The count as the drivers should read it. Without an entrance sensor and nothing on record the
-     * robot cannot know, and says so rather than showing a guess as a fact.
-     */
-    private String piecesLine() {
-        if (!robot.macros.isCountKnown()) {
-            String set = Controls.MARK_FULL.button() + " sets " + Storage.CAPACITY;
-            return Macros.ASSUME_FULL_WHEN_UNCOUNTED
-                    ? "?  (assumes " + Storage.CAPACITY + ": " + Controls.SHOOT_ONE.button() + " = 1 pulse, "
-                            + Controls.SHOOT_ALL.button() + " = " + Storage.CAPACITY + "; " + set + ")"
-                    : "?  (no count: shooting refused; " + set + ")";
-        }
-        return robot.macros.piecesOnBoard() + "/" + Storage.CAPACITY + (robot.storage.isFull() ? "  FULL" : "");
-    }
-
-    /** Everything else. Useful in the pit and at practice; noise during a match. */
-    private void debugTelemetry() {
-        telemetry.addLine();
-        // A spike lasts one cycle and is gone before anyone can read it, so p95, max and a spike
-        // count are what actually diagnose a stuttering loop.
-        telemetry.addData("Loop", loopStats.getStatus());
-        telemetry.addData("Battery V", "%.2f", robot.getBatteryVolts());
-        telemetry.addData("Slow scale", "%.2f", slowScale());
-        telemetry.addData("Pose", robot.drivetrain.getPose());
-        telemetry.addData("Heading hold", robot.drivetrain.isHeadingHoldActive()
-                ? String.format(Locale.US, "holding %.0f deg", Math.toDegrees(robot.drivetrain.getHeldHeading()))
-                : "driver steering");
-        telemetry.addData("Path", robot.drivetrain.isFollowingPath() ? "FOLLOWING"
-                : robot.drivetrain.isHoldingPose() ? "HOLDING" : "manual");
-        telemetry.addLine();
-        telemetry.addData("Intake", "%s  %.0f / %.0f t/s  %.2f A%s", robot.intake.getMode(),
-                robot.intake.getTargetVelocity(), robot.intake.getVelocityTicksPerSec(),
-                robot.intake.getCurrentAmps(), robot.intake.isUnjamming() ? "  UNJAMMING" : "");
-        telemetry.addData("Storage", "%d  %s  exits %d%s", robot.storage.count(), robot.storage.getMode(),
-                robot.storage.getExitEvents(), robot.storage.hasExitSensor() ? "" : "  (no exit sensor)");
-        telemetry.addData("Transfer", "%s  lift %s  feed %s", robot.transfer.getMode(),
-                robot.transfer.hasPieceInLift(), robot.transfer.hasFeedSensor() ? robot.transfer.pieceAtFeed() : "n/a");
-        double aim = robot.macros.aimHeading(targetCell, targetTags[0], targetTags[1]);
-        telemetry.addData("Aim heading", Double.isNaN(aim) ? "n/a"
-                : String.format(Locale.US, "%.1f deg (%s)", Math.toDegrees(aim), robot.drivetrain.isAimLocked() ? "locked" : "off"));
-        telemetry.addData("Shooter", "%.0f / %.0f rpm  %s", robot.shooter.getRpm(),
-                robot.shooter.getTargetRpm(), robot.shooter.getMode());
-        telemetry.addLine();
-        telemetry.addData("Limelight", "%s  tag tx %.1f", robot.limelight.isAvailable() ? "ok" : "MISSING",
-                robot.limelight.getTagTx(targetTags[0], targetTags[1]));
-        telemetry.addData("Sensors hue", "entrance %.0f  full %.0f  transfer %.0f  feed %.0f",
-                robot.storageEntranceSensor.getHue(), robot.storageFullSensor.getHue(),
-                robot.transferSensor.getHue(), robot.shooterFeedSensor.getHue());
-        telemetry.addData("Sensors dist", "entrance %.1f  full %.1f  transfer %.1f  feed %.1f in (near <= %.1f)",
-                robot.storageEntranceSensor.getDistanceInches(), robot.storageFullSensor.getDistanceInches(),
-                robot.transferSensor.getDistanceInches(), robot.shooterFeedSensor.getDistanceInches(),
-                Robot.PRESENCE_DISTANCE_INCHES);
-        telemetry.addData("Shots fired", robot.macros.getShotsFired());
+    private double shaped(Controls control) {
+        double raw = control.axis(gamepad1, gamepad2);
+        return DriveScaling.shape(raw) * DriveScaling.slowScale(Controls.SLOW_MODE.axis(gamepad1, gamepad2));
     }
 }

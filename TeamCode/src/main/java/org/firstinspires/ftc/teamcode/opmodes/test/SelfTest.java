@@ -1,171 +1,191 @@
 package org.firstinspires.ftc.teamcode.opmodes.test;
 
-import com.qualcomm.hardware.limelightvision.LLStatus;
+import com.pedropathing.math.Pose;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
-import org.firstinspires.ftc.teamcode.subsystems.ColorSensor;
+import org.firstinspires.ftc.teamcode.opmodes.MatchOpMode;
+import org.firstinspires.ftc.teamcode.util.field.Alliance;
+import org.firstinspires.ftc.teamcode.util.time.MatchClock;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
- * Run first at every event: builds the real {@code Robot}, then steps through every subsystem and
- * leaves a PASS / FAIL / SKIP table on the screen. Each velocity mechanism is commanded at a low
- * speed for {@link #SETTLE_MS}, then its measured velocity is read back: the motor is there, wired
- * the right way round, and its encoder counts. Nothing here needs a game piece; SKIP means "not
- * fitted", not "broken".
+ * Run this first at every event. A clock-stepped state machine that exercises each mechanism in turn
+ * and leaves a PASS / WARN / FAIL table on the screen.
  *
- * <p><b>MECHANISMS WILL SPIN.</b> Put the robot on blocks and clear the intake and shooter.
+ * <h2>There is no SKIP row any more</h2>
+ * Nothing on this robot is optional: every config name is resolved with a bare
+ * {@code hardwareMap.get}, so a missing device has already thrown at OpMode init and named itself.
+ * If this OpMode runs at all, everything is present, and a row can only be PASS, WARN or FAIL.
+ *
+ * <h2>What it cannot tell you</h2>
+ * It catches a dead motor, lead, gearbox or encoder cable. It <b>cannot</b> catch a reversed one: the
+ * SDK applies direction to the commanded power and the reported velocity together, so a backwards
+ * wheel still reads positive. Wheel directions are the SDK's <b>Utility → TestHardware</b> job, or the
+ * Mecanum Tuner's — do that before this. The drive row here only proves the motors turn.
  */
 @TeleOp(name = "SelfTest", group = "Bench")
-public class SelfTest extends BenchOpMode {
-    public static long SETTLE_MS = 600;
-    /** A mechanism commanded at the test speed must read at least this back to pass. */
-    public static double MIN_TICKS_PER_SEC = 100;
-    public static double TEST_TICKS_PER_SEC = 600;
-    public static double TEST_RPM = 600;
+public class SelfTest extends MatchOpMode {
     public static double MIN_BATTERY_VOLTS = 12.0;
+    public static double DRIVE_TEST_POWER = 0.25;
+    public static long DRIVE_TEST_MS = 600;
+    public static double INTAKE_MIN_TICKS_PER_SEC = 50;
+    public static long INTAKE_TEST_MS = 800;
+    public static double FLYWHEEL_TEST_POWER = 0.3;
+    public static double FLYWHEEL_MIN_TICKS_PER_SEC = 100;
+    /** Two flywheels further apart than this at the same power are mismatched or fighting. */
+    public static double FLYWHEEL_MATCH_TICKS_PER_SEC = 150;
+    public static long FLYWHEEL_TEST_MS = 1200;
 
-    private enum Step { CONFIG, BATTERY, INTAKE, STORAGE, TRANSFER, SHOOTER, SENSORS, LIMELIGHT, DRIVE, LOCALIZER, DONE }
+    private enum Step { BATTERY, DRIVE, INTAKE, FLYWHEEL, CAMERA, LOCALIZER, DONE }
 
-    private Step step = Step.CONFIG;
-    private long stepStartedMs = 0;
-    private final Map<String, String> results = new LinkedHashMap<>();
+    private Step step = Step.BATTERY;
+    private long stepSinceMs = 0;
+    private final List<String> results = new ArrayList<>();
+
+    /** Peak magnitudes seen during the step that is running. */
+    private double peakA = 0;
+    private double peakB = 0;
+    private Pose poseAtStepStart = null;
 
     @Override
-    protected String title() {
-        return "SELF TEST   MECHANISMS WILL SPIN: robot on blocks, clear the intake and shooter";
+    protected Alliance alliance() {
+        return Alliance.BLUE;
     }
 
     @Override
-    protected String[] controls() {
-        return new String[] {"START runs every check in turn; the table stays on screen when done."};
+    protected MatchClock.Period matchPeriod() {
+        return MatchClock.Period.TELEOP;
     }
 
     @Override
-    protected void onBench() {
-        if (stepStartedMs == 0) stepStartedMs = nowMs;
-        long inStep = nowMs - stepStartedMs;
+    protected boolean usesScheduler() {
+        return false;
+    }
+
+    @Override
+    protected void onStart() {
+        enter(Step.BATTERY);
+    }
+
+    private void enter(Step next) {
+        step = next;
+        stepSinceMs = System.currentTimeMillis();
+        peakA = 0;
+        peakB = 0;
+        poseAtStepStart = robot.drivetrain.getPose();
+    }
+
+    private long elapsed() {
+        return System.currentTimeMillis() - stepSinceMs;
+    }
+
+    @Override
+    protected void onDecide() {
+        // Rest first, every loop: a step has to re-ask for motion, so nothing can latch on if this
+        // OpMode is stopped or a step falls through.
+        robot.intake.stop();
+        robot.shooter.endOpenLoop();
+        if (step != Step.DRIVE) robot.drivetrain.drive(0, 0, 0);
 
         switch (step) {
-            case CONFIG:
-                results.put("config names", robot.getMissingHardware().isEmpty() ? "PASS"
-                        : "FAIL missing " + robot.getMissingHardware());
-                next();
-                break;
             case BATTERY: {
-                double volts = robot.getBatteryVolts();
-                results.put("battery", volts <= 0 ? "SKIP no voltage sensor"
-                        : volts >= MIN_BATTERY_VOLTS ? fmt("PASS %.2f V", volts) : fmt("FAIL %.2f V < %.1f", volts, MIN_BATTERY_VOLTS));
-                next();
+                double v = robot.getBatteryVolts();
+                record("Battery", v >= MIN_BATTERY_VOLTS ? "PASS" : "FAIL",
+                        String.format("%.1f V (min %.1f)", v, MIN_BATTERY_VOLTS));
+                enter(Step.DRIVE);
                 break;
             }
-            case INTAKE:
-                if (!robot.intake.isAvailable()) { results.put("intake", "SKIP not fitted"); next(); break; }
-                robot.intake.setVelocity(TEST_TICKS_PER_SEC);
-                if (inStep >= SETTLE_MS) {
-                    results.put("intake", velocityVerdict(robot.intake.getVelocityTicksPerSec()));
+            case DRIVE: {
+                robot.drivetrain.drive(DRIVE_TEST_POWER, 0, 0);
+                if (elapsed() >= DRIVE_TEST_MS) {
+                    robot.drivetrain.drive(0, 0, 0);
+                    Pose now = robot.drivetrain.getPose();
+                    if (poseAtStepStart == null || now == null) {
+                        record("Drive", "WARN",
+                                "ran 4 motors forward; no localizer, so movement NOT measured - watch it");
+                    } else {
+                        double moved = now.distance(poseAtStepStart);
+                        record("Drive", moved > 1.0 ? "PASS" : "FAIL",
+                                String.format("moved %.1f in (direction NOT checked)", moved));
+                    }
+                    enter(Step.INTAKE);
+                }
+                break;
+            }
+            case INTAKE: {
+                robot.intake.in();
+                peakA = Math.max(peakA, Math.abs(robot.intake.getVelocity()));
+                if (elapsed() >= INTAKE_TEST_MS) {
                     robot.intake.stop();
-                    next();
-                }
-                break;
-            case STORAGE:
-                if (!robot.storage.isAvailable()) { results.put("storage", "SKIP not fitted"); next(); break; }
-                robot.storage.advance();
-                if (inStep >= SETTLE_MS) {
-                    results.put("storage", velocityVerdict(robot.storage.getVelocityTicksPerSec()));
-                    robot.storage.stop();
-                    next();
-                }
-                break;
-            case TRANSFER:
-                if (!robot.transfer.isAvailable()) { results.put("transfer", "SKIP not fitted"); next(); break; }
-                robot.transfer.liftPiece();
-                if (inStep >= SETTLE_MS) {
-                    results.put("transfer", velocityVerdict(robot.transfer.getVelocityTicksPerSec()));
-                    robot.transfer.stop();
-                    next();
-                }
-                break;
-            case SHOOTER:
-                if (!robot.shooter.isAvailable()) { results.put("shooter", "SKIP not fitted"); next(); break; }
-                robot.shooter.setTargetRpm(TEST_RPM);
-                if (inStep >= SETTLE_MS) {
-                    double rpm = robot.shooter.getRpm();
-                    results.put("shooter", rpm > 0.3 * TEST_RPM ? fmt("PASS %.0f rpm at %.0f", rpm, TEST_RPM)
-                            : fmt("FAIL %.0f rpm at %.0f (wiring? TICKS_PER_REV?)", rpm, TEST_RPM));
-                    robot.shooter.stop();
-                    next();
-                }
-                break;
-            case SENSORS:
-                sensorVerdict("sensor entrance", robot.storageEntranceSensor);
-                sensorVerdict("sensor full", robot.storageFullSensor);
-                sensorVerdict("sensor transfer", robot.transferSensor);
-                sensorVerdict("sensor feed", robot.shooterFeedSensor);
-                next();
-                break;
-            case LIMELIGHT: {
-                if (!robot.limelight.isAvailable()) { results.put("limelight", "SKIP not fitted"); next(); break; }
-                LLStatus status = robot.limelight.getStatus();
-                if (status != null && status.getFps() > 0) {
-                    results.put("limelight", fmt("PASS %.0f fps", status.getFps()));
-                    next();
-                } else if (inStep >= 3000) {
-                    results.put("limelight", "FAIL no frames in 3 s");
-                    next();
+                    record("Intake", peakA >= INTAKE_MIN_TICKS_PER_SEC ? "PASS" : "FAIL",
+                            String.format("peak %.0f t/s (min %.0f) - roller AND tunnel should turn",
+                                    peakA, INTAKE_MIN_TICKS_PER_SEC));
+                    enter(Step.FLYWHEEL);
                 }
                 break;
             }
-            case DRIVE:
-                results.put("drive", robot.drivetrain.isAvailable() ? "PASS Pedro follower"
-                        : robot.openLoopDrive.isAvailable() ? "PASS open loop (Pedro not tuned)" : "FAIL no drive motors");
-                next();
-                break;
-            case LOCALIZER:
-                if (!robot.drivetrain.isAvailable()) { results.put("localizer", "SKIP no follower"); next(); break; }
-                if (robot.drivetrain.isLocalizerSettled()) {
-                    results.put("localizer", "PASS settled, pose " + robot.drivetrain.getPose());
-                    next();
-                } else if (inStep >= 3000) {
-                    results.put("localizer", "FAIL not settled after 3 s");
-                    next();
+            case FLYWHEEL: {
+                robot.shooter.setOpenLoopPower(FLYWHEEL_TEST_POWER);
+                peakA = Math.max(peakA, Math.abs(robot.shooter.getVelocity()));
+                peakB = Math.max(peakB, Math.abs(robot.shooter.getSecondVelocity()));
+                if (elapsed() >= FLYWHEEL_TEST_MS) {
+                    robot.shooter.endOpenLoop();
+                    boolean alive = peakA >= FLYWHEEL_MIN_TICKS_PER_SEC
+                            && peakB >= FLYWHEEL_MIN_TICKS_PER_SEC;
+                    boolean matched = Math.abs(peakA - peakB) <= FLYWHEEL_MATCH_TICKS_PER_SEC;
+                    record("Flywheel pair", alive && matched ? "PASS" : "FAIL",
+                            String.format("left %.0f, right %.0f t/s%s", peakA, peakB,
+                                    alive && !matched ? " - MISMATCHED, check SECOND_MOTOR_REVERSED"
+                                            : alive ? "" : " - one is dead"));
+                    enter(Step.CAMERA);
                 }
                 break;
-            case DONE:
+            }
+            case CAMERA: {
+                record("Limelight", robot.limelight.isConnected() ? "PASS" : "FAIL",
+                        robot.limelight.getStatusLine());
+                enter(Step.LOCALIZER);
+                break;
+            }
+            case LOCALIZER: {
+                if (!robot.drivetrain.hasFollower()) {
+                    // Expected before AutoTune has been run, so a warning and not a failure - but a
+                    // match robot in this state has no pose, no paths, no aim lock and no distance
+                    // table, which is why it is not a quiet pass either.
+                    record("Pinpoint / follower", "WARN",
+                            "not tuned: paste localizerConfig + foresightConfig from AutoTune");
+                } else {
+                    Pose p = robot.drivetrain.getPose();
+                    record("Pinpoint / follower", p != null && robot.drivetrain.isLocalizerSettled()
+                                    ? "PASS" : "FAIL",
+                            p == null ? "follower built but no pose" : "pose available, IMU settled");
+                }
+                enter(Step.DONE);
+                break;
+            }
             default:
-                robot.stopMechanisms();
                 break;
         }
-
-        telemetry.addData("Step", step);
-        for (Map.Entry<String, String> row : results.entrySet()) telemetry.addData(row.getKey(), row.getValue());
     }
 
-    private void next() {
-        step = Step.values()[Math.min(step.ordinal() + 1, Step.DONE.ordinal())];
-        stepStartedMs = nowMs;
+    private void record(String name, String verdict, String detail) {
+        results.add(String.format("%-20s %-5s %s", name, verdict, detail));
     }
 
-    private static String velocityVerdict(double measured) {
-        if (measured >= MIN_TICKS_PER_SEC) return fmt("PASS %.0f t/s", measured);
-        if (measured <= -MIN_TICKS_PER_SEC) return fmt("FAIL runs BACKWARD (%.0f t/s): flip the direction", measured);
-        return fmt("FAIL %.0f t/s: no motion or no encoder", measured);
+    @Override
+    protected void onTelemetry() {
+        telemetry.addData("SelfTest", step == Step.DONE ? "COMPLETE" : "running: " + step);
+        telemetry.addLine();
+        for (String row : results) telemetry.addLine(row);
+        if (step != Step.DONE) telemetry.addLine("...");
+        telemetry.addLine();
+        telemetry.addLine("Wheel DIRECTIONS are not checked here: use Utility > TestHardware.");
     }
 
-    private void sensorVerdict(String name, ColorSensor sensor) {
-        if (!sensor.isAvailable()) { results.put(name, "SKIP not fitted"); return; }
-        boolean alive = sensor.getValue() > 0.02 || sensor.getAlpha() > 0.02 || !Double.isNaN(sensor.getDistanceInches());
-        results.put(name, alive ? fmt("PASS val %.2f dist %s", sensor.getValue(), num(sensor.getDistanceInches(), "%.1f"))
-                : "FAIL reads nothing (cable? I2C address?)");
-    }
-
-    public boolean isDone() {
-        return step == Step.DONE;
-    }
-
-    /** The verdict table, for tests and for anyone logging it. */
-    public Map<String, String> getResults() {
-        return results;
+    @Override
+    protected void onStop() {
+        robot.stopMechanisms();
     }
 }

@@ -5,9 +5,10 @@ package org.firstinspires.ftc.teamcode.util.control;
  *
  * <h2>Why this is not inside Intake</h2>
  * It is the most intricate logic on the robot — three pieces of timing state, an attempt counter,
- * and an eligibility rule that is wrong in two different directions if you get it backwards — and
- * inside a class holding a {@code DcMotorEx} none of it could be tested. Here it is pure state and
- * arithmetic, so every branch below is covered by {@code JamDetectorTest} without a robot.
+ * and an eligibility rule that is wrong in two different directions if you get it backwards. Kept
+ * out of {@code Intake} it is pure state and arithmetic: every branch below can be read and argued
+ * about on its own, with no motor, no hub and no bulk read in the way. {@code Intake} decides when
+ * anti-jam applies and what velocity to write; this decides whether the mechanism is stuck.
  *
  * <h2>How it decides</h2>
  * High current alone is not a jam — a motor accelerating from rest draws stall current for a moment.
@@ -24,7 +25,7 @@ package org.firstinspires.ftc.teamcode.util.control;
  * during HOLDING would see hold current, declare a jam, and spit the piece straight back out.
  *
  * <pre>
- *   detector.configure(STALL_AMPS, STALL_MS, UNJAM_MS, MAX_ATTEMPTS);
+ *   detector.configure(STALL_AMPS, STALL_MS, UNJAM_MS, MAX_ATTEMPTS, HEALTHY_RESET_MS);
  *   if (detector.update(now, mode == Mode.INTAKING, amps)) {
  *       motor.setVelocity(UNJAM_TICKS_PER_SEC);
  *   } else {
@@ -56,15 +57,10 @@ public class JamDetector {
     private boolean healthy = false;
 
     /**
-     * Updates the thresholds. Safe to call every loop — that is what keeps dashboard edits to the
-     * caller's {@code public static} constants taking effect live.
+     * Updates the thresholds, including the healthy-current window that must pass before attempts
+     * are forgiven. Safe to call every loop — that is what keeps dashboard edits to the caller's
+     * {@code public static} constants taking effect live.
      */
-    public void configure(double stallCurrentAmps, long stallTimeoutMs, long unjamDurationMs,
-                          int maxAttempts) {
-        configure(stallCurrentAmps, stallTimeoutMs, unjamDurationMs, maxAttempts, 0);
-    }
-
-    /** As above, with the healthy-current window that must pass before attempts are forgiven. */
     public void configure(double stallCurrentAmps, long stallTimeoutMs, long unjamDurationMs,
                           int maxAttempts, long healthyResetMs) {
         this.stallCurrentAmps = stallCurrentAmps;

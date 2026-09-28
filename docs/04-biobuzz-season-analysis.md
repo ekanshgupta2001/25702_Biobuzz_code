@@ -237,21 +237,25 @@ the cap gifts the points; cap late.
 
 ## 9. Implications for our robot and code
 
-| # | Spec item (docs/02) | Verdict |
+Rewritten 2026-09-27 against the robot in the CAD (see `HANDOFF.md` §1 and `docs/02`). Sections 1–8 above
+are sourced season facts and are unchanged; this section is the only part that tracks our own build.
+
+| # | Item | Verdict for this robot |
 |---|---|---|
-| 1 | Storage of 4 pieces | **Exactly the G407 legal maximum.** Count pieces and hard-stop the intake at 4; add physical guards. |
-| 2 | POLLEN ≈ 2.8 in, NECTAR ≈ 3.6 in | Verified. POLLEN yellow/neutral; NECTAR red/blue alliance-specific. |
-| 3 | Opponent NECTAR | **G408 forbids controlling it**: a colour sensor at the storage entrance (or intake) is effectively mandatory; `game/PieceType` needs POLLEN, NECTAR_RED, NECTAR_BLUE thresholds. |
-| 4 | Fixed flywheel shooter (fires out the rear), aimed by the drivetrain heading | Legal; no launch zone or velocity cap. Target: up-CELL opening 20 × 14 × 12 in, centre ≈ 53 in high (verify in CAD). TIP thresholds 8 POLLEN or 3 + 3. First TIP needs only 3 POLLEN. |
-| 5 | Flower scoring | **Not in V1** (V1 spec §13). In V1 a FLOWER matters only as a POLLEN source: the intake can pull POLLEN out of the 3.55 in bottom retrieval opening (G418 allows it). For a V2 mechanism: deposit through a 4 in opening at 21.5 in (POLLEN any time, NECTAR only in the last 60 s); a concave alignment guide is legal (G415). |
-| 6 | AprilTag localisation via Limelight | **Not available this season**: tags move with the HIVE. Localisation is odometry (Pinpoint) + IMU only; tags are for aiming (`tx`, range to the CELL opening). `PoseFusion` stays for a future static reference; `Limelight.getBotposeAsPedroPose()` is expected to return null. |
-| 7 | Alliance pose conversion | **180° rotation** (`FieldConstants.SYMMETRY = ROTATE_180`). |
-| 8 | Match clock | 30 s AUTO, 8 s transition, 120 s TELEOP; model the 1:00 FLOWER unlock and the 0:20 warning; no endgame. |
-| 9 | Start positions | G304: on own side, touching the perimeter wall, outside the LOADING ZONE and FLOWER volumes, holding 4 POLLEN. `StartPosition.FACING_HIVE` (wall the starting up-CELL faces: red audience wall B1/C1, blue far wall D6/E6) and `ALLIANCE_WALL` (red A3/A4, blue F3/F4). First target: red tags 34–37, blue tags 42–45. |
-| 10 | Motors and servos | **8 motors and 8 servos maximum (R503).** V1 needs 9–11 motors; combine at least one mechanism. `HardwareNames` keeps optional second-motor names so either build is a one-line change. |
-| 11 | Electronics | Control Hub + one Expansion Hub max; Limelight 3A only; no Panels/Dashboard streaming in matches (R704); remove AutoTune from competition builds. |
-| 12 | Size | 18 in cube start; 18 × 24 × 29 in during play, physically constrained; no weight limit. |
-| 13 | SDK | Move the repo from 11.2.1 to **v12.0** before writing any AprilTag code (cluster API is a breaking change). |
+| 1 | G407: at most 4 controlled scoring elements | **Nothing on the robot enforces it.** There is no sensor in the roller or tunnel, so nothing counts pieces. The operator is the interlock; Shoot All fires four pulses (`Macros.PIECES_PER_LOAD`). Physical guards are the only other protection. |
+| 2 | POLLEN ≈ 2.8 in, NECTAR ≈ 3.6 in | Verified. The tunnel must pass either. Nothing in software distinguishes them. |
+| 3 | G408: never control the opponent's NECTAR | **Also the operator's job.** There is no colour sensing on this robot, so the code cannot reject a piece; the driver must not intake the wrong NECTAR. Reversing the roller (operator LB) is the only way to shed one. |
+| 4 | Fixed flywheel firing out the rear, aimed by the drivetrain heading | Legal; no launch zone, no velocity or height cap, flywheels explicitly allowed (R801). Target is the up-CELL opening, 20 × 14 × 12 in. TIP on 8 POLLEN or 3 POLLEN + 3 NECTAR, so the **first TIP needs only 3 POLLEN** — which is why autonomous spends its budget shooting. `Shooter.HEADING_OFFSET_RAD` = π. |
+| 5 | FLOWER scoring | **No mechanism, no code.** A FLOWER matters only as a POLLEN source: the roller can pull POLLEN from the 3.55 in bottom retrieval opening, which G418 allows. |
+| 6 | AprilTag localisation | **Not available this season**: every tag rides a moving HIVE CELL. The pose is the Pinpoint's alone. Tags refine the *aim* only, through `Macros.aimHeading`, which keeps the tags' disagreement with odometry for `AIM_BIAS_MAX_AGE_MS` after they leave view — necessary because the camera faces front and the shooter fires rearward. |
+| 7 | Alliance pose conversion | **180° rotation.** `FieldConstants.forAlliance` rotates; the three-armed `Symmetry` enum was deleted, since a run-time selector over a fact the field cannot change is only somewhere for a wrong value to hide. |
+| 8 | Match clock | 30 s AUTO, 8 s transition, 120 s TELEOP, no endgame. `MatchClock` models the 0:20 warning (one long rumble) and `isExpired()` drives the autonomous stop (G403). The 1:00 FLOWER unlock has no code because there is no FLOWER mechanism. |
+| 9 | Start positions | G304: own side, touching the wall, outside the LOADING ZONE and FLOWER volumes, holding 4 POLLEN. Placed **rear (shooter) toward the up-facing CELL**. One start pose per alliance (`FieldPoses.BLUE_START_FACING_HIVE`); the two-option `StartPosition` enum was deleted with the selector. First target: red tags 34–37, blue 42–45. |
+| 10 | Motors and servos | **7 motors, 0 servos**, against R503's limit of 8 and 8: four drive, one for the roller *and* tunnel together, two flywheels. One spare port. |
+| 11 | Electronics | One Control Hub; Limelight 3A (R702's only legal coprocessor); **no Panels or Dashboard** (R704). AutoTune is behind `-Ptuning` and the competition APK is verified free of it. |
+| 12 | Size | 18 in cube at start; 18 × 24 × 29 in during play, physically constrained; no weight limit. The CAD is a parts layout, so the packaged footprint is still unverified. |
+| 13 | SDK version | **11.2.1 is fine.** The v12.0 upgrade was previously listed as a prerequisite for AprilTag work, but the tags are read by the *Limelight's own pipeline* over USB-Ethernet — the SDK's `AprilTagProcessor` and its new cluster API are never used. The upgrade is a future task, not a blocker. |
+| 14 | Geometry | **Everything is still a placeholder.** The CAD gave mechanisms, not positions, so `game/Field` and `game/FieldPoses` need the Onshape field CAD (§10) and a tape measure at the first event. |
 
 ### Not found / open
 AprilTag field coordinates (will not exist); Limelight BIOBUZZ fmap; Pedro/Road Runner field assets;

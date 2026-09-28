@@ -84,3 +84,8 @@ lint/tmp/
 
 # pedropathing.com docs source used for the Round 3 audit (docs/01 records the findings)
 Docs-master/
+
+# Reference material and CAD, not part of this codebase
+22131-Decode-master 2/
+Docs-master/
+*.glb

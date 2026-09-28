@@ -2,89 +2,71 @@ package org.firstinspires.ftc.teamcode.opmodes;
 
 import com.pedropathing.ivy.Scheduler;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
-import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.Robot;
-import org.firstinspires.ftc.teamcode.util.diagnostics.BuildFlavor;
-import org.firstinspires.ftc.teamcode.util.diagnostics.LoopTimer;
-import org.firstinspires.ftc.teamcode.util.diagnostics.MatchLogger;
-import org.firstinspires.ftc.teamcode.util.diagnostics.Tunables;
+import org.firstinspires.ftc.teamcode.util.field.Alliance;
 import org.firstinspires.ftc.teamcode.util.time.MatchClock;
 
-import java.io.IOException;
-import java.util.List;
-
 /**
- * Everything a match OpMode has to do, done once: building the robot, resetting the scheduler,
- * opening a log, setting the telemetry rate, resetting gamepad edge detection, starting the match
- * clock, timing the loop, and closing it all down again. Two copies of a lifecycle would be two
- * places for it to drift.
+ * The one OpMode base: a fixed lifecycle with hooks, used by the match OpModes and the pit benches
+ * alike.
  *
- * <h2>The loop order is enforced here, not remembered</h2>
- * {@link #loop()} is {@code final}. Subclasses fill in the gaps between the fixed steps:
- *
+ * <h2>The loop order is structural</h2>
+ * {@link #loop()} is {@code final} and always runs observe, decide, execute, act, in that order:
  * <pre>
- *   readSensors()        1. observe   (fixed)
- *   onDecide()                        (yours: read buttons, schedule commands)
- *   Scheduler.execute()  2. decide    (fixed)
- *   writeActuators()     3. act       (fixed)
- *   onAfterAct()                      (yours: haptics, pose hand-off)
- *   log / telemetry                   (fixed)
+ * robot.readSensors();      // 1. observe  — one consistent snapshot for the whole loop
+ * onDecide();               // 2. decide   — read gamepads, schedule commands
+ * Scheduler.execute();      //    driver control and macros both run here
+ * robot.writeActuators();   // 3. act      — every mechanism writes hardware
  * </pre>
+ * A subclass cannot reorder it, which is the point: a decide step that ran after the act step would
+ * see last loop's data, and the bug would look like a tuning problem.
  *
- * Observe, decide, act, in that order. A subclass cannot get it wrong because there is no ordering
- * left for it to choose (docs/03 section 1).
- *
- * <p>Two protected seams, {@link #buildRobot()} and {@link #openLogger()}, exist so a JVM test can
- * run this whole lifecycle on a robot made of fakes; production never overrides them.
+ * <h2>Benches share this, they do not duplicate it</h2>
+ * A bench wants the same robot, the same config names and the same write path, but no command
+ * scheduler — nothing else is running, so nothing re-asserts idle, and a bench that stops calling a
+ * mechanism calls its {@code stop()}. It overrides {@link #usesScheduler()} to false and drives the
+ * subsystems directly from {@link #onDecide()}. This used to be a second near-identical base class.
  *
  * <p>The SDK transmits telemetry itself after every {@code init_loop()} and {@code loop()}, so
  * nothing here calls {@code telemetry.update()}.
  */
 public abstract class MatchOpMode extends OpMode {
     /**
-     * How often telemetry is transmitted to the Driver Station, in milliseconds. The SDK default is
-     * 250 ms; set explicitly so the rate is a decision, and so it can be lowered while debugging.
+     * Telemetry transmission interval. The SDK default is 250 ms; set explicitly so the rate is a
+     * decision, and so it can be lowered while debugging.
      */
     public static int TELEMETRY_INTERVAL_MS = 100;
-    /**
-     * The match log is written every this many loops. Every loop is 50 rows a second of a
-     * 26-column CSV, and formatting the row is the largest fixed CPU cost in the loop; every second
-     * loop keeps the same picture at half the cost and half the file.
-     */
-    public static int LOG_EVERY_N_LOOPS = 2;
 
     protected Robot robot;
-    protected MatchLogger logger;
-    /** Non-null when the log file could not be opened; subclasses surface it in telemetry. */
-    protected String loggerError = null;
-
-    /** Duration of the previous loop, in milliseconds. */
-    protected double loopMs = 0;
-    /** Loop-time statistics for the whole run: p95, max, spike count. */
-    protected final LoopTimer loopStats = new LoopTimer();
-
-    private final ElapsedTime loopTimer = new ElapsedTime();
-    private int loopCount = 0;
 
     // ---- Subclass contract ----
 
-    /** Filename prefix for this OpMode's match log, e.g. {@code "teleop"}. */
-    protected abstract String logTag();
+    /**
+     * Which side this OpMode plays. Fixed per OpMode class ({@code BlueTeleop} / {@code RedTeleop}),
+     * so it is chosen when the driver picks the OpMode and can never be stale or unconfirmed. Benches
+     * return either.
+     */
+    protected abstract Alliance alliance();
 
     /** Which match period this OpMode runs in, for the match clock. */
     protected abstract MatchClock.Period matchPeriod();
 
-    /** Built subsystems are available; schedule default commands here. */
+    /** False for a bench: the loop then never calls {@code Scheduler.execute()}. */
+    protected boolean usesScheduler() {
+        return true;
+    }
+
+    /** Subsystems are built; schedule default commands here. */
     protected void onInit() {}
 
-    /** Runs after {@code readSensors()} on every init loop. Menus, localisation, warnings. */
+    /** Runs after {@code readSensors()} on every init loop. Placement cards, warnings. */
     protected void onInitLoop() {}
 
     /** Runs once on START, after edge detection is reset, the clock has started and the drivetrain is in manual. */
     protected void onStart() {}
 
-    /** Read inputs and schedule commands. Runs before the scheduler, on fresh sensor data. */
+    /** Read inputs and schedule commands, or drive a bench's mechanisms. Runs on fresh sensor data. */
     protected void onDecide() {}
 
     /** Runs after actuators are written. Haptics, pose hand-off: anything that observes the result. */
@@ -96,41 +78,15 @@ public abstract class MatchOpMode extends OpMode {
     /** Runs first in {@code stop()}, while the robot is still live. */
     protected void onStop() {}
 
-    // ---- Seams for tests ----
-
-    /** The robot this OpMode drives. Tests return one assembled from fakes. */
-    protected Robot buildRobot() {
-        return new Robot(hardwareMap);
-    }
-
-    /** The match log, in {@link MatchLogger#BIOBUZZ_COLUMNS} order. Tests return {@code null}. */
-    protected MatchLogger openLogger() throws IOException {
-        return new MatchLogger(logTag(), MatchLogger.BIOBUZZ_COLUMNS);
-    }
-
     // ---- Fixed lifecycle ----
 
     @Override
     public final void init() {
-        // First, so the compiled defaults are on record before any bench edits them.
-        RobotTunables.snapshot();
         // The scheduler is static and survives OpMode restarts: clear it before anything schedules.
         Scheduler.reset();
-        robot = buildRobot();
+        robot = new Robot(hardwareMap, alliance());
         telemetry.setMsTransmissionInterval(TELEMETRY_INTERVAL_MS);
-
-        try {
-            logger = openLogger();
-            loggerError = null;
-        } catch (Exception e) {
-            // A missing SD card must not cost a match. Record it and carry on unlogged.
-            logger = null;
-            loggerError = String.valueOf(e.getMessage());
-        }
-
         onInit();
-        reportMissingHardware();
-        reportBuildWarnings();
     }
 
     @Override
@@ -148,24 +104,16 @@ public abstract class MatchOpMode extends OpMode {
         gamepad2.resetEdgeDetection();
         robot.startMatch(matchPeriod());
         robot.drivetrain.onStart();      // follower to the sticks; init pose repeats after calibration
-        loopTimer.reset();
         onStart();
     }
 
     @Override
     public final void loop() {
-        loopMs = loopTimer.milliseconds();
-        loopTimer.reset();
-        loopStats.record(loopMs);
-
-        robot.readSensors();          // 1. observe
-        onDecide();                   // 2. decide
-        Scheduler.execute();          //    driver control and macros both run here
-        robot.writeActuators();       // 3. act
-
+        robot.readSensors();
+        onDecide();
+        if (usesScheduler()) Scheduler.execute();
+        robot.writeActuators();
         onAfterAct();
-        loopCount++;
-        if (logger != null && loopCount % LOG_EVERY_N_LOOPS == 0) logger.logRow(robot.logCells(loopMs));
         onTelemetry();
     }
 
@@ -174,30 +122,5 @@ public abstract class MatchOpMode extends OpMode {
         onStop();
         Scheduler.reset();
         if (robot != null) robot.stop();
-        if (logger != null) logger.close();
-    }
-
-    /**
-     * Two things a driver must know before START and cannot otherwise see: that this APK carries the
-     * AutoTune web server (not match legal, R704), and any tunable edited on a bench since the app
-     * started, which is what this OpMode will run with (fixthese R2-A5, R2-A7).
-     */
-    protected void reportBuildWarnings() {
-        if (BuildFlavor.isTuningBuild()) telemetry.addLine(BuildFlavor.TUNING_WARNING);
-        List<String> tuned = Tunables.changed();
-        if (tuned.isEmpty()) return;
-        telemetry.addLine("!! TUNED THIS SESSION (a bench changed these; restart the app to undo):");
-        for (String line : tuned) telemetry.addLine("  " + line);
-    }
-
-    /** Lists any configuration name that could not be resolved. Empty output means all present. */
-    protected void reportMissingHardware() {
-        List<String> missing = robot.getMissingHardware();
-        if (missing.isEmpty()) {
-            telemetry.addLine("All hardware present.");
-            return;
-        }
-        telemetry.addLine("MISSING HARDWARE (the robot will still run):");
-        for (String name : missing) telemetry.addLine("  - " + name);
     }
 }

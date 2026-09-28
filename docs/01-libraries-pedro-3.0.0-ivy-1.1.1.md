@@ -93,7 +93,17 @@ MecanumConfig cfg = new MecanumConfig(c -> { c.frontLeftName.set("lf"); /* ... *
 | `manualBrakeMode` | `ConfigVar<Boolean>` | `true` — BRAKE while in manual mode |
 | `powerThreshold` | `ConfigVar<Double>` | `0.01` — smallest power change that triggers a hardware write |
 
-No ticks-per-rev, wheel size, max power or voltage compensation live here any more. `Mecanum` mixes
+No ticks-per-rev, wheel size, max power or voltage compensation live here any more. **`Mecanum` owns its motors, and two instances fight.** Its constructor calls
+`map.get(DcMotorEx.class, name)` for all four names itself and wraps each in its own `CachedMotor`,
+which skips a `setPower` it believes is already set. So two `Mecanum` objects over the same four
+ports hold two independent power caches: writes through one are invisible to the other, and a motor
+written behind cache A cannot be stopped through cache B. Build **one** and pass that instance to
+`new Follower(localizer, mecanum, algorithm)` — the `Follower` takes the `Drivetrain` interface, so
+stick driving via `mecanum.drive(powers, true)` and path following share one motor layer. The same
+trap catches a bench or diagnostic OpMode that resolves its own `DcMotorEx` for a port a subsystem
+already holds.
+
+`Mecanum` mixes
 `fl = f - s - t`, `fr = f + s + t`, `bl = f + s - t`, `br = f - s + t`, so **+strafe is robot-left and
 +turn is counter-clockwise**. It normalises down only, never up. Path following and holding run the
 motors in **FLOAT**; only manual mode uses BRAKE (when `manualBrakeMode` is true).
@@ -564,6 +574,8 @@ Nothing in 3.0.0 is `@Deprecated`; anything missing is simply gone.
 13. `follow()` never resumes; re-plan from the current pose after an interruption.
 14. `Paths.curve` = control points; `Paths.through` = waypoints.
 15. AutoTune's servers are always bound while `tuning` is on the classpath.
+16. `Mecanum` resolves and caches its own four motors: build one instance and share it with the
+    `Follower` (A.1). Two instances, or a second `DcMotorEx` on the same port, silently disagree.
 
 ---
 
@@ -702,8 +714,10 @@ Schedule it exactly once, after `Scheduler.reset()`, in `init()`. Unchanged in 1
    default `done = () -> false`. Skip with `conditional(cond, real, instant(() -> {}))` instead.
 2. **A builder without `setDone` runs forever** (same root cause; `infinite()` and `onInterrupt()`
    exploit it deliberately).
-3. **`waitMs` is wall-clock and not fakeable.** Tests either sleep for real or shrink timeouts. Write a
-   `Clock`-based wait for deterministic tests:
+3. **`waitMs` is wall-clock.** It reads `System.currentTimeMillis()`, so a test cannot fake it
+   without real sleeps. This repo has no test suite and uses wall-clock waits directly
+   (`commands/Waits`); the injected-`Clock` indirection that existed for the deleted tests is gone.
+   For reference, a fakeable wait is:
    ```java
    static CommandBuilder waitMs(Clock clock, long ms) {
        long[] t0 = new long[1];
@@ -765,7 +779,8 @@ public Command followLazyCommand(Supplier<Path> pathSupplier, boolean holdEnd) {
 
 It provides what `lazy(PedroCommands.follow(...))` does not: the requirement, cleanup on interrupt,
 the `MIN_PATH_MS` guard (a zero-length path is at its parametric end on tick one), `holdEnd` semantics,
-a null-path exemption, and testability through the `PathFollower` seam.
+and a null-path exemption. (It also used to provide a `PathFollower` seam for JVM tests; that
+interface is deleted and `Drivetrain` holds the `Follower` directly.)
 
 Every Ivy import the Guide uses (`Command`, `CommandBuilder`, `Scheduler`, `behaviors.*`,
 `Commands.{instant, waitMs, waitUntil, conditional}`, `Groups.{sequential, parallel, race, deadline}`)

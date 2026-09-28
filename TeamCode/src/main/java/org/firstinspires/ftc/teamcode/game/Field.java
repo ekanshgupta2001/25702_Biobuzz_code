@@ -20,12 +20,20 @@ import org.firstinspires.ftc.teamcode.util.field.FieldConstants;
  * the far wall is high Y; tile (column, row) has its centre at
  * {@code (12 + 24 * col, 12 + 24 * (row - 1))} with A = 0.
  *
- * <p>The check that pins the origin: the field is 180-degree rotationally symmetric
- * ({@link FieldConstants#SYMMETRY}), and {@code (x, y) -> (144 - x, 144 - y)} must map the red
- * LOADING ZONE on A5 onto the blue one on F2. {@link FieldConstants#forAlliance} does that
- * conversion for every blue-authored value here.
+ * <p>The check that pins the origin: the field is 180-degree rotationally symmetric, and
+ * {@code (x, y) -> (144 - x, 144 - y)} must map the red LOADING ZONE on A5 onto the blue one on F2.
+ * {@link FieldConstants#forAlliance} does that conversion for every blue-authored value here, and
+ * {@code FieldConstants} carries the evidence for the rotation.
  *
  * <p>Everything alliance-specific is authored for BLUE and converted on demand.
+ *
+ * <h2>Why so little of the field is described here</h2>
+ * The shooter is bolted to the chassis and fires out the rear, so the drivetrain heading <em>is</em>
+ * the aim. What the aim law needs from the field is therefore small: where the target CELL opening
+ * sits, and which AprilTag IDs are stuck underneath it. The robot has no game-piece sensors and
+ * counts nothing, does not visit the GARDEN, and does not reason about FLOWERS — so those numbers
+ * left with the code that used them. Adding a member back is cheap; leaving an unread constant in a
+ * file whose whole job is to be the trusted source of field truth is not.
  */
 public final class Field {
     private Field() {}
@@ -64,11 +72,6 @@ public final class Field {
     public static final Pose HIVE_CENTER = new Pose(FIELD_SIZE_INCHES / 2, FIELD_SIZE_INCHES / 2);
     /** Distance between the two CELLs of one HIVE, along Y (audience side to far side). */
     public static final double CELL_SPACING_INCHES = 18.8;
-    /**
-     * INFERRED: height of the up-facing CELL's opening centre above the tiles, the 43.95 in pivot
-     * plus about half the CELL spacing. Confirm in the Onshape CAD before fixing shooter geometry.
-     */
-    public static double UP_CELL_OPENING_HEIGHT_INCHES = 53.0;
     /**
      * INFERRED: each HIVE's centre sits this far from the field centre along X (half of one HIVE's
      * share of the 49.46 in frame). Red HIVE on the column-C side (low X), blue on column D.
@@ -120,21 +123,17 @@ public final class Field {
         return tipsSoFar % 2 == 0 ? start : start.opposite();
     }
 
-    /** Ground-plane centre of the CELL the alliance shoots into first. */
-    public static Pose firstTargetCell(Alliance alliance) {
-        return cell(alliance, startingUpCellSide(alliance));
-    }
-
     // ---- AprilTags (manual section 9.9, figures 9-15 and 9-17; SDK v12.0 notes) ----
-
-    /** 36h11 tags, in clusters of four on the underside of each CELL, facing down. */
-    public static final int MIN_TAG_ID = 30;
-    public static final int MAX_TAG_ID = 45;
 
     /**
      * Inclusive tag ID range on the given CELL: red audience-side 34-37, red far-side 30-33, blue
-     * audience-side 38-41, blue far-side 42-45. The cluster origin is the centre of the CELL
-     * opening, so a detection's bearing points straight at the mouth.
+     * audience-side 38-41, blue far-side 42-45. 36h11 tags, in clusters of four on the underside of
+     * each CELL, facing down. The cluster origin is the centre of the CELL opening, so a detection's
+     * bearing points straight at the mouth.
+     *
+     * <p>This is the only tag fact the robot needs: the Limelight is told which IDs belong to the
+     * CELL being shot at and ignores every other detection. Nothing localises from a tag, so there
+     * is no need for the full ID span of the field.
      */
     public static int[] tagRange(Alliance alliance, CellSide side) {
         if (alliance == Alliance.RED) {
@@ -143,14 +142,8 @@ public final class Field {
         return side == CellSide.AUDIENCE ? new int[] {38, 41} : new int[] {42, 45};
     }
 
-    /** Tag range on the CELL the alliance shoots into first. */
-    public static int[] firstTargetTags(Alliance alliance) {
-        return tagRange(alliance, startingUpCellSide(alliance));
-    }
-
     // ---- LOADING ZONE (manual section 9.3, Setup Guide section 8): where PARK is ----
 
-    public static final double LOADING_ZONE_LENGTH_INCHES = 23.0;
     public static final double LOADING_ZONE_DEPTH_INCHES = 11.0;
 
     /**
@@ -160,8 +153,4 @@ public final class Field {
     public static Pose blueLoadingZoneCenter() {
         return new Pose(FIELD_SIZE_INCHES - LOADING_ZONE_DEPTH_INCHES / 2, tileCenter('F', 2).y());
     }
-
-    // ---- Pre-loads (manual section 10.3.1) ----
-
-    public static final int PRELOADED_POLLEN_PER_ROBOT = 4;
 }

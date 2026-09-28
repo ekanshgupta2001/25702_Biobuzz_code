@@ -13,22 +13,31 @@ import com.qualcomm.robotcore.hardware.HardwareMap;
 import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
 
 /**
- * Pedro 3.0.0 configuration for the V1 drivetrain.
+ * Pedro 3.0.0 configuration for the mecanum drivetrain.
  *
- * <p>Three configs, filled in the order AutoTune produces them (docs/01 section A.7, registration in
- * {@code Tuning}): {@link #drivetrainConfig} needs nothing from AutoTune beyond a direction check
- * (Mecanum Tuner, or the {@code Bench: Drive} OpMode); {@link #localizerConfig} is the Pinpoint
- * Tuner's output; {@link #foresightConfig} is the Foresight Tuner's. {@link #create} returns the
- * follower only once the last two exist. Until then {@code Drivetrain.isAvailable()} is false, teleop
- * drives open loop through {@code OpenLoopDrive}, the hardcoded auto leaves through it, and
- * everything else runs.
+ * <h2>One Mecanum, built once, shared</h2>
+ * {@link #createMecanum} resolves the four drive motors; {@link #create} wraps <em>that same
+ * instance</em> in a {@link Follower}. This matters: {@code Mecanum}'s constructor calls
+ * {@code hardwareMap.get(DcMotorEx.class, name)} itself and wraps each motor in its own
+ * {@code CachedMotor}, so two {@code Mecanum} objects over the same four motors hold two independent
+ * power caches and fight each other. Sharing one instance is what lets stick driving and path
+ * following coexist in a single {@code Drivetrain} instead of the two parallel motor layers this
+ * code used to carry.
+ *
+ * <h2>Filling the three configs</h2>
+ * In the order AutoTune produces them, on a {@code -Ptuning} build (docs/01 section A.7):
+ * {@link #drivetrainConfig} needs only a direction check (Mecanum Tuner, or the SDK's TestHardware
+ * utility); {@link #localizerConfig} is the Pinpoint Tuner's output; {@link #foresightConfig} is the
+ * Foresight Tuner's. Until the last two exist {@link #create} returns {@code null} and the robot
+ * drives robot-centric straight through the {@code Mecanum}, with no heading hold, no aim lock and
+ * no paths. Everything else runs normally.
  */
 public class Constants {
     /**
-     * Motor names and directions. The left side reversed / right side forward is the usual mecanum
-     * wiring; confirm with the Mecanum Tuner or {@code Bench: Drive} (each wheel must push the robot
-     * forward) and flip the offending direction here. Shared by {@code OpenLoopDrive} now and by the
-     * tuned follower later, so a direction verified once carries over.
+     * Motor names and directions. Left reversed / right forward is the usual mecanum wiring; confirm
+     * each wheel pushes the robot forward with the SDK's TestHardware utility or the Mecanum Tuner,
+     * and flip the offending direction here. A direction verified once carries into the tuned
+     * follower, because the follower drives this very config.
      */
     public static MecanumConfig drivetrainConfig = new MecanumConfig(c -> {
         c.frontLeftName.set(HardwareNames.FRONT_LEFT_MOTOR);
@@ -44,41 +53,50 @@ public class Constants {
 
     /**
      * The Pinpoint localizer, from the Pinpoint Tuner. {@code null} until its numbers are pasted in.
-     * Template (replace every placeholder with the tuner's output; the name is already the one
-     * the Robot Controller configuration must use):
+     * Template (the name is already the one the Robot Controller configuration must use):
      * <pre>
-     * localizerConfig = new PinpointConfig(c -> {
+     * localizerConfig = new PinpointConfig(c -&gt; {
      *     c.name.set(HardwareNames.PINPOINT);
      *     c.xPodDirection.set(GoBildaPinpointDriver.EncoderDirection.FORWARD);   // tuner
      *     c.yPodDirection.set(GoBildaPinpointDriver.EncoderDirection.FORWARD);   // tuner
-     *     c.xPodOffset.set(0.0);                                                  // tuner, inches
-     *     c.yPodOffset.set(0.0);                                                  // tuner, inches
+     *     c.xPodOffset.set(0.0);                                                 // tuner, inches
+     *     c.yPodOffset.set(0.0);                                                 // tuner, inches
      *     c.podType.set(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_4_BAR_POD);
      * });
      * </pre>
-     * Constructing a {@code PinpointLocalizer} starts an IMU calibration that takes about a second;
-     * {@code Drivetrain.onStart()} re-applies the init pose once it has settled (docs/01 A.9 gotcha 6).
+     * Constructing a {@code PinpointLocalizer} starts an IMU calibration of about a second, so a pose
+     * written during init is lost; {@code Drivetrain} repeats it once the window has passed
+     * (docs/01 A.9 gotcha 6).
      */
     public static PinpointConfig localizerConfig = null;
 
-    /** The Foresight Tuner's block (its twelve required fields). {@code null} until pasted in. */
+    /** The Foresight Tuner's block, all twelve required fields. {@code null} until pasted in. */
     public static ForesightConfig foresightConfig = null;
 
-    /** True once both tuning configs are pasted in, so an init card can say why the drive is open loop. */
+    /** True once both tuning configs are pasted in, so an init card can say why paths are off. */
     public static boolean isTuned() {
         return localizerConfig != null && foresightConfig != null;
     }
 
     /**
-     * The tuned follower, or {@code null} while either tuning config is missing. A null follower keeps
-     * {@code Drivetrain.isAvailable()} false and everything else running. Constructor order is
-     * (localizer, drivetrain, algorithm) (docs/01 A.9 gotcha 1).
+     * The motor layer. Always constructible: it needs only names and directions, so stick driving
+     * works before anything is tuned. Throws if a drive motor name is missing from the
+     * configuration, which is the intended loud failure.
      */
-    public static Follower create(HardwareMap h) {
+    public static Mecanum createMecanum(HardwareMap h) {
+        return new Mecanum(h, drivetrainConfig);
+    }
+
+    /**
+     * The follower over an existing {@link Mecanum}, or {@code null} while either tuning config is
+     * missing. Constructor order is (localizer, drivetrain, algorithm) — the Quickstart's own comment
+     * has it wrong (docs/01 A.9 gotcha 1).
+     */
+    public static Follower create(HardwareMap h, Mecanum mecanum) {
         if (!isTuned()) return null;
         return new Follower(
                 new PinpointLocalizer(h, localizerConfig),
-                new Mecanum(h, drivetrainConfig),
+                mecanum,
                 new Foresight(foresightConfig));
     }
 }

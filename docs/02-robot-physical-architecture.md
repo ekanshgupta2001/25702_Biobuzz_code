@@ -1,178 +1,185 @@
-# BIOBUZZ V1 Robot: Physical Architecture → Software Map
+# BIOBUZZ Robot: Physical Architecture → Software Map
 
-Source of truth for the physical robot is `BIOBUZZ_V1_Robot_Physical_Architecture.md` (the team's
-V1 CAD spec). This document restates the parts of it that software must know and maps every
-mechanism to a subsystem in `03-software-architecture.md`. The spec says not to infer control logic
-or strategy from it; this document only records what each mechanism *is* and what the code therefore
-has to *control* and *sense*.
+What the robot actually is, and which subsystem owns each mechanism. Read from the CAD
+(`Non wheels full assembly.glb`, 2026-09-27) and confirmed by the team the same day. The two files in
+`docs/specs/` are the team's earlier written specs: they are the design *intent* and are superseded by
+this document wherever the two disagree, because the CAD is what is being built.
 
-**Scope.** V1 is deliberately limited to collecting, storing (four pieces), transferring, aiming and
-launching. It does **not** include Flower scoring, a vertical or horizontal extension, a secondary
-intake, an alternate storage path, a diverter, separate Pollen/Nectar storage, a moving storage
-carriage, or endgame mechanisms. The earlier final-robot spec (`BIOBUZZ_Robot_Physical_Architecture.md`)
-describes those V2 items; nothing in this repo implements them.
+**The CAD is a parts-layout file, not a positioned assembly.** It tells us which mechanisms exist and
+which parts are in each of them. It does **not** tell us where anything sits on the chassis, so this
+document defines mechanisms and hardware and deliberately states **no geometry**. Every pose,
+standoff, camera height and shooter angle in the code is still a placeholder — see HANDOFF §9.
 
-> **Collect reliably. Store predictably. Transfer cleanly. Shoot consistently.**
+> **Seven motors. One camera. No piece sensors. The drivetrain aims.**
 
 ---
 
 ## 1. Overall robot
 
-- Footprint ≈ **17.5 in × 17.5 in**, four-wheel **mecanum** drivetrain, compact, low centre of gravity.
-- One continuous game-piece path through the centre of the chassis; electronics pack around it.
-- Each stage must be testable on its own.
-- Three vertical layers:
-
-| Layer | Contents |
-|---|---|
-| Upper | flywheel shooter (fixed, firing out the rear), top of the vertical transfer |
-| Middle | front intake, short ramp, horizontal 4-piece storage, lower vertical transfer |
-| Bottom | mecanum chassis, battery, hubs, wiring, structure |
-
-- Weight rules: battery, hubs and drive motors low; funnel, intake and storage walls light. The
-  shooter is the only high-mounted mass, and it is what the drivetrain tuning will feel.
+- Four-wheel **mecanum** drivetrain, compact, low centre of gravity. Footprint ≈ **17.5 in × 17.5 in**
+  from the V1 spec; unconfirmed against the built chassis, and `FieldPoses.ROBOT_HALF_LENGTH_INCHES`
+  is derived from it.
+- One continuous game-piece path front to back: funnel, roller, tunnel, flywheel.
+- The shooter is **bolted to the chassis and fires out the rear**. There is no turret. Aiming is
+  therefore the drivetrain's heading, and that single fact shapes more of the software than anything
+  else on this page (`Shooter.HEADING_OFFSET_RAD` = π).
+- The heaviest and highest mass is the shooter, and it is at the back. The drivetrain will want
+  re-tuning after it is fitted.
 
 Game pieces: **POLLEN ≈ 2.8 in** (yellow, neutral) and **NECTAR ≈ 3.6 in** (red or blue,
-alliance-specific; controlling the opponent's is a foul, G408). Every stage must pass either. A robot
-may control at most **4** pieces (G407), which is exactly the storage capacity.
+alliance-specific — controlling the opponent's is a foul, G408). Every stage must pass either. A robot
+may control at most **4** pieces (G407).
 
-## 2. The game-piece path
+## 2. The mechanisms, and the motors
+
+| Mechanism | Motors | Hardware |
+|---|---|---|
+| Drivetrain | 4 × goBILDA **5203-2402-0014** (13.7:1, **435 RPM**) | mecanum + **goBILDA Pinpoint odometry computer with 2 pods** |
+| Intake — roller **and** tunnel, **one motor** | 1 × goBILDA **5203-2402-0051** (50.9:1, **117 RPM**) | roller: 10 × 16 mm × 16 mm 30A compliant wheels on a 288 mm REX shaft. Tunnel: 8 × Gecko 32 mm, 4 × Gecko 72 mm, 3 × Gecko 48 mm, 5 sprockets and chain |
+| Shooter | 2 × non-goBILDA "bare" motors | two **opposed 2.9 in** flywheels, 1.26 in wide; per motor GT2 40T → GT2 50T + HTD-3mm-43T on a 97T belt |
+| Vision | — | **Limelight 3A**, front-mounted, AprilTag aiming only |
+
+**Seven motors.** R503 allows eight, so there is exactly one spare port and no room for a mechanism
+that wants two (§6).
+
+Two consequences the software inherits directly from this table:
+
+- **The roller and the tunnel are one motor**, geared together through the sprocket chain. They cannot
+  be commanded separately, so they are one subsystem with one mode, and **feeding the shooter is
+  running the intake forward**. See §3.
+- **The shooter motors are not goBILDA parts and nobody has counted their encoder ticks per
+  revolution.** So `Shooter` works entirely in **encoder ticks per second** — the unit
+  `DcMotorEx.getVelocity()` actually returns — and there is no RPM and no `TICKS_PER_REV` anywhere in
+  it. A measured ticks-per-second figure cannot be wrong about itself; a guessed conversion would make
+  every number on the bench card and in the distance table a lie.
+
+## 3. The game-piece path
 
 ```
 FRONT
-  Wide passive funnel (~2 in deep, angled walls, most of the robot width; no Gecko wheels here)
+  Wide passive funnel (angled walls, most of the robot's width; no powered parts)
       ↓
-  Front intake roller — goBILDA 16 mm × 16 mm, 30A durometer, 8 mm REX bore (NOT Gecko wheels)
-      ↓   shaft sits ABOVE the ramp; pulls the piece in and pushes it back onto the ramp
-  Short shallow ramp (~1–2 in of travel; not a conveyor)
-      ↓
-  Low horizontal storage channel — up to 4 pieces, front → rear,
-      Gecko/compliant side wheels along both sides advance and control the queue
-      ↓
-  Rear 90° vertical transfer — opposing Gecko wheels grip the piece from both sides and lift it
-      ↓   feeds directly into the shooter; no intermediate conveyors
-  Compliant flywheel shooter, fixed to the chassis and firing out the rear
-      (one shooter for both POLLEN and NECTAR)  → HIVE
+  Roller — 10 × 16 mm × 16 mm 30A compliant wheels, 288 mm REX shaft
+      ↓   ONE MOTOR drives this and everything below it
+  Tunnel — opposed Gecko wheels (32 / 48 / 72 mm) on a sprocket chain, carrying the piece rearward
+      ↓   no gate, no indexer, no sensor: a piece arrives because the tunnel ran long enough
+  Two opposed 2.9 in flywheels, fixed to the chassis, firing out the rear   → HIVE CELL
 ```
 
 Design constraints the software inherits:
 
-- **The shooter is fixed and fires out the rear, so the drivetrain aims.** The robot's heading must
-  be the bearing to the target CELL plus the firing offset (`Shooter.HEADING_OFFSET_RAD`, π): the
-  driver holds an aim lock on the heading hold while still translating, and autonomous turns in
-  place before shooting (`Macros.aimHeading`, `Macros.aimAt`).
-- **One intake, one storage system, one path.** No routing decisions exist in V1: every piece goes
-  to the shooter.
-- **Minimal transfers.** The vertical transfer feeds the shooter directly; there is no buffer to model
-  between transfer and flywheel.
-- **Storage is a controlled queue of at most four**, not a hopper: the code knows how many pieces are
-  in it and where the queue ends.
+- **The shooter is fixed and fires out the rear, so the drivetrain aims.** The robot's heading must be
+  the bearing to the target CELL minus the firing offset (`Shooter.HEADING_OFFSET_RAD`, π). In teleop
+  that is an aim-lock setpoint inside the heading hold, so the driver keeps translating while the robot
+  points the shooter (`Macros.aimHeading`); in autonomous it is a turn in place (`Macros.aimAt`).
+- **Nothing in the path can be counted.** There is no sensor between the funnel and the flywheel, so no
+  code anywhere claims to know how many pieces are aboard. "Shoot one" is one tunnel pulse; "shoot all"
+  is `Macros.PIECES_PER_LOAD` (4) pulses; `Macros.getShotsFired()` is a count of pulses. **The operator
+  decides when the robot is empty**, and the telemetry says "pulses", never "pieces".
+- **G407 is a human interlock.** Nothing stops the intake at four, because nothing knows it is at four.
+  The operator stops it.
+- **G408 is a human interlock too.** There is no colour sensing on the robot, so the code cannot refuse
+  the opponent's NECTAR. The drivers must not intake it. The funnel is wide and passive, which makes
+  that easier to get wrong than it sounds.
+- **One path, no routing.** Every piece that enters goes to the flywheel. There is no diverter, no
+  second storage and no decision to make.
 
-## 3. Mechanism → subsystem map
+## 4. Mechanism → subsystem map
 
-| Physical mechanism | What it is | Likely actuators | Likely sensors | Software subsystem |
-|---|---|---|---|---|
-| Mecanum drivetrain | 4 wheels, low | 4 DC motors | goBILDA Pinpoint + 2 pods (planned), IMU | `subsystems/Drivetrain` via Pedro `Follower` (`Mecanum` + `PinpointLocalizer`) |
-| Front funnel | passive polycarbonate / printed guides | none | none | none (geometry only) |
-| Front intake roller | 16 mm compliant wheels on one shaft above the ramp | 1 DC motor (velocity) | intake-entrance sensor | `subsystems/Intake` |
-| Ramp | passive | none | none | none |
-| Horizontal storage | 4-piece channel, Gecko side wheels move the queue rearward | 1 (or 2) DC motors | storage-entrance sensor, storage-full sensor | `subsystems/Storage` |
-| Rear 90° vertical transfer | opposing Gecko wheels, lifts one piece into the shooter feed | 1 DC motor | transfer sensor, shooter-feed sensor | `subsystems/Transfer` |
-| Flywheel shooter | compliant flywheel(s) fixed to the chassis at the rear, firing rearward; aimed by the drivetrain heading | 1–2 DC motors (velocity), possibly a feed gate servo | shooter-feed sensor (shared with Transfer), flywheel encoders | `subsystems/Shooter` (+ the `Drivetrain` aim lock) |
-| Vision (if installed during V1) | Limelight 3A, rigidly mounted | none | the camera | `subsystems/Limelight` (aiming + piece detection; fail-soft when absent) |
-| Piece sensors | reserved points (below) | none | colour / distance / beam-break TBD | `subsystems/ColorSensor` instances (or a distance/beam-break wrapper when chosen) |
+| Physical mechanism | Actuators | Sensors | Software subsystem |
+|---|---|---|---|
+| Mecanum drivetrain | 4 × `DcMotorEx` | goBILDA Pinpoint + 2 pods (the Pinpoint's own IMU supplies heading) | `subsystems/Drivetrain` — one Pedro `Mecanum`, plus a `Follower` once AutoTune has run |
+| Front funnel | none | none | none (geometry only) |
+| Roller **and** tunnel | 1 × `DcMotorEx`, open-loop power | motor current only, and only while pulling | `subsystems/Intake` |
+| Flywheel pair | 2 × `DcMotorEx`, open-loop power | one flywheel's encoder velocity | `subsystems/Shooter` (+ the `Drivetrain` aim lock) |
+| Limelight 3A | none | the camera | `subsystems/Limelight` |
+| — | — | **no piece sensors of any kind** | — |
 
-### Reserved sensor points
+`util/hardware/HardwareNames` holds every config string and nothing else: four drive motors,
+`pinpoint`, `intake`, `shooter_left`, `shooter_right`, `limelight`. A name there that is not in the
+Robot Controller configuration throws at OpMode init and says which device it was — that is deliberate
+(docs/03 §14).
 
-The V1 spec lists "easy sensor mounting" as a priority without naming the points. The code reserves a
-config name for each stage boundary in `util/hardware/HardwareNames` so that adding a sensor later is
-one line, regardless of the sensor type:
+## 5. Dead design iterations in the CAD — do not re-add
 
-| Point | Purpose for software |
+The CAD file also contains **`Assembly 1`** and **`Assembly 2`**, each two 6000 RPM motors driving Gecko
+wheels. **Both are abandoned design iterations. Neither is on the robot and neither has any code.**
+They are recorded here so that the next person to open the CAD does not read them as mechanisms that
+software forgot.
+
+Two of them would also be illegal: seven motors plus either assembly's two is nine, and R503 caps a
+robot at eight. If one of them is ever revived, something else loses its motor first, and that is a
+hardware decision before it is a software one.
+
+## 6. Electronics packaging and the motor budget
+
+**Rule check (docs/04 §6):** R503 allows at most **8 DC motors and 8 servos**. The robot uses
+**7 motors and 0 servos**:
+
+| Ports | Mechanism |
 |---|---|
-| Intake entrance | "a piece is entering" — gates capture logic and jam detection |
-| Storage entrance | count pieces entering the queue; identify POLLEN vs NECTAR colour (G408) |
-| Storage full | stop the intake when four are stored (G407) |
-| Vertical transfer | a piece is in the lift; interlock so the transfer does not double-feed |
-| Shooter feed | a piece is staged at the flywheel; interlock the shot on flywheel speed |
+| 4 | drivetrain |
+| 1 | intake (roller + tunnel) |
+| 2 | shooter |
+| **1 free** | — |
 
-Which sensor goes where (REV Color Sensor V3 for piece type, REV 2 m distance, beam-break on a digital
-channel) is not decided. The `ColorSensor` wrapper is instantiable per name so several can coexist.
+A Control Hub plus at most one Expansion Hub (R701). `Robot.readSensors()` clears the bulk cache on
+**every** `LynxModule`, so a second hub costs nothing in correctness. The Pinpoint and the Limelight are
+both external computers on their own links (I2C and USB-Ethernet respectively), which is why the
+Limelight is the one device whose calls are wrapped in try/catch (docs/03 §14).
 
-## 4. Vision (optional in V1)
+Nothing may cross the path funnel → roller → tunnel → flywheel.
 
-The spec allows "vision hardware if installed during V1". If a Limelight 3A is fitted:
+## 7. What the robot can and cannot sense
 
-- **Rigid** chassis mount, **facing front** (decided 2026-09-16), for AprilTags only.
-- High enough that intake and storage do not block the view; final position after the shooter CAD.
-  Its yaw relative to the robot's forward axis is `Limelight.CAMERA_YAW_OFFSET_DEGREES` (0 = front),
-  which the aim law uses with a tag's tx. The rear-firing shooter needs the robot turned away from
-  the tags, so `Macros.aimHeading` keeps the correction it took while facing them (docs/03 §9).
-- Uses: AprilTag **aiming** (the clusters on the HIVE CELL give `tx`/`ty`/range to the CELL opening)
-  and game-piece detection (yellow POLLEN, red/blue NECTAR). Field localisation from tags is **not
-  available in BIOBUZZ** (docs/04 §3); the pose comes from Pinpoint odometry and the IMU.
-- Without the camera, `Limelight.isAvailable()` is false and the robot aims from odometry toward
-  the known CELL position (`game/Field`), with a wall-referenced fallback.
+| It knows | From |
+|---|---|
+| where it is, and which way it faces | Pinpoint odometry, once AutoTune has produced `localizerConfig` |
+| how far off the HIVE's AprilTags say its heading is | Limelight 3A, front-mounted, while the tags are in view |
+| how fast a flywheel is turning | one shooter encoder, ticks/sec |
+| whether the roller is jammed | intake motor current, sampled only while pulling |
+| battery volts, loop rate | `Robot` |
 
-## 5. Electronics packaging and the motor budget
+| It does not know | Consequence |
+|---|---|
+| how many pieces are aboard | the operator counts; `shootAll` fires four pulses regardless |
+| whether a piece is at the flywheel | a shot is a timed tunnel pulse, `Shoot.FEED_PULSE_MS` |
+| what colour a piece is | G408 is a driver responsibility |
+| whether a shot scored | nothing on the robot closes that loop; the drivers watch the CELL |
 
-Control Hub, Expansion Hub if required, battery, wiring and vision hardware go in side cavities beside
-the storage, under parts of it, or in low front/rear corners. None of it may cross the path
-funnel → intake → ramp → storage → transfer → shooter.
+Adding a sensor is not "one line" any more: the reserved sensor-name block, the fail-soft lookup and
+the trust policy that used to make it cheap were all deleted with the mechanisms that needed them
+(HANDOFF §6). Fitting one means writing the subsystem member, the read in `Robot.readSensors()` and
+the interlock that consumes it. That is the right price for a sensor nobody has chosen yet.
 
-**Rule check (docs/04 §6):** BIOBUZZ R503 allows at most **8 DC motors and 8 servos**. V1 wants
-4 drive + intake + storage (1–2) + transfer + shooter (1–2) = **8–10 motors**: a single flywheel and
-a single storage motor fit exactly, otherwise one mechanism must share a motor (storage and transfer
-geared together). A Control Hub plus one Expansion Hub is the maximum (R701);
-bulk-cache reads clear **every** hub (`Robot.readSensors()` iterates all `LynxModule`s).
+## 8. Geometry: all of it is still unmeasured
 
-## 6. Game-piece state as the software will track it
+Because the CAD is a parts layout, **every one of these is a placeholder**:
 
-```
-  none ──intake──▶ ENTERING ──ramp──▶ STORED[1..4] ──transfer──▶ IN_TRANSFER ──▶ AT_FEED ──shoot──▶ gone
-```
-
-| Transition | Owner | Interlocks |
+| Number | Lives in | How it gets real |
 |---|---|---|
-| none → ENTERING | `Intake` | not when storage is full; reject opponent NECTAR |
-| ENTERING → STORED | `Storage` (count++) | storage-entrance sensor |
-| STORED → IN_TRANSFER | `Storage` advance + `Transfer` run | transfer empty, shooter ready |
-| IN_TRANSFER → AT_FEED | `Transfer` | feed sensor |
-| AT_FEED → shot | `Shooter` (feed gate / transfer pulse) | flywheel at speed, robot aimed (heading hold on the CELL) |
+| the field frame's HIVE and CELL positions | `game/Field` (INFERRED, from docs/04) | Onshape field CAD, then a tape measure at the first event |
+| start pose, shooting spot, park | `game/FieldPoses` | drive the real field; correct the BLUE value and red follows |
+| robot half-length, wall standoffs | `FieldPoses.ROBOT_HALF_LENGTH_INCHES` | measure the built chassis with pre-loads in |
+| flywheel speed per distance | `Shooter`'s distance table | `Bench: Shooter`, four distances, HANDOFF §8 |
+| camera yaw, and its height above the tiles | `Limelight.CAMERA_YAW_OFFSET_DEGREES` (0 = front) | a tag dead ahead must read tx ≈ 0 |
+| which way "off the wall" is in autonomous | `Auto.LEAVE_POWER`, `LEAVE_MS` | the practice field |
 
-These are the sequences `commands/Macros` composes ("intake until full", "shoot one", "shoot all");
-the subsystems only expose single-mechanism commands.
-
-## 7. V1 physical priorities, restated for code review
-
-1. Reliable intake → capture is sensor-confirmed, jam detection on the intake motor.
-2. Reliable storage → the count is authoritative and hard-stops at four.
-3. Reliable horizontal-to-vertical transfer → transfer never runs into an occupied feed.
-4. Reliable shooter feeding → a shot is only released at speed, with the robot aimed.
-5. Low jam rate → every stage has a timeout and a reverse.
-6. Easy maintenance / sensor mounting → names reserved now, wrappers fail-soft when absent.
-7. Low centre of gravity, simple packaging, fast iteration → retune the drivetrain after the
-   shooter is fitted.
-
-## 8. Deferred to V2 (not in this repo)
-
-Flower scoring mechanism, vertical and horizontal extensions, secondary intake, alternate storage
-path, separate Pollen/Nectar storage, routing diverter, complicated endgame mechanisms, moving storage
-carriage, elevators. The game rules that only those mechanisms would exercise (FLOWER scoring, G410's
-NECTAR-into-FLOWER window) are recorded in docs/04 for when V2 starts; there is no code for them.
+Treat any path, autonomous or distance-derived flywheel speed as untested until these are measured,
+because it is.
 
 ## 9. Open hardware questions the code cannot resolve
 
 | Question | Affects |
 |---|---|
-| Drive motor model and gearing | Pedro tuning only (AutoTune measures it) |
-| Intake / storage / transfer / shooter motor models (ticks per rev, free speed) | velocity targets and stall-current thresholds |
-| Which mechanism shares a motor to fit R503's 8 | `HardwareNames` optional second-motor names; subsystem ownership of a shared motor |
-| Shooter firing direction (out the rear is assumed) and the camera's yaw relative to it | `Shooter.HEADING_OFFSET_RAD`, `Limelight.CAMERA_YAW_OFFSET_DEGREES` |
-| Flywheel: one or two motors, feed gate or transfer pulse, hood or fixed angle | `Shooter` |
-| Sensor type at each of the five points | which wrapper each `HardwareNames` entry resolves to |
-| POLLEN / NECTAR colour signatures under match lighting | `game/PieceType` thresholds |
-| Whether a Limelight is fitted in V1, and where | `Limelight` mount constants; aiming fallback |
+| Which motors the flywheels actually are (make, encoder ticks/rev, free speed) | nothing in the code — that is the point of working in ticks/sec — but it decides whether 1300 t/s is near the ceiling or a third of it |
+| Where the Limelight ends up, and how high | `Limelight.CAMERA_YAW_OFFSET_DEGREES`, and whether the tunnel or the shooter blocks the view of a CELL |
+| Whether the rear-firing assumption survives the built robot | `Shooter.HEADING_OFFSET_RAD` (π) |
+| Whether one tunnel pulse moves exactly one piece, at what power | `Shoot.FEED_PULSE_MS`, `Intake.IN` |
+| Whether the tunnel holds a load on a slope without power | `Intake.IDLE` (0.35, borrowed from the reference robot) |
+| Flywheel hood, exit angle, and the height of the CELL opening | the distance table's shape, and whether a shot from 96 in is possible at all |
+| Whether the two flywheels are geared identically | `Shooter.SECOND_MOTOR_REVERSED` is geometry, not a tuning knob; unequal gearing would need two powers |
 | Hub count and port assignment | `HardwareNames` only |
 
-Treat this V1 architecture as the baseline unless the CAD spec is explicitly changed.
+Whatever the answers, the software's shape does not change: seven motors, nothing counted, the
+drivetrain aims.

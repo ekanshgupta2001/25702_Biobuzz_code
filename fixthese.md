@@ -1,4 +1,71 @@
+# Round 5 — rebase onto the real robot (2026-09-27)
+
+The team supplied two things the earlier rounds did not have: the robot's CAD
+(`Non wheels full assembly.glb`) and a competition-proven reference codebase (`22131-Decode-master 2/`).
+The first showed that the code modelled a **different machine**; the second showed how much less code a
+working robot needs. This round rebased onto the real robot and cut the rest.
+
+## What the CAD settled
+
+Seven motors: 4 × 435 RPM mecanum drive, **1 × 117 RPM driving the roller and the tunnel together**, and
+**2 bare motors on a counter-rotating pair of 2.9 in flywheels**. Plus a Pinpoint and a front Limelight.
+The file is a parts *layout*, not a positioned assembly, so it gave the mechanism set and no geometry.
+`Assembly 1` and `Assembly 2` in it are dead design iterations.
+
+Three things the code modelled that do not exist:
+- **A counted 4-piece magazine** (`Storage`, 322 lines). The robot has a tunnel with no sensor in it.
+- **A separate 90° vertical transfer** (`Transfer`, 228 lines). It is part of the tunnel, on the intake's motor.
+- **Four reserved piece-sensor points** (~700 lines across eight files). The confirmed sensor set is
+  Pinpoint and Limelight. Nothing else.
+
+## What the reference codebase settled
+
+It runs a *harder* robot — turret, flywheel, 15-piece auto — on **2,147 team-authored lines**, against
+our 6,310 code lines of which ~1,900 were reachable. Four patterns were taken from it:
+
+| Taken | Why |
+|---|---|
+| The flywheel as `setPower(kV*t + kP*e + kS)`, no `setVelocity`, no PIDF, no `RUN_USING_ENCODER` | Feedforward-dominant with a P term that saturates almost at once. It holds the known-good power and slams to full on sag, which is why it needs **no recovery wait between shots and no at-speed dwell latch** — both of ours existed to paper over the SDK velocity PID on a high-inertia wheel. |
+| A hand-measured distance→speed table | Their file preserves four abandoned attempts in comments: a linear fit, a quartic, a quadratic. The table won. |
+| Crash on a bad config name | They have no fail-soft layer at all. Our 51 `isAvailable()` guards bought a robot that boots and silently plays a match with one mechanism disabled. |
+| Alliance baked into the OpMode class | Deletes `AutoSelector`, the lock ceremony, and the "started UNLOCKED" state. |
+
+Four things were **not** taken: FTC Dashboard `@Config` (their whole pit workflow, and R704 forbids it
+for us — the benches are our legal equivalent); Sloth hot reload; unbounded `waitUntil`s (a dead
+flywheel hangs their autonomous for the rest of the match); and their tolerance for dead code.
+
+## What changed
+
+| # | Change | Evidence |
+|---|---|---|
+| R5-1 | Deleted the sensing stack, `Storage` and `Transfer`; the roller and tunnel are one `Intake` on one motor | nothing can count, so nothing claims to |
+| R5-2 | **One `Mecanum`**, shared with the `Follower`. `OpenLoopDrive`, `PathFollower`, `PedroPathFollower` deleted | `Mecanum` resolves its own four `DcMotorEx` and caches each; two instances fight. That was the whole reason for the "one motor layer" doctrine |
+| R5-3 | `Shooter` rewritten on kS/kV/kP in ticks/sec, with the table and a manual override | no `TICKS_PER_REV` means no wrong conversion |
+| R5-4 | `ShootCycle` (6 sensor states) → `commands/Shoot` (one timed machine), and it refuses to run with a zero target | a zero target is "at speed" on tick one and would dump the load through a dead wheel |
+| R5-5 | Stripped the scaffolding: `Hardware`, `Clock`/`SystemClock`, `Tunables`, `RobotTunables`, `BuildFlavor`, `LoopTimer`, `MatchLogger`, `VelocityMotor`, the composition constructor, the `buildRobot()`/`openLogger()` seams | the test suite they served was deleted in `0efa320` |
+| R5-6 | Alliance by OpMode class; `MainAuto`+`AutoRoutine`+`AutoSelector` (319 lines) → `Auto`+2 subclasses (168) | — |
+| R5-7 | `BenchOpMode` merged into `MatchOpMode`; benches trimmed to three, holding **no motor handles of their own** | a second handle on a port is a second power cache, and `stopMechanisms()` then cannot stop it |
+| R5-8 | MANUAL mode, pose re-seed, rest state enforced every loop, jam rumble | every automatic path is pose-derived; one collision breaks all of them and no sensor would notice |
+| R5-9 | Two default commands read a supplier every loop instead of being re-scheduled per press | Ivy has no duplicate guard, and *ends* rather than suspends a preempted priority-0 command |
+
+**Numbers:** 57 files changed, 2,047 insertions, 5,412 deletions. Team code 7,568 → **4,358 lines**
+across 31 files (the vendored `pedro/procedures/*` adds 2,100 more that contribute nothing to the match
+APK). Both APKs build; the competition APK has **zero** AutoTune references across all nineteen dex
+files, checked by scanning dex strings rather than trusting the Gradle exclusion.
+
+**Not done:** the geometry in `game/Field` and `game/FieldPoses` is still placeholder, and every number
+in HANDOFF §9 is still unmeasured. The code is ready for the robot; the robot has not been measured.
+
+---
+
 # fixthese.md — every issue found in the 25702 BIOBUZZ code (review of 2026-09-14)
+
+> **Historical.** Rounds 1–4 below review code that no longer exists. Round 5 (above) rebased the
+> project onto the real robot: `Storage`, `Transfer`, the colour-sensor stack, `OpenLoopDrive`, the
+> diagnostics layer and the JVM test suite are all gone, so most items here refer to files that have
+> been deleted. Kept because the *reasoning* is still the best record of why the surviving decisions
+> are what they are.
+
 
 Scope: every file under `TeamCode/src/main/java/org/firstinspires/ftc/teamcode/` except the untouched
 Quickstart `pedro/procedures/*`, plus the tests, docs and HANDOFF. Verified against the JVM test

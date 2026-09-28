@@ -4,35 +4,28 @@ import static com.pedropathing.ivy.groups.Groups.race;
 
 import com.pedropathing.ivy.Command;
 
-import org.firstinspires.ftc.teamcode.util.time.Clock;
-
 /**
- * Waits on the robot's injected {@link Clock} instead of Ivy's wall-clock {@code Commands.waitMs}.
+ * A wait, and the bounded-wait rule in one call.
  *
- * <p>Ivy's own {@code waitMs} reads {@code System.currentTimeMillis()}, which a test cannot fake
- * without real sleeps (docs/01 section B.5, trap 3). Everything else in this codebase already
- * takes time from one injected monotonic {@link Clock}, so macro and auto timeouts do the same:
- * {@code FakeClock.advance(20)} per tick makes an eight-second timeout deterministic in 400 loops.
- *
- * <p>Lives in {@code commands/} rather than {@code util/time} because {@code util} may not import
- * Ivy (docs/03 section 3).
+ * <p>Ivy ships {@code Commands.waitMs}, and on a real robot it is fine — this exists for
+ * {@link #bounded}, which is the rule that matters: <b>every wait on a condition has a deadline</b>.
+ * The reference codebase this robot's structure is modelled on writes
+ * {@code Commands.waitUntil(shooter::atTarget)} with no timeout, so a dead flywheel or a jammed feed
+ * hangs its autonomous for the rest of the match. One {@code race} against a timer is the whole fix.
  */
 public final class Waits {
     private Waits() {}
 
-    /** Done once {@code ms} have elapsed on {@code clock} since the command started. */
-    public static Command waitMs(Clock clock, long ms) {
+    /** Done once {@code ms} have elapsed since the command started. */
+    public static Command waitMs(long ms) {
         final long[] startedAt = new long[1];
         return Command.build()
-                .setStart(() -> startedAt[0] = clock.nowMs())
-                .setDone(() -> clock.nowMs() - startedAt[0] >= ms);
+                .setStart(() -> startedAt[0] = System.currentTimeMillis())
+                .setDone(() -> System.currentTimeMillis() - startedAt[0] >= ms);
     }
 
-    /**
-     * {@code work} raced against a clock timeout: finishes when either does, and interrupts the
-     * other. The bounded-wait rule (docs/03 section 18) in one call.
-     */
-    public static Command bounded(Clock clock, Command work, long timeoutMs) {
-        return race(work, waitMs(clock, timeoutMs));
+    /** {@code work} raced against a timeout: finishes when either does, and interrupts the other. */
+    public static Command bounded(Command work, long timeoutMs) {
+        return race(work, waitMs(timeoutMs));
     }
 }

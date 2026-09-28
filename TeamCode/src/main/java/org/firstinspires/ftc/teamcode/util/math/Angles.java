@@ -4,9 +4,9 @@ package org.firstinspires.ftc.teamcode.util.math;
  * Angle arithmetic that respects the wrap at 0/2pi.
  *
  * <h2>Why this is its own class</h2>
- * Field geometry, heading hold, and macro targeting all need this arithmetic, and none of it has
- * anything to do with a camera.
- * honest and shows where general math belongs.
+ * Field geometry, heading hold and macro aiming all need the same two operations, and none of them
+ * has anything to do with a camera, a drivetrain or a field. Kept apart, there is one place where
+ * the wrap is handled and one place to look when a heading comes out backwards.
  *
  * <h2>The wrap is the whole point</h2>
  * Two conventions meet in this codebase and disagree:
@@ -19,7 +19,7 @@ package org.firstinspires.ftc.teamcode.util.math;
  * Mix them and a naive comparison breaks. Worse, a controller fed a raw angle difference across the
  * seam sees 359 degrees and 1 degree as 358 degrees apart and drives the long way round at full
  * power. {@link #angleError} always takes the short way; {@link #normalizeAngle} puts an angle in
- * Pedro's convention. Pure arithmetic, no hardware, fully unit tested.
+ * Pedro's convention.
  */
 public final class Angles {
     private Angles() {}
@@ -43,5 +43,4 @@ public final class Angles {
         if (diff <= -Math.PI) diff += 2 * Math.PI;
         return diff;
     }
-
 }

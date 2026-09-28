@@ -40,7 +40,8 @@ public enum Controls {
     SLOW_MODE(Pad.DRIVER, "L-trigger", "precision slow mode", null, gp -> gp.left_trigger),
     AIM_LOCK(Pad.DRIVER, "R-trigger", "hold: aim the shooter at the HIVE", null, gp -> gp.right_trigger),
     TOGGLE_DRIVE_FRAME(Pad.DRIVER, "LB", "field / robot centric", Gamepad::leftBumperWasPressed, null),
-    RESET_HEADING(Pad.DRIVER, "Y", "re-zero field heading", Gamepad::yWasPressed, null),
+    RESET_HEADING(Pad.DRIVER, "Y", "re-zero field heading (face away from your wall)", Gamepad::yWasPressed, null),
+    RESEED_POSE(Pad.DRIVER, "A", "re-seed pose: robot MUST be on its start", Gamepad::aWasPressed, null, Needs.DRIVETRAIN),
     ABORT(Pad.DRIVER, "BACK", "abort macro (or just move a stick)", Gamepad::backWasPressed, null),
 
     DRIVE_TO_SHOOT(Pad.DRIVER, "B", "path to the shooting spot", Gamepad::bWasPressed, null, Needs.DRIVETRAIN),
@@ -51,30 +52,32 @@ public enum Controls {
     SNAP_270(Pad.DRIVER, "dpad down", "snap to 270 deg", Gamepad::dpadDownWasPressed, null, Needs.DRIVETRAIN),
     SNAP_180(Pad.DRIVER, "dpad left", "snap to 180 deg", Gamepad::dpadLeftWasPressed, null, Needs.DRIVETRAIN),
 
-    // ---- Operator (gamepad 2): mechanisms and diagnostics ----
-    INTAKE(Pad.OPERATOR, "RB", "run intake", Gamepad::rightBumperWasPressed, null),
-    OUTTAKE(Pad.OPERATOR, "LB", "run intake backwards", Gamepad::leftBumperWasPressed, null),
-    EJECT(Pad.OPERATOR, "B", "eject at full speed", Gamepad::bWasPressed, null),
+    // ---- Operator (gamepad 2): the mechanisms, and the overrides ----
+    INTAKE(Pad.OPERATOR, "RB", "intake on / off", Gamepad::rightBumperWasPressed, null),
+    OUTTAKE(Pad.OPERATOR, "LB", "reverse intake on / off", Gamepad::leftBumperWasPressed, null),
     STOP_INTAKE(Pad.OPERATOR, "X", "stop intake / cancel macro", Gamepad::xWasPressed, null),
-    INTAKE_UNTIL_FULL(Pad.OPERATOR, "Y", "intake until storage is full", Gamepad::yWasPressed, null),
 
     SHOOT_ONE(Pad.OPERATOR, "R-trigger", "shoot one", Gamepad::rightTriggerWasPressed, null),
-    SHOOT_ALL(Pad.OPERATOR, "A", "shoot everything", Gamepad::aWasPressed, null),
+    SHOOT_ALL(Pad.OPERATOR, "A", "shoot four", Gamepad::aWasPressed, null),
     ARM_FLYWHEEL(Pad.OPERATOR, "L-trigger", "flywheel on / off", Gamepad::leftTriggerWasPressed, null),
 
+    // The override group. Manual mode takes odometry, the distance table and the aim law out of the
+    // loop in one press, and the two speed keys are this robot's legal substitute for the dashboard
+    // slider a Panels/FTC-Dashboard robot would trim its flywheel with mid-match (R704).
+    TOGGLE_MANUAL(Pad.OPERATOR, "dpad up", "MANUAL speed+aim (ignore odometry)", Gamepad::dpadUpWasPressed, null),
     HIVE_TIPPED(Pad.OPERATOR, "dpad down", "our HIVE tipped: aim at the other CELL", Gamepad::dpadDownWasPressed, null),
-    MARK_FULL(Pad.OPERATOR, "dpad up", "count = 4 (no sensor)", Gamepad::dpadUpWasPressed, null),
-    MARK_EMPTY(Pad.OPERATOR, "dpad left", "count = 0 / unknown", Gamepad::dpadLeftWasPressed, null),
-
-    TOGGLE_DEBUG(Pad.OPERATOR, "BACK", "toggle debug telemetry", Gamepad::backWasPressed, null);
+    SPEED_DOWN(Pad.OPERATOR, "dpad left", "manual speed -", Gamepad::dpadLeftWasPressed, null),
+    SPEED_UP(Pad.OPERATOR, "dpad right", "manual speed +", Gamepad::dpadRightWasPressed, null);
 
     /** Which driver holds this control. */
     public enum Pad { DRIVER, OPERATOR }
 
     /**
-     * What a control needs before it is safe to act on. {@code Teleop} gates on this generically,
-     * so a new macro cannot be added without saying what it needs, and cannot escape the gate by
-     * being left out of a hand-written list (fixthese R2-B4).
+     * What a control needs before it is safe to act on. {@code DRIVETRAIN} means "needs the tuned
+     * follower": paths, snap turns and the pose re-seed are all inert until AutoTune has filled
+     * {@code Constants.localizerConfig} and {@code foresightConfig}. {@code Teleop} gates on this
+     * generically, so a new macro cannot be added without declaring what it needs, and cannot escape
+     * the gate by being left out of a hand-written list.
      */
     public enum Needs { NOTHING, DRIVETRAIN }
 
@@ -132,7 +135,7 @@ public enum Controls {
         return needs;
     }
 
-    /** True for anything that steers the robot: paths and snaps. */
+    /** True for anything that needs the tuned follower: paths, snaps, the pose re-seed. */
     public boolean requiresDrivetrain() {
         return needs != Needs.NOTHING;
     }

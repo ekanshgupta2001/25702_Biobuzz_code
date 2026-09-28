@@ -3,8 +3,13 @@ package org.firstinspires.ftc.teamcode.util.math;
 /**
  * Stick shaping: deadband, exponential curve, and trigger-held slow mode.
  *
- * <p>Pure math with no hardware dependency, which is why it is the one part of the robot code
- * covered by unit tests.
+ * <p>Pure math, no hardware. Two entry points, because the teleop loop wants exactly two things
+ * from a stick — a shaped axis and a slow-mode multiplier. The pieces used to be public and
+ * separately overloaded, each with a no-argument twin that filled in the constants below; nothing
+ * ever called the parameterised forms, so the curve now reads the tunables directly.
+ *
+ * <p>The tunables are {@code public static} so they can be turned on a dashboard between runs.
+ * That is also why the guards against a nonsense deadband or threshold stay: the values are live.
  */
 public final class DriveScaling {
     public static double DEFAULT_DEADBAND = 0.07;
@@ -14,13 +19,19 @@ public final class DriveScaling {
 
     private DriveScaling() {}
 
+    /** Deadband then expo: what the drive gets from a raw stick axis. */
+    public static double shape(double raw) {
+        return applyExpo(applyDeadband(raw));
+    }
+
     /**
      * Zeroes small stick noise, then rescales so output still reaches full magnitude.
      *
      * <p>The {@code /(1 - deadband)} is the point of the function: without it, output would jump
      * from 0 straight to {@code deadband} at the edge and never reach 1.0 at full deflection.
      */
-    public static double applyDeadband(double raw, double deadband) {
+    private static double applyDeadband(double raw) {
+        double deadband = DEFAULT_DEADBAND;
         if (deadband >= 1) return 0;
         if (deadband < 0) deadband = 0;
         if (Math.abs(raw) < deadband) return 0;
@@ -28,35 +39,21 @@ public final class DriveScaling {
         return sign * (Math.abs(raw) - deadband) / (1 - deadband);
     }
 
-    public static double applyDeadband(double raw) {
-        return applyDeadband(raw, DEFAULT_DEADBAND);
-    }
-
-    public static double applyExpo(double raw, double exponent) {
+    /** Signed power curve: fine control near centre, full authority at the ends. */
+    private static double applyExpo(double raw) {
         double sign = raw < 0 ? -1 : 1;
-        return sign * Math.pow(Math.abs(raw), exponent);
-    }
-
-    public static double applyExpo(double raw) {
-        return applyExpo(raw, DEFAULT_EXPO);
-    }
-
-    public static double shape(double raw) {
-        return applyExpo(applyDeadband(raw));
+        return sign * Math.pow(Math.abs(raw), DEFAULT_EXPO);
     }
 
     /**
-     * Trigger-held precision mode: 1.0 below the threshold, ramping down to {@code minScale} at
-     * full pull. Pulling harder makes the robot slower.
+     * Trigger-held precision mode: 1.0 below {@link #SLOW_THRESHOLD}, ramping down to
+     * {@link #SLOW_MIN_SCALE} at full pull. Pulling harder makes the robot slower.
      */
-    public static double slowScale(double trigger, double minScale, double threshold) {
+    public static double slowScale(double trigger) {
+        double threshold = SLOW_THRESHOLD;
         if (threshold >= 1) return 1.0;
         if (trigger < threshold) return 1.0;
         double t = (trigger - threshold) / (1.0 - threshold);
-        return 1.0 - t * (1.0 - minScale);
-    }
-
-    public static double slowScale(double trigger) {
-        return slowScale(trigger, SLOW_MIN_SCALE, SLOW_THRESHOLD);
+        return 1.0 - t * (1.0 - SLOW_MIN_SCALE);
     }
 }

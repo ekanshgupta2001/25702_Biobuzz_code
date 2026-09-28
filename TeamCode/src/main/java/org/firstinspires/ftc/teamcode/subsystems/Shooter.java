@@ -7,250 +7,314 @@ import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
-import com.qualcomm.robotcore.hardware.PIDFCoefficients;
 
-import org.firstinspires.ftc.teamcode.subsystems.templates.VelocityMotor;
-import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
 import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
-import org.firstinspires.ftc.teamcode.util.time.Clock;
+
+import java.util.Locale;
 
 /**
- * The compliant flywheel shooter, fixed to the chassis and firing out the rear. One flywheel
- * motor, optionally two, under velocity control; feeding is the {@link Transfer}'s job and
- * aiming is the drivetrain's ({@link #HEADING_OFFSET_RAD}).
+ * The rear-firing shooter: two motors on GT2/HTD belts driving a counter-rotating pair of 2.9 in
+ * flywheels. Feeding it is the {@link Intake}'s job — roller and tunnel are one motor — and aiming
+ * it is the drivetrain's, through {@link #HEADING_OFFSET_RAD}.
  *
- * <h2>Ready means at speed</h2>
- * A shot released before the wheel is at speed is a short shot. {@link #atSpeed()} is the
- * contract every shooting macro waits on, and {@link #holdSpeedCommand()} is how a macro keeps
- * the wheel owned (and spinning) for the whole feed: the default command idles the wheel on its
- * next loop once nothing holds the resource, so a spin-up that ends before the feed would let the
- * wheel wind down under the piece.
+ * <h2>Everything here is ticks per second</h2>
+ * {@code DcMotorEx.getVelocity()} reports encoder ticks per second, so that is the unit of the
+ * target, the tolerance and the distance table. There is no {@code TICKS_PER_REV} and no RPM
+ * anywhere: these are not goBILDA motors, nobody has counted their encoder's ticks per revolution,
+ * and a guessed conversion would make every number on the bench card and in the table a lie. A
+ * measured ticks-per-second figure cannot be wrong about itself.
  *
- * <p>Speeds are in RPM at the flywheel encoder, converted with {@link #TICKS_PER_REV}, which must
- * be measured for the motor fitted.
+ * <h2>Feedforward and a proportional term, not the hub's velocity PID</h2>
+ * {@link #update()} writes open-loop power, {@code kV * target + kP * error + kS}, with the motors
+ * left in their default run mode. No {@code RUN_USING_ENCODER}, no {@code setVelocity}, no
+ * {@code setPIDFCoefficients}: the hub's velocity loop integrates, and on a belted pair that is
+ * unloaded except for the instant a piece crosses the wheels, the integrator is exactly what makes
+ * recovery slow and then overshoot. {@code kV} carries the steady-state speed, {@code kP} closes
+ * what is left of the gap, {@code kS} pays for belt and bearing drag. The three values are a
+ * competition-proven reference robot's, for the same wheel size — a place to start measuring with
+ * {@code Bench: Shooter}, not an answer.
+ *
+ * <h2>Arming, not spinning up</h2>
+ * The wheel is either holding {@link #getTarget()} or off; there is no idle speed, because a wheel
+ * held at a speed nobody shoots at is heat and noise. {@link #armedCommand()} owns the resource for
+ * as long as a shot needs and {@link #defaultIdleCommand()} disarms whenever nothing owns it.
  */
 public class Shooter {
-    /** Encoder ticks per flywheel-motor revolution. 28 for a bare goBILDA 5203; measure it. */
-    public static double TICKS_PER_REV = 28;
     /**
-     * Direction the flywheel fires, relative to the robot's forward (intake) axis, radians CCW.
-     * {@code Math.PI} = out the rear. The robot heading that aims at field bearing b is
-     * {@code b - HEADING_OFFSET_RAD}; every aim in {@code Macros} goes through this one number.
-     * Confirm on the built robot.
+     * The one gain set: {@code kV} is power per tick per second, {@code kP} power per tick per second
+     * of error, {@code kS} the power that just overcomes drag. Tune in that order — raise {@code kV}
+     * until the wheel sits on its target, then {@code kP} until a shot recovers without hunting.
+     */
+    public static double kS = 0.08, kV = 0.00039, kP = 0.01;
+
+    /** Nominal speed, and what a freshly built shooter holds until the table or the driver says otherwise. */
+    public static double TARGET_TICKS_PER_SEC = 1300;
+    /**
+     * The driver's override, for when odometry or the table is not trusted: no pose, a CELL that has
+     * moved, a shot from somewhere nobody measured.
+     */
+    public static double MANUAL_TICKS_PER_SEC = 1300;
+    /** How close counts as at target. The reference robot shoots inside 50 t/s; measure the spread. */
+    public static double TOLERANCE_TICKS_PER_SEC = 50;
+
+    /**
+     * The flywheels oppose each other across the piece, so one motor runs reversed and both then
+     * take the same power. This is geometry, not an option: it is a constant only so that a swapped
+     * pair of leads can be answered here instead of in two sign flips. Read once at construction —
+     * changing it needs a restart, which is right for a fact about the gearbox.
+     */
+    public static boolean SECOND_MOTOR_REVERSED = true;
+
+    /**
+     * Direction the shooter fires, relative to the robot's forward (intake) axis, radians CCW.
+     * {@code Math.PI} = out the rear, which is how V1 is built: aiming means turning the robot's back
+     * to the HIVE. The robot heading that aims at field bearing b is {@code b - HEADING_OFFSET_RAD};
+     * every aim in {@code Macros} goes through this one number. Confirm it on the built robot.
      */
     public static double HEADING_OFFSET_RAD = Math.PI;
-    public static double SHOOT_RPM = 3000;
-    /** Speed to hold between shots; 0 stops the wheel when nothing owns the shooter. */
-    public static double IDLE_RPM = 0;
-    /**
-     * Second flywheel motor's direction. FORWARD for two wheels on one side turning the same way;
-     * REVERSE for an opposed pair, or the two fight. Applied live by {@link #update()}, so
-     * {@code Bench: Shooter} can flip it while the pair spins and show whether they fight.
-     */
-    public static DcMotorSimple.Direction SECOND_MOTOR_DIRECTION = DcMotorSimple.Direction.FORWARD;
-    /**
-     * At 3000 RPM on a 28-tick encoder (1400 t/s) the hub's velocity estimate wanders more than the
-     * old 100 RPM (47 t/s) band, so the wait always ran to its timeout. 5 % of target, and it must
-     * hold for {@link #AT_SPEED_HOLD_MS} before the wheel counts as ready.
-     */
-    public static double AT_SPEED_TOLERANCE_RPM = 150;
-    /** How long the speed must stay in band before {@link #atSpeed()}: time, so the loop rate does not change it. */
-    public static long AT_SPEED_HOLD_MS = 100;
-    /**
-     * Velocity-loop gains for the flywheel motor(s), applied only when {@link #CUSTOM_PIDF} is true.
-     * Off until measured with {@code Bench: Shooter}: the SDK's per-motor-type defaults may well be
-     * better than a guessed F. F = 32767 / max ticks per second (2800 t/s = a 6000 RPM bare motor on
-     * a 28-tick encoder); P is a tenth of F, I a tenth of P, as the SDK's own defaults are shaped.
-     */
-    public static boolean CUSTOM_PIDF = false;
-    public static double MAX_TICKS_PER_SEC = 2800;
-    public static double PIDF_F = 32767.0 / MAX_TICKS_PER_SEC;
-    public static double PIDF_P = 0.1 * PIDF_F;
-    public static double PIDF_I = 0.1 * PIDF_P;
-    public static double PIDF_D = 0;
-    /** A spin-up that has not reached speed by then reports done anyway (battery sag, wrong gain). */
-    public static long SPINUP_TIMEOUT_MS = 3000;
-    /**
-     * After a piece goes through the wheel: wait at least this long (so the speed dip has begun)
-     * and then until {@link #atSpeed()} again, or at most {@link #SHOT_RECOVERY_TIMEOUT_MS}. Measure
-     * the dip and the recovery with {@code Bench: Shooter}.
-     */
-    public static long SHOT_RECOVERY_MIN_MS = 150;
-    public static long SHOT_RECOVERY_TIMEOUT_MS = 1500;
+
     public static int DEFAULT_IDLE_PRIORITY = -1;
 
-    /** Derived from the target and the measured speed; see {@link #getMode()}. */
-    public enum Mode { IDLE, SPINNING_UP, READY }
+    /**
+     * Distance to the CELL, inches, against the speed that scores from there. <b>Every number below
+     * is a placeholder.</b> Measure them with {@code Bench: Shooter}: park at a distance, raise the
+     * speed until the piece drops in the middle of the CELL, write the pair down, move on.
+     *
+     * <p>A table, and not a fit, on purpose. The reference team fitted a line to their measurements,
+     * then a quartic, then a quadratic, and shipped none of the three — all of them are still
+     * commented out in their code. A fit is smooth where the shot is not, and it extrapolates with
+     * total confidence past the last point anyone measured. {@link #interpolate} clamps at both ends
+     * instead, which is the honest answer outside the measured range.
+     */
+    private static final double[] DISTANCES_INCHES = {24, 48, 72, 96};
+    private static final double[] TICKS_PER_SEC = {1150, 1250, 1400, 1550};
 
-    private final VelocityMotor flywheel;
-    private final VelocityMotor flywheel2;
-    private final Clock clock;
-    private double targetRpm = 0;
-    /** Clock time the measured speed entered the tolerance band, or -1 while it is outside. */
-    private long inBandSince = -1;
+    /** The flywheel whose encoder is the speed signal; see {@link #getVelocity()}. */
+    private final DcMotorEx left;
+    private final DcMotorEx right;
+
+    private boolean armed = false;
+    /** Open-loop bench mode: {@link #update()} writes {@link #openLoopPower} and nothing else. */
+    private boolean openLoop = false;
+    private double openLoopPower = 0;
+    private double target = TARGET_TICKS_PER_SEC;
+    private double lastWritten = Double.NaN;
 
     public Shooter(HardwareMap hardwareMap) {
-        this(hardwareMap, HardwareNames.SHOOTER_MOTOR, HardwareNames.SHOOTER_MOTOR_2, Clock.system());
+        this(hardwareMap, HardwareNames.SHOOTER_MOTOR, HardwareNames.SHOOTER_MOTOR_2);
     }
 
-    public Shooter(HardwareMap hardwareMap, String name, String secondName, Clock clock) {
-        this(Hardware.get(hardwareMap, DcMotorEx.class, name),
-                secondName == null ? null : Hardware.get(hardwareMap, DcMotorEx.class, secondName),
-                clock);
+    public Shooter(HardwareMap hardwareMap, String leftName, String rightName) {
+        left = hardwareMap.get(DcMotorEx.class, leftName);
+        right = hardwareMap.get(DcMotorEx.class, rightName);
+        left.setDirection(DcMotorSimple.Direction.FORWARD);
+        right.setDirection(SECOND_MOTOR_REVERSED
+                ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
+        // FLOAT: braking a flywheel to a stop is how a belt gets stripped. A disarmed wheel coasts.
+        left.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
+        right.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
+        // No setMode: the default run mode takes the power update() computes. The encoder is still
+        // wired, so getVelocity() reads it either way.
+        write(0);
     }
 
-    /** Builds on resolved motors ({@code null} for "not fitted"; the second is optional). */
-    public Shooter(DcMotorEx motor, DcMotorEx secondMotor, Clock clock) {
-        this.flywheel = new VelocityMotor(motor, DcMotorSimple.Direction.FORWARD,
-                DcMotor.ZeroPowerBehavior.FLOAT);
-        this.flywheel2 = new VelocityMotor(secondMotor, SECOND_MOTOR_DIRECTION,
-                DcMotor.ZeroPowerBehavior.FLOAT);
-        this.clock = clock;
-        if (CUSTOM_PIDF) applyPidf();     // off: the hub keeps its own, nothing to write
+    /** Begins holding {@link #getTarget()}; the power lands on the next {@link #update()}. */
+    public void arm() {
+        armed = true;
     }
 
-    /**
-     * Writes {@code PIDF_*} to both motors when {@link #CUSTOM_PIDF}, and puts the SDK's own
-     * coefficients back when it is off, so the bench's toggle really toggles (fixthese R2-A6).
-     */
-    public void applyPidf() {
-        if (CUSTOM_PIDF) {
-            flywheel.setVelocityPidf(PIDF_P, PIDF_I, PIDF_D, PIDF_F);
-            flywheel2.setVelocityPidf(PIDF_P, PIDF_I, PIDF_D, PIDF_F);
-        } else {
-            flywheel.restoreSdkPidf();
-            flywheel2.restoreSdkPidf();
+    /** Stops the wheel now rather than next loop, so a disarm is never one loop of thrown piece. */
+    public void disarm() {
+        if (armed) {
+            armed = false;
+            write(0);
         }
     }
 
-    /** The coefficients the hub holds for the first flywheel right now (a bus read; bench cards only). */
-    public PIDFCoefficients readFlywheelPidf() {
-        return flywheel.readPidf();
+    public boolean isArmed() {
+        return armed;
     }
 
-    public boolean hasSecondMotor() {
-        return flywheel2.isAvailable();
+    public void setTarget(double ticksPerSec) {
+        target = ticksPerSec;
     }
 
-    /** Measured speed of the second flywheel motor, or 0 when not fitted. */
-    public double getSecondVelocityTicksPerSec() {
-        return flywheel2.getVelocity();
-    }
-
-    /** Measured speed of the first flywheel motor in ticks per second. */
-    public double getVelocityTicksPerSec() {
-        return flywheel.getVelocity();
-    }
-
-    public boolean isAvailable() {
-        return flywheel.isAvailable();
-    }
-
-    public static double rpmToTicksPerSec(double rpm) {
-        return rpm * TICKS_PER_REV / 60.0;
-    }
-
-    public static double ticksPerSecToRpm(double ticksPerSec) {
-        return ticksPerSec * 60.0 / TICKS_PER_REV;
-    }
-
-    public void setTargetRpm(double rpm) {
-        targetRpm = rpm;
-        double ticks = rpmToTicksPerSec(rpm);
-        flywheel.setTarget(ticks);
-        flywheel2.setTarget(ticks);
-    }
-
-    public void spinUp() {
-        setTargetRpm(SHOOT_RPM);
-    }
-
-    public void idle() {
-        setTargetRpm(IDLE_RPM);
-    }
-
-    public void stop() {
-        setTargetRpm(0);
-    }
-
-    public double getTargetRpm() {
-        return targetRpm;
-    }
-
-    /** Measured flywheel speed, or 0 when unavailable. */
-    public double getRpm() {
-        return ticksPerSecToRpm(flywheel.getVelocity());
-    }
-
-    public double getCurrentAmps() {
-        return flywheel.getCurrentAmps() + flywheel2.getCurrentAmps();
+    public double getTarget() {
+        return target;
     }
 
     /**
-     * True once the measured speed has been within {@link #AT_SPEED_TOLERANCE_RPM} of a non-zero
-     * target for {@link #AT_SPEED_HOLD_MS} (the band entry is noted in {@link #update()}, the age
-     * read live against the clock, so a slow loop does not lengthen it), so one noisy sample
-     * through the band cannot release a shot.
+     * Measured flywheel speed in ticks per second. One motor is the speed signal: the pair is belted
+     * to the same piece, and averaging two encoders only buys a second bus read and a number that
+     * belongs to neither wheel.
      */
-    public boolean atSpeed() {
-        return inBandSince >= 0 && clock.nowMs() - inBandSince >= AT_SPEED_HOLD_MS;
+    public double getVelocity() {
+        return left.getVelocity();
     }
 
-    /** The raw, single-sample band check; {@link #atSpeed()} is the latched version macros use. */
-    public boolean inBandNow() {
-        return flywheel.atSpeed(rpmToTicksPerSec(AT_SPEED_TOLERANCE_RPM));
+    /**
+     * One symmetric comparison, no dwell and no latch. The old shooter had to see 100 ms in band
+     * before releasing a shot because the hub's velocity PID kept wandering back out; this scheme is
+     * back in band within a couple of loops, so a dwell would only add its own length to every shot.
+     * It says nothing about being armed — a stopped wheel with a target of 0 is at target — so a
+     * command that gates a shot on it checks {@link #isArmed()} as well.
+     */
+    public boolean atTarget() {
+        return Math.abs(target - getVelocity()) < TOLERANCE_TICKS_PER_SEC;
     }
 
-    public Mode getMode() {
-        if (targetRpm <= 0) return Mode.IDLE;
-        return atSpeed() ? Mode.READY : Mode.SPINNING_UP;
+    /**
+     * Sets the target from the measured table. A NaN distance (no pose to measure from) leaves the
+     * target alone: the last trusted speed beats a speed derived from nothing.
+     */
+    public void setTargetForDistance(double inches) {
+        if (!Double.isNaN(inches)) target = interpolate(inches);
     }
 
+    /** The driver's override: shoot at {@link #MANUAL_TICKS_PER_SEC}, whatever the table thinks. */
+    public void setManualTarget() {
+        target = MANUAL_TICKS_PER_SEC;
+    }
+
+    /** Linear between the measured points, flat outside them. */
+    private static double interpolate(double inches) {
+        if (inches <= DISTANCES_INCHES[0]) return TICKS_PER_SEC[0];
+        for (int i = 1; i < DISTANCES_INCHES.length; i++) {
+            if (inches <= DISTANCES_INCHES[i]) {
+                double span = DISTANCES_INCHES[i] - DISTANCES_INCHES[i - 1];
+                double f = (inches - DISTANCES_INCHES[i - 1]) / span;
+                return TICKS_PER_SEC[i - 1] + f * (TICKS_PER_SEC[i] - TICKS_PER_SEC[i - 1]);
+            }
+        }
+        return TICKS_PER_SEC[TICKS_PER_SEC.length - 1];
+    }
+
+    /**
+     * Runs the flywheel at a raw power with the closed loop switched OFF. This is how
+     * {@code Bench: Shooter} measures {@link #kS} (the lowest power the wheel turns at) and
+     * {@link #kV} (that power divided by the settled velocity) — neither is measurable while the
+     * controller is correcting.
+     *
+     * <p>It sets a mode rather than writing the motor, so {@link #update()} remains the only thing
+     * that touches hardware. A bench that held its own {@code DcMotorEx} would give the port a second
+     * power cache, and {@code Robot.stopMechanisms()} would no longer be able to stop it.
+     */
+    public void setOpenLoopPower(double power) {
+        openLoop = true;
+        armed = false;
+        openLoopPower = power;
+    }
+
+    /** Leaves open-loop mode and stops the wheel. */
+    public void endOpenLoop() {
+        openLoop = false;
+        openLoopPower = 0;
+        armed = false;
+    }
+
+    public boolean isOpenLoop() {
+        return openLoop;
+    }
+
+    /** The power {@link #update()} last actually wrote. NaN before the first write. */
+    public double getLastWritten() {
+        return lastWritten;
+    }
+
+    /**
+     * The opposing flywheel's velocity. The pair counter-rotates, so with
+     * {@link #SECOND_MOTOR_REVERSED} correct both read the same sign: a steady mismatch means they
+     * are fighting and the belt or the direction is wrong.
+     */
+    public double getSecondVelocity() {
+        return right.getVelocity();
+    }
+
+    /** What the distance table would command, without setting anything. For a bench card. */
+    public double tableTargetFor(double inches) {
+        return interpolate(inches);
+    }
+
+    /**
+     * Re-applies {@link #SECOND_MOTOR_REVERSED} to the motor. The constructor reads it once, so a
+     * bench that flips the static has to call this for the change to reach the hardware.
+     */
+    public void applySecondMotorDirection() {
+        right.setDirection(SECOND_MOTOR_REVERSED
+                ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
+    }
+
+    /** Writes hardware. Called once per loop from {@code Robot.writeActuators()}, after commands run. */
     public void update() {
-        flywheel2.setDirection(SECOND_MOTOR_DIRECTION);   // no-op unless it changed (fixthese R2-A9)
-        flywheel.update();
-        flywheel2.update();
-        if (!inBandNow()) inBandSince = -1;
-        else if (inBandSince < 0) inBandSince = clock.nowMs();
+        if (openLoop) write(openLoopPower);
+        else if (armed) write(kV * target + kP * (target - getVelocity()) + kS);
+        else write(0);
+    }
+
+    /** Both motors take the same power; {@link #SECOND_MOTOR_REVERSED} is what opposes them. */
+    private void write(double power) {
+        if (power != lastWritten) {     // an unchanged setPower is still two bus transactions
+            left.setPower(power);
+            right.setPower(power);
+            lastWritten = power;
+        }
+    }
+
+    /** Target, measured, and whether the wheel is ready. One line, for a telemetry card. */
+    public String getStatusLine() {
+        return String.format(Locale.US, "%s %.0f/%.0f t/s %s",
+                armed ? "ARMED" : "off", getVelocity(), target, atTarget() ? "READY" : "...");
     }
 
     // ---- Ivy commands ----
 
     /**
-     * Finishes once the wheel is at speed, after {@link #SPINUP_TIMEOUT_MS}, or at once when no
-     * shooter is fitted. Requires nothing: it is the wait inside a group in which
-     * {@link #holdSpeedCommand()} owns the shooter and sets the target, so two siblings never both
-     * claim the resource and the last-executed one silently wins (fixthese C7).
+     * Holds the target for as long as it owns the shooter, and never finishes: whatever runs the shot
+     * decides when the wheel is no longer needed, by interrupting this or by ending the group it sits
+     * in. Its end deliberately does not disarm — the next owner takes over inside the same
+     * {@code Scheduler} pass, so an armed wheel is never zeroed across a shot, and when nothing
+     * re-holds it {@link #defaultIdleCommand()} disarms on its next loop.
      */
-    public Command waitForSpeedCommand() {
-        final long[] startedAt = new long[1];
+    public Command armedCommand() {
         return Command.build()
-                .setStart(() -> startedAt[0] = clock.nowMs())
-                .setDone(() -> !isAvailable() || atSpeed()
-                        || clock.nowMs() - startedAt[0] >= SPINUP_TIMEOUT_MS);
-    }
-
-    /**
-     * Holds {@link #SHOOT_RPM} until interrupted. Its end leaves the target alone on purpose: the
-     * next owner (a macro's hold, or the operator's re-armed hold) takes the wheel over inside the
-     * same {@code Scheduler.schedule()} and never sees a zero target, so the at-speed latch
-     * survives the hand-over in both directions; when nothing re-holds, {@link #defaultIdleCommand()}
-     * idles the wheel on its next loop. A routine that owns the shooter for longer than a shot (the
-     * auto) must call {@link #idle()} itself once it is done shooting.
-     */
-    public Command holdSpeedCommand() {
-        return Command.build()
-                .setStart(this::spinUp)
+                .setStart(this::arm)
                 .setDone(() -> false)
                 .requiring(this);
     }
 
-    /** Schedule once at OpMode init: holds {@link #IDLE_RPM} whenever nothing else owns the shooter. */
+    /**
+     * Schedule once at OpMode init: disarms whenever nothing else owns the shooter. The logic is in
+     * {@code setExecute} because the Scheduler's resume path does not re-call {@code start()};
+     * {@link BlockedBehavior#QUEUE} so it is not silently dropped if something already holds the
+     * shooter at init.
+     */
+    /**
+     * The operator's flywheel toggle, as a default command: it re-reads {@code armed} every loop
+     * rather than being re-scheduled on every press. Ivy has no duplicate guard, so re-scheduling
+     * would re-run {@code start()} every loop; and because Ivy <em>ends</em> rather than suspends a
+     * preempted priority-0 command, a hold scheduled on the press would have to be restored by hand
+     * after every shot. At priority -1 with {@code SUSPEND} a shooting cycle's own hold preempts this
+     * and it resumes by itself, still armed.
+     */
+    public Command armedControlCommand(java.util.function.BooleanSupplier armedWanted) {
+        return Command.build()
+                .setExecute(() -> {
+                    if (armedWanted.getAsBoolean()) arm();
+                    else disarm();
+                })
+                .setDone(() -> false)
+                .setEnd(ec -> disarm())
+                .setPriority(DEFAULT_IDLE_PRIORITY)
+                .setInterruptedBehavior(com.pedropathing.ivy.behaviors.InterruptedBehavior.SUSPEND)
+                .setBlockedBehavior(com.pedropathing.ivy.behaviors.BlockedBehavior.QUEUE)
+                .requiring(this);
+    }
+
     public Command defaultIdleCommand() {
         return Command.build()
-                .setExecute(this::idle)
+                .setExecute(this::disarm)
                 .setDone(() -> false)
-                .setEnd(ec -> idle())
+                .setEnd(ec -> disarm())
                 .setPriority(DEFAULT_IDLE_PRIORITY)
                 .setInterruptedBehavior(InterruptedBehavior.SUSPEND)
                 .setBlockedBehavior(BlockedBehavior.QUEUE)

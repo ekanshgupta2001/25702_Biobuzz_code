@@ -2,280 +2,203 @@ package org.firstinspires.ftc.teamcode.subsystems;
 
 import com.pedropathing.ivy.Command;
 import com.pedropathing.ivy.behaviors.BlockedBehavior;
-import com.pedropathing.ivy.behaviors.EndCondition;
 import com.pedropathing.ivy.behaviors.InterruptedBehavior;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
-import org.firstinspires.ftc.teamcode.subsystems.templates.VelocityMotor;
 import org.firstinspires.ftc.teamcode.util.control.JamDetector;
-import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
 import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
-import org.firstinspires.ftc.teamcode.util.time.Clock;
 
-import java.util.function.BooleanSupplier;
+import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
+
+import java.util.function.Supplier;
 
 /**
- * The front intake roller (16 mm compliant wheels above the ramp), driven by velocity control
- * with stall-triggered anti-jam.
+ * The front roller <b>and</b> the tunnel behind it. One goBILDA 5203-2402-0051 (50.9:1, 117 RPM)
+ * drives both through the sprocket chain, so they are one subsystem with one mode: whatever the
+ * roller is doing, the tunnel is doing.
  *
- * <p><b>The core pattern:</b> commands and buttons never touch the motor. They set a
- * {@link Mode} and a target velocity; {@link #update()} is the single place that writes to
- * hardware, once per loop, and the anti-jam logic can override the request on its way out.
+ * <p><b>Feeding the shooter is running this forward.</b> There is no gate and no sensor anywhere in
+ * the path, so a piece reaches the flywheel because the tunnel ran long enough to carry it there.
+ * That is why {@code commands/Shoot} owns this subsystem for the length of a shot and pulses it.
  *
- * <h2>V1 responsibilities</h2>
- * Pull pieces off the floor and onto the ramp; that is all. The storage counts pieces and
- * decides when the robot is full ({@link #setFullSupplier}); while it is, an intaking command
- * keeps its mode and resource but the roller sits still, so the fifth piece that would break
- * BIOBUZZ G407 is never pulled in.
+ * <p><b>Power, not velocity.</b> A 50.9:1 roller has no use for a closed velocity loop; the SDK's
+ * velocity PID would only add a tuning surface and a bus transaction. Commands set a {@link Mode};
+ * {@link #update()} is the one place that writes hardware, and anti-jam can override it on the way
+ * out.
+ *
+ * <p>Nothing here knows how many pieces are aboard, because nothing on the robot can know. The
+ * operator is the only thing that decides when to stop intaking (BIOBUZZ G407, max 4 controlled).
  */
 public class Intake {
+    public static double IN = 1.0;
+    public static double OUT = -1.0;
     /**
-     * goBILDA 5203 series, 435 RPM (13.7:1) = 384.5 ticks/rev, free speed ~2787 ticks/s.
-     * Measure on the real motor with SelfTest before trusting any of the velocities below.
+     * Enough to hold pieces against the tunnel without grinding them, for carrying a load between
+     * scoring positions. Borrowed from the reference robot's {@code idle = 0.5}; measure it.
      */
-    public static double MOTOR_FREE_SPEED_TICKS_PER_SEC = 2787;
-
-    /** ~90% of free speed, leaving the velocity loop headroom to actually close. */
-    public static double INTAKE_TICKS_PER_SEC = 2500;
-    public static double OUTTAKE_TICKS_PER_SEC = -1400;
-    public static double EJECT_TICKS_PER_SEC = -2500;
+    public static double IDLE = 0.35;
 
     /**
-     * A 435 RPM goBILDA 5203 stalls near 9 A and a compliant roller pulling a ball in can sit at
-     * 5-6 A for a moment, so 5 A / 200 ms spat pieces mid-capture. Measure with {@code Bench: Intake}:
-     * the peak amps of a clean capture, then the amps of a deliberate jam, and set this between.
+     * A 117 RPM 5203 stalls near 9 A and the roller pulling a piece in sits at 5-6 A for a moment,
+     * so a 5 A threshold spits pieces mid-capture. Measure both with {@code Bench: Intake} — the
+     * peak of a clean capture, then of a deliberate jam — and set this between them.
      */
     public static double STALL_CURRENT_AMPS = 7.0;
     public static long STALL_TIMEOUT_MS = 300;
-    public static double UNJAM_TICKS_PER_SEC = -2500;
+    public static double UNJAM_POWER = -1.0;
     public static long UNJAM_DURATION_MS = 150;
     public static boolean ANTI_JAM_ENABLED = true;
-    /** Consecutive unjam attempts before giving up, so a hard jam cannot cook the motor all match. */
+    /** Consecutive attempts before giving up, so a hard jam cannot cook the motor all match. */
     public static int MAX_UNJAM_ATTEMPTS = 3;
     /**
-     * Current must stay under the stall threshold this long before the attempt count is forgiven.
-     * The dip while the motor re-accelerates after a reversal is shorter than this, so a hard jam
-     * really does stop after {@link #MAX_UNJAM_ATTEMPTS}.
+     * Current must stay under the threshold this long before the attempt count is forgiven. The dip
+     * while the motor re-accelerates after a reversal is shorter than this, so a real jam does stop
+     * after {@link #MAX_UNJAM_ATTEMPTS}.
      */
     public static long HEALTHY_RESET_MS = 500;
 
-    /**
-     * BIOBUZZ G408: never control the opponent's NECTAR. When the storage-entrance sensor sees the
-     * other alliance's colour while intaking, the roller reverses for {@link #REJECT_MS}. Off until
-     * the hue windows are measured on real pieces ({@code Bench: ColorSensor}): a mis-tuned window
-     * would spit out our own POLLEN. Note the sensor is past the roller; if the bench shows a
-     * reversal cannot push a piece back out from there, the reject must also reverse the storage
-     * transport, which is a {@code Robot}-level change.
-     */
-    public static boolean REJECT_ENABLED = false;
-    public static long REJECT_MS = 400;
-
     public static int DEFAULT_IDLE_PRIORITY = -1;
 
-    /** What the intake is being asked to do. Drives anti-jam eligibility; see {@link #update()}. */
-    public enum Mode { IDLE, INTAKING, OUTTAKING, EJECTING }
+    public enum Mode { OFF, IN, OUT, IDLE }
 
-    private final VelocityMotor motor;
-    private final Clock clock;
-    private double targetVelocity = 0;
-    private Mode mode = Mode.IDLE;
-    private BooleanSupplier fullSupplier = () -> false;
-    private BooleanSupplier rejectSupplier = () -> false;
-    private boolean rejecting = false;
-    private long rejectUntilMs = 0;
-    private int rejections = 0;
-    /** Sampled by {@link #update()} while the roller pulls; NaN otherwise (a current read is its own bus transaction). */
+    private final DcMotorEx motor;
+    private Mode mode = Mode.OFF;
+    /** Sampled once per {@link #update()} while pulling in; NaN otherwise. A current read is its own bus transaction. */
     private double currentAmps = Double.NaN;
+    private double lastWritten = Double.NaN;
 
-    /** The stall/un-jam state machine. Lives in {@code util/} so it can be unit tested. */
     private final JamDetector jamDetector = new JamDetector();
 
     public Intake(HardwareMap hardwareMap) {
-        this(hardwareMap, HardwareNames.INTAKE_MOTOR, Clock.system());
+        this(hardwareMap, HardwareNames.INTAKE_MOTOR);
     }
 
-    public Intake(HardwareMap hardwareMap, String name, Clock clock) {
-        this(Hardware.get(hardwareMap, DcMotorEx.class, name), clock);
+    public Intake(HardwareMap hardwareMap, String name) {
+        motor = hardwareMap.get(DcMotorEx.class, name);
+        motor.setDirection(DcMotorSimple.Direction.FORWARD);
+        // BRAKE: the tunnel holds pieces on a slope, and a coasting tunnel lets them drift back.
+        motor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        motor.setPower(0);
     }
 
-    /** Builds on an already-resolved motor, or {@code null} for "not fitted". Tests inject fakes. */
-    public Intake(DcMotorEx motor, Clock clock) {
-        this.motor = new VelocityMotor(motor, DcMotorSimple.Direction.FORWARD,
-                DcMotor.ZeroPowerBehavior.FLOAT);
-        this.clock = clock;
-    }
+    public void in()    { setMode(Mode.IN); }
+    public void out()   { setMode(Mode.OUT); }
+    public void idle()  { setMode(Mode.IDLE); }
+    public void stop()  { setMode(Mode.OFF); }
 
-    /** False when the motor is missing from the robot configuration. All calls then no-op. */
-    public boolean isAvailable() {
-        return motor.isAvailable();
-    }
-
-    /** "The storage is full": while true, intaking commands hold the roller still. */
-    public void setFullSupplier(BooleanSupplier supplier) {
-        this.fullSupplier = supplier == null ? () -> false : supplier;
-    }
-
-    /** "The opponent's NECTAR is at the entrance": while intaking, triggers a {@link #REJECT_MS} reversal. */
-    public void setRejectSupplier(BooleanSupplier supplier) {
-        this.rejectSupplier = supplier == null ? () -> false : supplier;
-    }
-
-    /** Sets the raw velocity request. Prefer the named modes so anti-jam stays correct. */
-    public void setVelocity(double ticksPerSec) {
-        setMode(ticksPerSec > 0 ? Mode.INTAKING : ticksPerSec < 0 ? Mode.EJECTING : Mode.IDLE,
-                ticksPerSec);
-    }
-
-    private void setMode(Mode newMode, double ticksPerSec) {
-        // Any deliberate mode change abandons an in-progress unjam. Re-entering INTAKING keeps the
-        // attempt count, so mashing the button cannot bypass MAX_UNJAM_ATTEMPTS against a hard jam.
-        if (newMode != mode) {
-            if (newMode == Mode.INTAKING) jamDetector.resetTiming();
+    private void setMode(Mode next) {
+        if (next != mode) {
+            // Any deliberate change abandons an unjam in progress. Re-entering IN keeps the attempt
+            // count, so mashing the button cannot bypass MAX_UNJAM_ATTEMPTS against a hard jam.
+            if (next == Mode.IN) jamDetector.resetTiming();
             else jamDetector.reset();
-            rejecting = false;      // a deliberate mode change abandons a reject in progress
         }
-        mode = newMode;
-        targetVelocity = ticksPerSec;
-    }
-
-    public void intake() {
-        setMode(Mode.INTAKING, INTAKE_TICKS_PER_SEC);
-    }
-
-    public void outtake() {
-        setMode(Mode.OUTTAKING, OUTTAKE_TICKS_PER_SEC);
-    }
-
-    public void eject() {
-        setMode(Mode.EJECTING, EJECT_TICKS_PER_SEC);
-    }
-
-    public void stop() {
-        setMode(Mode.IDLE, 0);
+        mode = next;
     }
 
     public Mode getMode() {
         return mode;
     }
 
-    public boolean isBlockedByFullStorage() {
-        return mode == Mode.INTAKING && fullSupplier.getAsBoolean();
+    /** The power {@link #update()} will write for the current mode, before anti-jam. */
+    public double powerFor(Mode m) {
+        switch (m) {
+            case IN:   return IN;
+            case OUT:  return OUT;
+            case IDLE: return IDLE;
+            default:   return 0;
+        }
     }
 
-    /**
-     * The current sampled by this loop's {@link #update()}, free to read as often as wanted; NaN on
-     * a loop the roller was idle, blocked or reversing, when nothing sampled it.
-     */
+    /** This loop's current sample; NaN on a loop the roller was not pulling in, when nothing sampled it. */
     public double getCurrentAmps() {
         return currentAmps;
     }
 
-    public double getVelocityTicksPerSec() {
+    public double getVelocity() {
         return motor.getVelocity();
     }
 
-    public double getTargetVelocity() {
-        return targetVelocity;
-    }
-
-    /** True while over-current is seen but has not lasted {@link #STALL_TIMEOUT_MS}: a suspicion. */
     public boolean isStallSuspected() {
         return jamDetector.isStallSuspected();
     }
 
     public boolean isUnjamming() {
-        return jamDetector.isUnjamming(clock.nowMs());
+        return jamDetector.isUnjamming(System.currentTimeMillis());
     }
 
     public int getUnjamAttempts() {
         return jamDetector.getAttempts();
     }
 
-    /** True once anti-jam has exhausted {@link #MAX_UNJAM_ATTEMPTS} and stopped trying. */
+    /** True once anti-jam has exhausted {@link #MAX_UNJAM_ATTEMPTS}. The driver should reverse it by hand. */
     public boolean hasGivenUpUnjamming() {
         return jamDetector.hasGivenUp();
     }
 
-    /** True while the roller is reversing to throw an opponent's NECTAR back out (G408). */
-    public boolean isRejecting() {
-        return rejecting;
-    }
-
-    public int getRejections() {
-        return rejections;
-    }
-
+    /** Writes hardware. Called once per loop from {@code Robot.writeActuators()}, after commands run. */
     public void update() {
-        if (!motor.isAvailable()) return;
-        long now = clock.nowMs();
+        long now = System.currentTimeMillis();
+        boolean pulling = mode == Mode.IN;
 
-        // G408 first: a piece being thrown back out is neither a capture nor a stall.
-        if (rejecting && now >= rejectUntilMs) rejecting = false;
-        if (REJECT_ENABLED && !rejecting && mode == Mode.INTAKING && !isBlockedByFullStorage()
-                && rejectSupplier.getAsBoolean()) {
-            rejecting = true;
-            rejectUntilMs = now + REJECT_MS;
-            rejections++;
-        }
-        if (rejecting) {
-            currentAmps = Double.NaN;
-            jamDetector.resetTiming();
-            motor.write(EJECT_TICKS_PER_SEC);
-            return;
-        }
-
-        // Motor current is not in the hub's bulk read: one ADC transaction per sample. It only means
-        // anything while the roller is actually pulling (anti-jam, the stall bench), so an idle or
-        // blocked roller is not sampled at all; the jam detector, the match log and the telemetry
-        // all read this one sample (fixthese R2-A1, Round 4).
-        boolean blocked = isBlockedByFullStorage();
-        boolean pulling = mode == Mode.INTAKING && !blocked;
-        currentAmps = pulling ? motor.getCurrentAmps() : Double.NaN;
+        // Motor current is not in the hub's bulk read: one ADC transaction per sample, and it only
+        // means anything while the roller is loaded. The jam detector and the telemetry share this
+        // one sample.
+        currentAmps = pulling ? motor.getCurrent(CurrentUnit.AMPS) : Double.NaN;
         if (pulling) {
-            // Pushed on every pulling loop so edits to the public statics reach the detector.
-            jamDetector.configure(
-                    STALL_CURRENT_AMPS, STALL_TIMEOUT_MS, UNJAM_DURATION_MS, MAX_UNJAM_ATTEMPTS,
-                    HEALTHY_RESET_MS);
+            // Pushed every pulling loop so edits to the statics above take effect live on a bench.
+            jamDetector.configure(STALL_CURRENT_AMPS, STALL_TIMEOUT_MS, UNJAM_DURATION_MS,
+                    MAX_UNJAM_ATTEMPTS, HEALTHY_RESET_MS);
         }
-        // Anti-jam applies while actively intaking only; a roller held still against a full
-        // storage draws no current worth interpreting.
         if (jamDetector.update(now, ANTI_JAM_ENABLED && pulling, pulling ? currentAmps : 0)) {
-            motor.write(UNJAM_TICKS_PER_SEC);
+            write(UNJAM_POWER);
             return;
         }
+        write(powerFor(mode));
+    }
 
-        motor.write(blocked ? 0 : targetVelocity);
+    /** Writes only on change: an unchanged setPower is still a bus transaction. */
+    private void write(double power) {
+        if (power != lastWritten) {
+            motor.setPower(power);
+            lastWritten = power;
+        }
     }
 
     // ---- Ivy commands ----
 
-    public Command intakeCommand() {
-        return runUntilInterrupted(this::intake);
-    }
-
-    public Command outtakeCommand() {
-        return runUntilInterrupted(this::outtake);
-    }
-
-    public Command ejectCommand() {
-        return runUntilInterrupted(this::eject);
-    }
-
-    public Command stopCommand() {
+    /**
+     * The operator's standing wish, as a default command: it re-reads {@code mode} every loop rather
+     * than being re-scheduled on every press.
+     *
+     * <p>This matters because Ivy has <em>no duplicate guard</em> — scheduling the same intent every
+     * loop would re-run {@code start()} every loop. At priority -1 with {@code SUSPEND} a shooting
+     * cycle (which owns the intake to pulse the tunnel) preempts this and it resumes by itself
+     * afterwards, still holding whatever the operator last asked for.
+     */
+    public Command operatorControlCommand(Supplier<Mode> mode) {
         return Command.build()
-                .setStart(this::stop)
-                .setDone(() -> true)
+                .setExecute(() -> setMode(mode.get()))
+                .setDone(() -> false)
+                .setEnd(ec -> stop())
+                .setPriority(DEFAULT_IDLE_PRIORITY)
+                .setInterruptedBehavior(InterruptedBehavior.SUSPEND)
+                .setBlockedBehavior(BlockedBehavior.QUEUE)
                 .requiring(this);
     }
 
+    public Command inCommand()   { return holdMode(this::in); }
+    public Command outCommand()  { return holdMode(this::out); }
+    public Command idleCommand() { return holdMode(this::idle); }
+
     /**
-     * Schedule once at OpMode init. Suspends when a real intake command takes the resource and
-     * resumes when that command ends, idling the roller. Logic in {@code setExecute} because the
-     * Scheduler's resume path does not re-call {@code start()}; {@link BlockedBehavior#QUEUE} so
-     * it is not silently dropped if something already holds the intake at init.
+     * Schedule once at OpMode init. Suspends when a real command takes the resource and resumes when
+     * that command ends. Logic in {@code setExecute} because the Scheduler's resume path does not
+     * re-call {@code start()}; {@link BlockedBehavior#QUEUE} so it is not silently dropped if
+     * something already holds the intake at init.
      */
     public Command defaultIdleCommand() {
         return Command.build()
@@ -288,7 +211,7 @@ public class Intake {
                 .requiring(this);
     }
 
-    private Command runUntilInterrupted(Runnable start) {
+    private Command holdMode(Runnable start) {
         return Command.build()
                 .setStart(start)
                 .setDone(() -> false)

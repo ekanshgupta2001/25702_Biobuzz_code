@@ -9,10 +9,12 @@ package org.firstinspires.ftc.teamcode.util.time;
  * warn the drivers in the final seconds ({@link #isFinalSeconds()}) and stop at the buzzer
  * ({@link #isExpired()}).
  *
- * <h2>Time is passed in, not read</h2>
- * This class never calls {@code System.currentTimeMillis()} or touches an {@code ElapsedTime}. The
- * caller supplies the timestamp to {@link #start(long)} and {@link #update(long)}. That is what
- * makes it unit-testable off-robot: tests advance time by a match instantly.
+ * <h2>The timestamp is passed in</h2>
+ * This class never reads a clock of its own — the caller hands the current millisecond count to
+ * {@link #start(long)} and {@link #update(long)}. The rule that makes that worth doing: the loop
+ * samples {@code System.currentTimeMillis()} <em>once</em> and passes the same value to everything
+ * it drives that loop. Every time-based decision in one iteration then agrees with every other, and
+ * a slow loop cannot produce a clock that expired halfway through its own telemetry.
  *
  * <p>Durations are plain {@code public static} fields because off-season scrimmages and practice
  * sessions routinely run non-standard periods.
@@ -30,27 +32,25 @@ public class MatchClock {
     /** The field's final warning (train whistle) sounds with this much time left. */
     public static long FINAL_WARNING_MS = 20_000;
 
-    /** Which match period this clock is counting. */
+    /** Which match period this clock is counting. Chosen by the OpMode; only the length differs. */
     public enum Period { AUTONOMOUS, TELEOP }
 
     /** Where we are in the period. */
     public enum Phase { NOT_STARTED, RUNNING, EXPIRED }
 
-    private final Period period;
     private final long durationMs;
 
     private long startMs = 0;
     private long nowMs = 0;
     private boolean started = false;
 
-    private MatchClock(Period period, long durationMs) {
-        this.period = period;
+    private MatchClock(long durationMs) {
         this.durationMs = Math.max(0, durationMs);
     }
 
     /** The clock for a period: {@link #AUTONOMOUS_MS} or {@link #TELEOP_MS} long. */
     public static MatchClock forPeriod(Period period) {
-        return new MatchClock(period, period == Period.AUTONOMOUS ? AUTONOMOUS_MS : TELEOP_MS);
+        return new MatchClock(period == Period.AUTONOMOUS ? AUTONOMOUS_MS : TELEOP_MS);
     }
 
     /** Marks the start of the period. Call once, from the OpMode's {@code start()}. */
@@ -63,14 +63,6 @@ public class MatchClock {
     /** Advances the clock. Call once per loop, before anything that reads it. */
     public void update(long nowMs) {
         this.nowMs = nowMs;
-    }
-
-    public boolean isStarted() {
-        return started;
-    }
-
-    public Period getPeriod() {
-        return period;
     }
 
     /** Milliseconds since {@link #start}, or 0 before it. Never negative. */

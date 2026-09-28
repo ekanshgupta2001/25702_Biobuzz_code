@@ -1,127 +1,78 @@
 package org.firstinspires.ftc.teamcode;
 
-import com.pedropathing.algorithm.Foresight;
-import com.pedropathing.follower.Follower;
-import com.pedropathing.math.Pose;
 import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 
 import org.firstinspires.ftc.teamcode.commands.Macros;
-import org.firstinspires.ftc.teamcode.game.PieceType;
-import org.firstinspires.ftc.teamcode.subsystems.ColorSensor;
 import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
 import org.firstinspires.ftc.teamcode.subsystems.Intake;
 import org.firstinspires.ftc.teamcode.subsystems.Limelight;
-import org.firstinspires.ftc.teamcode.subsystems.OpenLoopDrive;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
-import org.firstinspires.ftc.teamcode.subsystems.Storage;
-import org.firstinspires.ftc.teamcode.subsystems.Transfer;
-import org.firstinspires.ftc.teamcode.util.diagnostics.MatchLogger;
 import org.firstinspires.ftc.teamcode.util.field.Alliance;
-import org.firstinspires.ftc.teamcode.util.hardware.Hardware;
-import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
-import org.firstinspires.ftc.teamcode.util.time.Clock;
 import org.firstinspires.ftc.teamcode.util.time.MatchClock;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 /**
- * Top-level composition of the BIOBUZZ V1 robot. Owns every subsystem as a public final field, the
- * {@link Macros} and the {@link MatchClock}, and wires cross-subsystem
- * suppliers in its constructor so that no subsystem ever imports another.
+ * The whole robot: four mechanisms, one camera, and the two loop halves.
  *
- * <p>The loop is split in two halves that the OpMode calls on either side of the Ivy scheduler:
+ * <p>Every subsystem is a {@code public final} field. There is no supplier wiring, no sensor policy
+ * and no fail-soft layer, because there is nothing left to arbitrate: the robot has seven motors, a
+ * Pinpoint and a Limelight, and a missing config name throws at init where it is easy to read.
+ *
+ * <h2>The loop is split in two halves, deliberately</h2>
+ * The OpMode calls these on either side of the Ivy scheduler:
  * <ul>
- *   <li>{@link #readSensors()} — clear every hub's bulk cache, refresh the Limelight and the colour
- *       sensors, tick the match clock, sample the battery. Top of the loop, before commands run.</li>
- *   <li>{@link #writeActuators()} — push every mechanism's target to hardware, drivetrain last.
+ *   <li>{@link #readSensors()} — clear every hub's bulk cache, refresh the Limelight, tick the match
+ *       clock, sample the battery. Top of the loop, before commands run.</li>
+ *   <li>{@link #writeActuators()} — push every mechanism's intent to hardware, drivetrain last.
  *       Bottom of the loop, after commands run.</li>
  * </ul>
- * There is deliberately no {@code update()} that does both: a single method would let a caller put
- * observe-and-act on the same side of {@code Scheduler.execute()}, and every command would then
- * decide on last loop's data. See docs/03-software-architecture.md sections 1 and 4.
+ * There is no {@code update()} that does both: one method would let a caller put observe-and-act on
+ * the same side of {@code Scheduler.execute()}, and every command would then decide on last loop's
+ * data. The order is structural, not a convention.
  *
- * <p>Three constructors: {@link #Robot(HardwareMap)} for OpModes, {@link #Robot(HardwareMap, Clock)}
- * to inject time, and a composition constructor that takes pre-built subsystems so JVM tests can
- * assemble a robot from fakes.
- *
- * <p>Every device fails soft: a missing config entry disables one subsystem
- * ({@code isAvailable()} false) and is listed by {@link #getMissingHardware()} for SelfTest and the
- * init telemetry; the OpMode still runs.
+ * <h2>Nothing counts game pieces</h2>
+ * There is no sensor anywhere in the intake or the tunnel, so the code never claims to know how many
+ * pieces are aboard. The operator decides when to stop intaking (BIOBUZZ G407, at most 4 controlled)
+ * and when to fire. Every "shot count" in telemetry is a count of tunnel pulses, not of pieces.
  */
 public class Robot {
     /**
-     * How often the battery is re-read. {@link VoltageSensor} reads are <em>not</em> served from the
-     * Lynx bulk cache, so each one is its own bus transaction; once every quarter second is plenty.
+     * How often the battery is re-read. {@link VoltageSensor} reads are not served from the Lynx bulk
+     * cache, so each is its own bus transaction; four times a second is plenty to explain a weak shot.
      */
     public static long VOLTAGE_SAMPLE_MS = 250;
-    /**
-     * A presence sensor with a distance reading says "piece here" within this many inches.
-     * Placeholder: measure the reading with and without a piece in {@code Bench: ColorSensor}.
-     */
-    public static double PRESENCE_DISTANCE_INCHES = 2.0;
 
     public final Drivetrain drivetrain;
-    /**
-     * Open-loop driving through Pedro's motor layer, for before the follower is tuned. Built on the
-     * real motors only while {@link #drivetrain} is unavailable; once {@code Constants.create()}
-     * returns a follower this is an unfitted stub, so the two can never share the drive motors.
-     */
-    public final OpenLoopDrive openLoopDrive;
     public final Intake intake;
-    public final Storage storage;
-    public final Transfer transfer;
     public final Shooter shooter;
     public final Limelight limelight;
-
-    /** Storage entrance: counts pieces into the queue and identifies POLLEN vs NECTAR (G408). */
-    public final ColorSensor storageEntranceSensor;
-    /** Fourth storage slot occupied: ORed into {@link Storage#isFull()} (G407). */
-    public final ColorSensor storageFullSensor;
-    /** A piece is in the vertical transfer: storage exit edge and the lift interlock. */
-    public final ColorSensor transferSensor;
-    /** A piece is staged at the flywheel. Absent means the transfer falls back to timed pulses. */
-    public final ColorSensor shooterFeedSensor;
-
     public final Macros macros;
 
+    /** Which side we are on. Fixed by the OpMode class, so it can never be stale or unconfirmed. */
+    public final Alliance alliance;
+
     private MatchClock matchClock;
-    /** Our alliance, set by the OpMode; {@code null} until known. Drives the G408 reject. */
-    private Alliance alliance = null;
 
-    /** The fitted presence sensors, read one per loop in turn (see {@link #readSensors()}). */
-    private final List<ColorSensor> presenceSensors = new ArrayList<>();
-    private int nextPresenceSensor = 0;
-    /** Whether anything consumes the entrance sensor, and whether its hue is trusted; {@link #wireSuppliers()}. */
-    private boolean entranceRead = false;
-    private boolean classifyTrusted = false;
-    /**
-     * Benches set this so every fitted sensor is read in full (hue and distance) whatever the loop
-     * would consume: the benches are how the hues get measured. Match OpModes leave it false.
-     */
-    private boolean readAllSensorData = false;
-
-    private final Clock clock;
     private final List<LynxModule> hubs;
     private final List<VoltageSensor> voltageSensors;
     private double batteryVolts = 0;
     private long lastVoltageSampleMs = 0;
 
-    public Robot(HardwareMap hardwareMap) {
-        this(hardwareMap, Clock.system());
-    }
+    /** Loop time, averaged over {@link #LOOP_AVERAGE_OVER} loops so the figure on the card is readable. */
+    public static int LOOP_AVERAGE_OVER = 10;
+    private long lastLoopStampMs = 0;
+    private int loopsSinceStamp = 0;
+    private double loopMs = 0;
 
-    public Robot(HardwareMap hardwareMap, Clock clock) {
-        // The missing-device registry is static and would otherwise accumulate across OpMode runs.
-        Hardware.reset();
-        this.clock = clock;
+    public Robot(HardwareMap hardwareMap, Alliance alliance) {
+        this.alliance = alliance;
 
-        // MANUAL bulk caching batches every encoder/current read on a hub into one bus transaction
-        // per loop. Without it each getVelocity()/getCurrent() is its own USB round-trip, and the
-        // four velocity mechanisms are each read several times per loop (control, telemetry, log).
+        // MANUAL bulk caching batches every encoder and current read on a hub into one bus
+        // transaction per loop. Without it each getVelocity()/getCurrent() is its own USB round trip.
         hubs = hardwareMap.getAll(LynxModule.class);
         for (LynxModule hub : hubs) {
             hub.setBulkCachingMode(LynxModule.BulkCachingMode.MANUAL);
@@ -134,239 +85,39 @@ public class Robot {
             voltageSensors.add(sensor);
         }
 
-        drivetrain = new Drivetrain(hardwareMap, clock);
-        // One motor layer at a time: the open-loop drive is built on the real motors only while there
-        // is no follower, so two Pedro Mecanum objects can never share the four drive motors. Once
-        // Constants.create() returns a follower this is an unavailable stub and every call no-ops.
-        openLoopDrive = drivetrain.isAvailable()
-                ? new OpenLoopDrive((com.pedropathing.drivetrain.Drivetrain) null, clock)
-                : new OpenLoopDrive(hardwareMap, clock);
-        intake = new Intake(hardwareMap, HardwareNames.INTAKE_MOTOR, clock);
-        storage = new Storage(hardwareMap, HardwareNames.STORAGE_MOTOR, HardwareNames.STORAGE_MOTOR_2, clock);
-        transfer = new Transfer(hardwareMap, HardwareNames.TRANSFER_MOTOR, clock);
-        shooter = new Shooter(hardwareMap, HardwareNames.SHOOTER_MOTOR, HardwareNames.SHOOTER_MOTOR_2, clock);
-        limelight = new Limelight(hardwareMap);   // starts polling itself when present
+        drivetrain = new Drivetrain(hardwareMap);
+        intake = new Intake(hardwareMap);
+        shooter = new Shooter(hardwareMap);
+        limelight = new Limelight(hardwareMap);
 
-        storageEntranceSensor = new ColorSensor(hardwareMap, HardwareNames.SENSOR_STORAGE_ENTRANCE,
-                ColorSensor.DEFAULT_GAIN, true);
-        storageFullSensor = new ColorSensor(hardwareMap, HardwareNames.SENSOR_STORAGE_FULL,
-                ColorSensor.DEFAULT_GAIN, true);
-        transferSensor = new ColorSensor(hardwareMap, HardwareNames.SENSOR_TRANSFER,
-                ColorSensor.DEFAULT_GAIN, true);
-        shooterFeedSensor = new ColorSensor(hardwareMap, HardwareNames.SENSOR_SHOOTER_FEED,
-                ColorSensor.DEFAULT_GAIN, true);
-
-        collectPresenceSensors();
-        wireSuppliers();
         macros = new Macros(this);   // last: it takes this, so every field must already be set
-    }
-
-    /**
-     * Composes already-built subsystems. For tests, and for any robot whose hardware is resolved
-     * somewhere other than the hardware map. No hubs or voltage sensors are known, so bulk caching
-     * is untouched and {@link #getBatteryVolts()} reads 0. Does not reset the {@link Hardware}
-     * registry, since the subsystems were constructed before this call. Sensor arguments may be
-     * {@code new ColorSensor(null)} for "not fitted".
-     */
-    public Robot(Drivetrain drivetrain, OpenLoopDrive openLoopDrive, Intake intake, Storage storage, Transfer transfer,
-                 Shooter shooter, Limelight limelight,
-                 ColorSensor storageEntranceSensor, ColorSensor storageFullSensor,
-                 ColorSensor transferSensor, ColorSensor shooterFeedSensor, Clock clock) {
-        this.clock = clock;
-        hubs = Collections.emptyList();
-        voltageSensors = Collections.emptyList();
-        this.drivetrain = drivetrain;
-        this.openLoopDrive = openLoopDrive;
-        this.intake = intake;
-        this.storage = storage;
-        this.transfer = transfer;
-        this.shooter = shooter;
-        this.limelight = limelight;
-        this.storageEntranceSensor = storageEntranceSensor;
-        this.storageFullSensor = storageFullSensor;
-        this.transferSensor = transferSensor;
-        this.shooterFeedSensor = shooterFeedSensor;
-        collectPresenceSensors();
-        wireSuppliers();
-        macros = new Macros(this);
-    }
-
-    private void collectPresenceSensors() {
-        for (ColorSensor sensor : new ColorSensor[] {storageFullSensor, transferSensor, shooterFeedSensor}) {
-            if (sensor.isAvailable()) presenceSensors.add(sensor);
-        }
-    }
-
-    /**
-     * The only place two subsystems are connected, and the only place that decides which sensor
-     * is <em>trusted</em>, as opposed to merely present in the configuration. Each supplier is a
-     * sensor question answered by a private predicate below, so swapping a colour sensor for a
-     * beam-break at any point is a one-line change here and nowhere else. The setters stay public,
-     * so a test may override any of them after construction.
-     *
-     * <p>The trust policy, in one place (fixthese R2-A3, R2-B1):
-     * <ul>
-     *   <li>A {@code null} supplier means "no sensor" to Storage and Transfer, and every fallback
-     *       follows from that: no entrance, the count cannot rise, so zero is "unknown" and the
-     *       shooting macros fire blind rather than refuse; no exit, the shooting macro dead-reckons
-     *       the count down; no feed, the transfer runs timed pulses; no full sensor, only the count
-     *       (or the operator) can say full. Never pass an always-false supplier for any of these.</li>
-     *   <li>The entrance sensor counts pieces by <b>distance</b> when it has a distance reading (a
-     *       REV V3's proximity read needs no calibration) and by hue only once
-     *       {@link PieceType#HUES_CALIBRATED} says the windows were measured. A hue-only sensor with
-     *       unmeasured windows is therefore <em>not fitted</em> as far as the count is concerned:
-     *       plugging it in must not turn a shooting robot into one that reports NO_TARGET.</li>
-     *   <li>The G408 reject (opponent NECTAR) needs the hue, so it is wired only once the hues are
-     *       measured; {@code Intake.REJECT_ENABLED} still has to be switched on as well.</li>
-     * </ul>
-     * {@link #sensingSummary()} prints the result on every init card.
-     */
-    private void wireSuppliers() {
-        boolean countTrusted = storageEntranceSensor.isAvailable()
-                && (storageEntranceSensor.hasDistance() || PieceType.HUES_CALIBRATED);
-        classifyTrusted = countTrusted && PieceType.HUES_CALIBRATED;
-        entranceRead = countTrusted;
-        intake.setFullSupplier(storage::isFull);                    // G407: roller held still at 4
-        intake.setRejectSupplier(classifyTrusted ? this::opponentNectarAtEntrance : null);   // G408
-        storage.setEntranceSupplier(countTrusted ? this::pieceEnteringStorage : null);  // rising edge -> count + 1
-        storage.setFullSupplier(storageFullSensor.isAvailable() ? this::storageFullSensorSees : null);  // ORed with count >= CAPACITY
-        transfer.setInLiftSupplier(this::pieceInTransfer);
-        storage.setExitSupplier(transferSensor.isAvailable() ? this::pieceInTransfer : null);
-        transfer.setAtFeedSupplier(shooterFeedSensor.isAvailable() ? this::pieceAtShooterFeed : null);
-    }
-
-    /** Benches read every fitted sensor in full; see {@link #readSensors()}. */
-    public void setReadAllSensorData(boolean all) {
-        readAllSensorData = all;
-    }
-
-    /** Which alliance we are, for the G408 reject. The OpMode sets it whenever it changes. */
-    public void setAlliance(Alliance alliance) {
-        this.alliance = alliance;
-    }
-
-    public Alliance getAlliance() {
-        return alliance;
-    }
-
-    /**
-     * One line for the init cards: what each sensor point is actually doing, as decided by
-     * {@link #wireSuppliers()}. "Fitted" and "trusted" are different things and the drivers should
-     * see which one they have.
-     */
-    public String sensingSummary() {
-        String entrance;
-        if (!storageEntranceSensor.isAvailable()) {
-            entrance = "none (count unknown, shoots blind)";
-        } else if (!storage.hasEntranceSensor()) {
-            entrance = "fitted, NOT trusted (hues not measured, no distance)";
-        } else {
-            entrance = storageEntranceSensor.hasDistance() ? "count by distance" : "count by hue";
-            entrance += PieceType.HUES_CALIBRATED ? ", G408 reject wired" : " (hues not measured: no G408 reject)";
-        }
-        return "entrance=" + entrance
-                + " | full=" + (storage.hasFullSensor() ? "fitted" : "none")
-                + " | transfer=" + (storage.hasExitSensor() ? "fitted" : "none")
-                + " | feed=" + (transfer.hasFeedSensor() ? "fitted" : "none (timed pulses)");
-    }
-
-    // ---- Sensor predicates: the seam between a reserved sensor point and its sensor type ----
-
-    /**
-     * A piece is entering the storage: presence first (distance where the sensor has it, otherwise
-     * a hue match), then classification, because a piece being thrown back out (G408) is not
-     * counted. Presence and classification are different questions; only this point asks both.
-     */
-    private boolean pieceEnteringStorage() {
-        if (!pieceNear(storageEntranceSensor)) return false;
-        return !(Intake.REJECT_ENABLED && opponentNectarAtEntrance());
-    }
-
-    private boolean opponentNectarAtEntrance() {
-        if (alliance == null) return false;
-        Alliance seen = PieceType.nectarAllianceAt(storageEntranceSensor);
-        return seen != null && seen != alliance;
-    }
-
-    private boolean storageFullSensorSees() {
-        return pieceNear(storageFullSensor);
-    }
-
-    private boolean pieceInTransfer() {
-        return pieceNear(transferSensor);
-    }
-
-    private boolean pieceAtShooterFeed() {
-        return pieceNear(shooterFeedSensor);
-    }
-
-    /**
-     * "A piece is here" for every sensor point. Distance when the sensor has it (a REV V3
-     * proximity read does not care about lighting or which colour the piece is); the hue match only
-     * as a fallback, because a hue window nobody has measured fails silently to "no piece", which
-     * the interlocks read as "keep going" and the count reads as "nothing ever entered".
-     */
-    private boolean pieceNear(ColorSensor sensor) {
-        if (sensor.hasDistance()) {
-            double inches = sensor.getDistanceInches();
-            return !Double.isNaN(inches) && inches <= PRESENCE_DISTANCE_INCHES;
-        }
-        return PieceType.anyAtSensor(sensor);
     }
 
     // ---- The two loop halves ----
 
     /**
-     * Refreshes cached sensor data. Call at the TOP of the loop, before commands run.
-     *
-     * <p>Clearing the bulk caches here is what makes the whole loop see one consistent snapshot.
-     *
-     * <p>Colour sensors are I2C and outside the bulk read: each half (colour, distance) is its own
-     * transaction, milliseconds on a Control Hub, so the loop asks only for what it consumes
-     * (fixthese R2-A1, Round 4). The entrance sensor is read every loop because a passing piece
-     * is a short edge and the count must not miss it, but only when {@link #wireSuppliers()}
-     * trusted it, and its colour half only where hue is the presence signal (no distance) or the
-     * G408 reject is wired. The three presence points (full, transfer, feed) watch pieces that sit
-     * for hundreds of milliseconds, so the <em>fitted</em> ones are read one per loop in rotation
-     * (with three fitted each is refreshed every third loop, about 60 ms of latency at most),
-     * distance only where they have it. Benches read everything ({@link #setReadAllSensorData}).
-     * Watch the loop line in {@code Bench: Color sensors}.
+     * Refreshes cached sensor data. Call at the TOP of the loop, before commands run. Clearing the
+     * bulk caches here is what makes the whole loop see one consistent snapshot.
      */
     public void readSensors() {
         for (LynxModule hub : hubs) {
             hub.clearBulkCache();
         }
         limelight.update();
-        if (readAllSensorData || entranceRead) {
-            storageEntranceSensor.update(readAllSensorData || entranceNeedsHue());
-        }
-        if (!presenceSensors.isEmpty()) {
-            ColorSensor next = presenceSensors.get(nextPresenceSensor);
-            next.update(readAllSensorData || !next.hasDistance());
-            nextPresenceSensor = (nextPresenceSensor + 1) % presenceSensors.size();
-        }
 
-        long now = clock.nowMs();
+        long now = System.currentTimeMillis();
         if (matchClock != null) matchClock.update(now);
         sampleBattery(now);
-    }
-
-    /** Hue is the presence signal without a distance reading, and the G408 classifier with one. */
-    private boolean entranceNeedsHue() {
-        return !storageEntranceSensor.hasDistance() || (classifyTrusted && Intake.REJECT_ENABLED);
+        trackLoopTime(now);
     }
 
     /**
-     * Pushes queued outputs to hardware. Call at the BOTTOM of the loop, after commands run.
-     * {@link Storage#update()} also counts sensor edges, so it runs every loop even when idle.
-     * The drivetrain goes last: its update is the one {@code follower.update()} per loop.
+     * Pushes intent to hardware. Call at the BOTTOM of the loop, after commands run. The drivetrain
+     * goes last: its update is the one {@code follower.update()} per loop.
      */
     public void writeActuators() {
         intake.update();
-        storage.update();
-        transfer.update();
         shooter.update();
-        openLoopDrive.update();
         drivetrain.update();
     }
 
@@ -375,16 +126,12 @@ public class Robot {
     /** Starts the match clock for the period. Call once from the OpMode's {@code start()}. */
     public void startMatch(MatchClock.Period period) {
         matchClock = MatchClock.forPeriod(period);
-        matchClock.start(clock.nowMs());
+        matchClock.start(System.currentTimeMillis());
     }
 
-    /** {@code null} before {@link #startMatch}; callers MUST null-check (init_loop, diagnostics). */
+    /** {@code null} before {@link #startMatch}; callers must null-check (init_loop, diagnostics). */
     public MatchClock getMatchClock() {
         return matchClock;
-    }
-
-    public Clock getClock() {
-        return clock;
     }
 
     /** Lowest volts across all sensors, refreshed at most every {@link #VOLTAGE_SAMPLE_MS}; 0 if unreadable. */
@@ -392,9 +139,26 @@ public class Robot {
         return batteryVolts;
     }
 
-    /** Config names that failed to resolve, in lookup order. Empty when everything is present. */
-    public List<String> getMissingHardware() {
-        return Hardware.getMissing();
+    /** Average loop time in milliseconds, or 0 until the first window completes. */
+    public double getLoopMs() {
+        return loopMs;
+    }
+
+    /** Loop rate in Hz — the first line of every telemetry card, because it is the number to watch. */
+    public double getLoopHz() {
+        return loopMs <= 0 ? 0 : 1000.0 / loopMs;
+    }
+
+    private void trackLoopTime(long nowMs) {
+        loopsSinceStamp++;
+        if (lastLoopStampMs == 0) {
+            lastLoopStampMs = nowMs;
+            loopsSinceStamp = 0;
+        } else if (loopsSinceStamp >= LOOP_AVERAGE_OVER) {
+            loopMs = (double) (nowMs - lastLoopStampMs) / loopsSinceStamp;
+            lastLoopStampMs = nowMs;
+            loopsSinceStamp = 0;
+        }
     }
 
     private void sampleBattery(long nowMs) {
@@ -413,8 +177,8 @@ public class Robot {
     // ---- Shared cancel and shutdown paths ----
 
     /**
-     * Cleanup shared by an operator abort and the auto's buzzer stop: hands the follower back to
-     * the sticks (Ivy cannot stop a follower that was handed a path) and marks the macro cancelled.
+     * Cleanup shared by an operator abort and the auto's buzzer stop: hands the follower back to the
+     * sticks (Ivy cannot stop a follower that was handed a path) and marks the macro cancelled.
      */
     public void abortMacro() {
         drivetrain.cancelPath();
@@ -422,80 +186,23 @@ public class Robot {
     }
 
     /**
-     * Sets every mechanism's intent to stopped and hands the follower back. Velocity mechanisms
-     * only record the intent; follow with {@link #writeActuators()} to push the zeros. For
-     * SelfTest's {@code finally} and any mid-OpMode emergency stop.
+     * Stops every mechanism now. Called by SelfTest's {@code finally} and by the autonomous buzzer
+     * safety net (G403: no powered movement after the period ends).
      */
     public void stopMechanisms() {
         intake.stop();
-        storage.stop();
-        transfer.stop();
-        shooter.stop();
-        openLoopDrive.stop();
+        shooter.disarm();
         drivetrain.cancelPath();
+        intake.update();
+        shooter.update();
     }
 
     /**
      * Releases non-actuator hardware at OpMode stop. Deliberately no motor writes: the SDK rejects
      * them from an iterative OpMode's {@code stop()} (CANCELLED_FOR_SAFETY) and zeroes the motors
-     * itself. A caller that needs motors stopped mid-OpMode uses {@link #stopMechanisms()} followed
-     * by {@link #writeActuators()}.
+     * itself. Use {@link #stopMechanisms()} for a mid-OpMode stop.
      */
     public void stop() {
         limelight.stop();
-        storageEntranceSensor.setLight(false);
-        storageFullSensor.setLight(false);
-        transferSensor.setLight(false);
-        shooterFeedSensor.setLight(false);
-    }
-
-    // ---- Match log ----
-
-    /**
-     * One row for {@link MatchLogger}, in {@link MatchLogger#BIOBUZZ_COLUMNS} order. The logger
-     * knows nothing about the robot; this is the one place that knows every subsystem. Follower-
-     * derived cells are {@code NaN} when there is no follower, so a run whose drivetrain failed to
-     * build is visibly missing data rather than looking like a perfect zero-error run.
-     */
-    public Object[] logCells(double loopMs) {
-        Pose pose = drivetrain.getPose();
-        Follower follower = drivetrain.getFollower();
-        Foresight foresight = follower != null && follower.algorithm() instanceof Foresight
-                ? (Foresight) follower.algorithm() : null;
-        return new Object[] {
-                clock.nowMs(),
-                matchClock == null ? "NONE" : matchClock.getPhase().toString(),
-                matchClock == null ? Double.NaN : matchClock.getRemainingSeconds(),
-                loopMs,
-                batteryVolts,
-                pose == null ? Double.NaN : pose.x(),
-                pose == null ? Double.NaN : pose.y(),
-                pose == null ? Double.NaN : pose.heading(),
-                pathMode(),
-                follower == null ? Double.NaN : follower.completion(),
-                foresight == null ? Double.NaN : foresight.translationalError(),
-                foresight == null ? Double.NaN : foresight.headingError(),
-                intake.getMode(),
-                intake.getVelocityTicksPerSec(),
-                intake.getCurrentAmps(),
-                storage.count(),
-                transfer.getMode(),
-                drivetrain.isHeadingHoldActive() ? Math.toDegrees(drivetrain.getHeldHeading()) : Double.NaN,
-                drivetrain.isAimLocked() ? 1 : 0,
-                shooter.getRpm(),
-                shooter.getTargetRpm(),
-                limelight.hasTarget() ? 1 : 0,
-                limelight.getTx(),
-                limelight.getTy(),
-                macros.getActiveName(),
-                macros.getOutcome(),
-        };
-    }
-
-    private String pathMode() {
-        if (!drivetrain.isAvailable()) return "NONE";
-        if (drivetrain.isFollowingPath()) return "FOLLOW";
-        if (drivetrain.isHoldingPose()) return "HOLD";
-        return "OTHER";
     }
 }

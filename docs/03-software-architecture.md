@@ -84,8 +84,10 @@ opmodes/
     RedAuto.java               @Autonomous "Auto RED", preselects Teleop RED
   test/
     SelfTest.java              "SelfTest": PASS / WARN / FAIL per mechanism; run first at every event
-    ShooterBench.java          "Bench: Shooter": kS, kV, kP, then the distance table
-    IntakeBench.java           "Bench: Intake": peak speed, stall amps, stall timeout
+    IntakeBench.java           "Bench: Intake": every mode turns the right way, current, anti-jam
+    DriveBench.java            "Bench: Drive": deadband/expo/slow, field vs robot centric, heading hold
+    ShooterBench.java          "Bench: Shooter": live kS/kV/kP in FTC Dashboard
+    LimelightBench.java        "Bench: Limelight": alliance tags → distance, flywheel speed, aim, pose
 game/
   Field.java                   the field frame (origin A1), tiles, HIVE CELLs, tag ranges, LOADING ZONE
   FieldPoses.java              BLUE start / shooting spot / park (placeholders)
@@ -97,12 +99,11 @@ util/
   control/JamDetector.java
 pedro/
   Constants.java               MecanumConfig + PinpointConfig + ForesightConfig; createMecanum(), create()
-  Tuning.java                  @Tuner factories — tuning build only
-  procedures/*.java            the four Quickstart AutoTune procedures — tuning build only, untouched
+  Tuning.java                  @Tuner factories (AutoTune)
+  procedures/*.java            the four Quickstart AutoTune procedures, untouched
 ```
 
-35 files, 6,211 physical lines, of which 2,100 are `pedro/procedures/**` (Quickstart code, in the
-tuning build only). There is no `src/test/` tree — see §17.
+37 files, 6,834 physical lines, of which 2,100 are `pedro/procedures/**` (Quickstart code). There is no `src/test/` tree — see §17.
 
 ## 3. Dependency rules
 
@@ -182,7 +183,8 @@ Subsystem conventions:
 |---|---|---|
 | `Teleop BLUE` / `Teleop RED` | `@TeleOp` | Main |
 | `Auto BLUE` / `Auto RED` | `@Autonomous`, `preselectTeleOp` set to the matching teleop | Main |
-| `Bench: Shooter`, `Bench: Intake`, `SelfTest` | `@TeleOp` | Bench |
+| `Bench: Intake`, `Bench: Drive`, `Bench: Limelight`, `SelfTest` | `@TeleOp` | Bench |
+| `Bench: Shooter` | `@TeleOp` | Bench |
 
 **Alliance is baked into the OpMode class.** `BlueTeleop`, `RedTeleop`, `BlueAuto` and `RedAuto` are
 ~13-line subclasses that carry the annotation and pass a side to the abstract parent. This is the
@@ -558,8 +560,13 @@ because the follower drives that very config.
 Controller start-up**, so each must be `public static`, zero-arg, declared to return exactly
 `Procedure`, and must never throw; a factory whose config is not filled yet returns a `NotReady`
 procedure that says what to paste first. `Tuning.java`, `pedro/procedures/**` and the `tuning`
-dependency are only in the build when Gradle runs with `-Ptuning` (R704 — AutoTune's web servers are
-always bound while the library is on the classpath).
+dependency are **always in the build**, as are **FTC Dashboard** and `opmodes/test/ShooterBench`, its
+only user. Both libraries bind a web server whenever they are in the APK, so under R704 **the everyday
+APK is not match legal**; before an event the two dependency lines and those three sources are removed
+by hand (HANDOFF §4). This was a team choice on 2026-09-30: every file in the normal folders and nothing
+for Android Studio to get wrong, over two things tried before it — a `-Ptuning` Gradle property (Studio
+never passes it, so it showed every tuning source as unresolved) and a `competition`/`tuning` build
+variant split with those sources in `src/tuning/java`.
 
 ## 13. `util/`
 
@@ -567,7 +574,7 @@ always bound while the library is on the classpath).
 |---|---|---|
 | `control/JamDetector` | current-based stall detection with bounded un-jamming; time is an argument | over-current must *persist* for `stallTimeoutMs`; healthy current for `healthyResetMs` forgives the attempt count, so the limit bounds *consecutive* failures. The `eligible` argument is load-bearing: pass true only while actively intaking, or holding a piece against a stop reads as a jam |
 | `field/FieldConstants` | `FIELD_SIZE_INCHES = 144`, `SYMMETRY = ROTATE_180`, `forAlliance`, `rotate180` (heading transformed too) | the evidence for the rotation is in docs/04 §2.5; a mirror puts every blue autonomous in the wrong place |
-| `field/Alliance` | which side we are on, and `opposite()` | **its Javadoc is stale — see §18** |
+| `field/Alliance` | which side we are on, and `opposite()` | fixed by the OpMode class (§5), never carried between OpModes |
 | `field/PoseStorage` | the auto → teleop handoff: **the pose, and nothing else** | static, so it survives an OpMode switch but not an RC restart. Teleop must treat a missing pose as normal |
 | `hardware/HardwareNames` | every config string | seven motors, `pinpoint`, `limelight`. No sensor names, because there are no sensors |
 | `math/Angles` | `normalizeAngle`, `angleError` | `Math.atan2` returns `(−π, π]` and Pedro's `Pose` is `[0, 2π)`; mix them and a controller drives the long way round at full power. Feed controllers an **error**, never a raw angle |
@@ -584,7 +591,7 @@ there are no tests to inject into), `hardware/Hardware` (fail-soft lookup — se
 - `MatchLogger` wrote a CSV row per loop to `/sdcard/FIRST/data/`. Without it, a weak shot at an event
   can only be diagnosed from what is on the driver-station card at the time.
 - `BuildFlavor.isTuningBuild()` printed `!! TUNING BUILD` on every match init card when the AutoTune
-  library was in the APK. **Not deploying a `-Ptuning` build at an event (R704) is now a human check.**
+  library was in the APK. **Stripping AutoTune and Dashboard before an event (R704) is now a human check.**
   HANDOFF §8 says so as its own step.
 
 ## 14. Crash loudly, and the one thing that does not
@@ -687,16 +694,33 @@ instead of two; the price is that nothing catches a regression before the robot 
 
 So verification is two things, and both are on the robot:
 
-1. **The compile gate.** `./gradlew :TeamCode:compileDebugJavaWithJavac` must be clean, and both APKs
-   (plain and `-Ptuning`) must build. Because every device lookup now throws rather than degrading, a
+1. **The compile gate.** `./gradlew :TeamCode:compileDebugJavaWithJavac` must be clean and
+   `assembleDebug` must build. Because every device lookup now throws rather than degrading, a
    large class of wiring mistake also fails loudly at OpMode init rather than silently at the match.
 2. **The on-robot sequence** in HANDOFF §8: TestHardware, `SelfTest`, AutoTune, `Bench: Intake`,
    `Bench: Shooter`, teleop on the practice field, then autonomous with the 30 s clock. Every constant
    in HANDOFF §9 is measured by a named step in that list.
 
 The benches were rebased with the rest of the tree and the whole build is green: both APKs build, and
-the competition APK contains **zero** AutoTune references across all nineteen dex files (verified by
-scanning the dex strings, not by trusting the Gradle exclusion).
+the competition APK contains **zero** AutoTune or FTC Dashboard references across all nineteen dex
+files (verified by scanning the dex strings, not by trusting the Gradle exclusion).
+
+**What each bench is for.** `Bench: Intake` proves the subsystem: each mode earns a PASS once it turns
+the way its power says, and the peak current is held for the stall threshold. `Bench: Shooter` puts
+every `Shooter` static in Dashboard's config panel and graphs target, velocity, error and power, so kS,
+kV and kP are tuned live instead of one redeploy per number; Dashboard edits are not saved to source,
+so the card prints paste-ready values. `Bench: Drive` runs Teleop's own drive default and shows each
+stick raw → shaped → slow-scaled while the deadband and expo are changed on the pad. `Bench: Limelight`
+takes the alliance on the dpad in init, keeps only that alliance's tags, and reports the CELL's floor
+distance and bearing from the tag's 3D pose, the flywheel speed the table gives for that distance, the
+turn to aim the rear shooter, and a field pose worked back from the CELL's `Field` position — a test
+number only, since the CELL moves when the HIVE tips (§16). It drives nothing.
+
+**No bench writes a motor from `onStop()`.** The SDK rejects motor writes from an iterative OpMode's
+`stop()` and zeroes the motors itself (§1). Benches that change a `public static` in the competition APK
+(`Intake.ANTI_JAM_ENABLED`, `DriveScaling`, `Drivetrain.HEADING_HOLD_ENABLED`) put it back in `onStop()`,
+so a bench session cannot carry into a match on the same Robot Controller; `Bench: Shooter` leaves its
+edits in place because its APK never goes to a match.
 
 **The benches hold no motor handles of their own.** This is worth stating because the first attempt at
 them did, and it was wrong in a way that is easy to repeat. A bench that calls
@@ -746,18 +770,12 @@ Things that are correct in the code and will still surprise someone standing nex
 - **Tunables are `public static` and live until the Robot Controller app restarts.** A value nudged on a
   bench is what teleop then runs with, and **nothing reports it any more** — the `Tunables` snapshot and
   the `!! TUNED THIS SESSION` card line were deleted. Restart the RC app after a tuning session.
-- **A `-Ptuning` APK no longer announces itself.** `BuildFlavor` is gone, so R704 compliance is a human
-  check: the competition APK is plain `assembleDebug`.
+- **A non-legal APK does not announce itself.** `BuildFlavor` is gone, so R704 compliance is a human
+  check: strip AutoTune and Dashboard before an event (HANDOFF §4). The giveaway is `Bench: Shooter`: if it is in the
+  OpMode list, the APK carries AutoTune and FTC Dashboard and is not match legal.
 - **Loop rate is the first line of every card** because it explains most of what else looks wrong. There
   is no p95 or spike histogram any more — `LoopTimer` went with the diagnostics package — just the
   average over ten loops.
-- **Two known prose errors in the source**, both in Javadoc, neither affecting behaviour. They are
-  listed here because this document is the place where cross-class truth lives:
-  - `util/field/Alliance.java` still says the alliance is "chosen during init by `AutoSelector` and
-    carried into teleop by `PoseStorage`". **Both halves are now false**: `AutoSelector` is deleted and
-    `PoseStorage` carries only the pose. The alliance comes from the OpMode class (§5).
-  - `commands/Shoot.java`'s header refers to the flywheel hold as `Macros.heldFlywheel`. That method is
-    gone; the hold is `Shooter.armedCommand()`, passed to `Macros.reporting` as an `alongside` child.
 
 ## 19. Build and run
 
@@ -766,10 +784,9 @@ Things that are correct in the code and will still surprise someone standing nex
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
   ./gradlew :TeamCode:compileDebugJavaWithJavac --console=plain
 
-./gradlew :TeamCode:assembleDebug              # THE COMPETITION APK (no AutoTune; R704)
-./gradlew -Ptuning :TeamCode:assembleDebug     # tuning APK: AutoTune web UI. Never at an event.
+./gradlew :TeamCode:assembleDebug   # the one APK — AutoTune + Dashboard; NOT match legal until stripped
 ```
 
-AutoTune's web UI is `http://192.168.43.1:10158` while connected to the robot's Wi-Fi; tuning has no
-OpMode. The repo is on FTC SDK **11.2.1** from the Pedro Quickstart and that is fine (§16). Expect
+AutoTune's web UI is `http://192.168.43.1:10158` and FTC Dashboard's is `http://192.168.43.1:8080/dash`
+while connected to the robot's Wi-Fi; AutoTune has no OpMode, Dashboard is used by `Bench: Shooter`. The repo is on FTC SDK **11.2.1** from the Pedro Quickstart and that is fine (§16). Expect
 `BUILD SUCCESSFUL` plus javac warnings about the Java 8 source level.

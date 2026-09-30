@@ -22,9 +22,9 @@ import org.firstinspires.ftc.teamcode.pedro.procedures.Tests;
  * Tests/Odometry → Foresight Tuner → Tests/Hold, Line, Curve. Each tuner ends with a code block to
  * paste into {@link Constants}. The web UI is {@code http://192.168.43.1:10158} on the robot's Wi-Fi.
  *
- * <p>This file, {@code pedro/procedures/*} and the {@code tuning} dependency are only in the build
- * when Gradle runs with {@code -Ptuning} (BIOBUZZ R704: AutoTune's web servers are always bound while
- * the library is on the classpath). See {@code build.dependencies.gradle} and HANDOFF section 4.
+ * <p>BIOBUZZ R704: AutoTune's web servers are always bound while the library is on the classpath, so
+ * before an event this file, {@code pedro/procedures/*} and the {@code tuning} dependency are removed
+ * by hand. See {@code build.dependencies.gradle} and HANDOFF section 4.
  */
 public class Tuning {
     @Tuner

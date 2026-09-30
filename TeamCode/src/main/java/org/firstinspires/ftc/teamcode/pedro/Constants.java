@@ -25,7 +25,7 @@ import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
  * code used to carry.
  *
  * <h2>Filling the three configs</h2>
- * In the order AutoTune produces them, on a {@code -Ptuning} build (docs/01 section A.7):
+ * In the order AutoTune produces them, (docs/01 section A.7):
  * {@link #drivetrainConfig} needs only a direction check (Mecanum Tuner, or the SDK's TestHardware
  * utility); {@link #localizerConfig} is the Pinpoint Tuner's output; {@link #foresightConfig} is the
  * Foresight Tuner's. Until the last two exist {@link #create} returns {@code null} and the robot

@@ -186,8 +186,9 @@ public class Robot {
     }
 
     /**
-     * Stops every mechanism now. Called by SelfTest's {@code finally} and by the autonomous buzzer
-     * safety net (G403: no powered movement after the period ends).
+     * Stops every mechanism now, from inside the loop. Called by the autonomous buzzer safety net
+     * (G403: no powered movement after the period ends). Never from an OpMode's {@code stop()}: it
+     * writes motors, which the SDK rejects there (see {@link #stop()}).
      */
     public void stopMechanisms() {
         intake.stop();

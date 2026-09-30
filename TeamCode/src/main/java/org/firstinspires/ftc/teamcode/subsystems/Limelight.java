@@ -131,6 +131,15 @@ public class Limelight {
         return n == 0 ? Double.NaN : sum / n;
     }
 
+    /**
+     * Every tag in the fresh frame, with its 3D pose; empty when the frame is stale or has none.
+     * For {@code Bench: Limelight} only. Match code aims from {@link #getTagTx} and never localises
+     * from a tag, because every BIOBUZZ tag rides a moving CELL.
+     */
+    public List<LLResultTypes.FiducialResult> getTags() {
+        return hasTarget() ? tagDetections : Collections.<LLResultTypes.FiducialResult>emptyList();
+    }
+
     /** Number of tags of any ID in the fresh frame. */
     public int getTagCount() {
         return hasTarget() ? tagDetections.size() : 0;

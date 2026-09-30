@@ -186,7 +186,7 @@ the cap gifts the points; cap late.
 
 | Rule | Constraint | Code consequence |
 |---|---|---|
-| **G407** | **CONTROL at most 4 SCORING ELEMENTS at a time**; teams are told to build guards and "systems to prevent active pickup/intaking of more than 4" | `Storage.count()` hard-stops the intake at 4; a momentary 5th reversed out is "likely not STRATEGIC" |
+| **G407** | **CONTROL at most 4 SCORING ELEMENTS at a time**; teams are told to build guards and "systems to prevent active pickup/intaking of more than 4" | nothing on the robot can count, so the **operator is the interlock** (§9 item 1); a momentary 5th reversed out is "likely not STRATEGIC" |
 | **G408** | may not CONTROL the opponent's NECTAR | colour classification at the intake or storage entrance, or a 3.6 in reject gate |
 | **G409** | may not catch or deflect elements released by a tipping HIVE | do not park under the HIVE; no open-top hopper |
 | **G410** | **no NECTAR into a FLOWER until ≤ 60 s remain**, MAJOR FOUL per NECTAR | V1 has no Flower mechanism; a V2 macro would gate on 60 s remaining (`MatchClock.getRemainingMs()`) |
@@ -208,10 +208,10 @@ the cap gifts the points; cap late.
 | **R503** | **max 8 DC motors and 8 servos** across all configurations | V1 needs 8–10 motors: drivetrain 4, intake, storage (1–2), transfer, shooter (1–2). **A single flywheel and a single storage motor fit exactly**; otherwise storage + transfer must share a motor |
 | R701 | one Control Hub (or phone + Expansion Hub) plus at most one Expansion Hub | ✓ |
 | **R702** | **Limelight 3A is the only permitted programmable vision coprocessor**; Limelight 3G, OAK-1, OpenMV banned | ✓ Limelight 3A |
-| **R704** | no continuous video stream; **FTC Dashboard, FTControl Panels and similar streaming tools are prohibited during matches** | we ship no Panels; the AutoTune `tuning` dependency (its web server is always on) is only in the build when `-Ptuning` is passed: `./gradlew :TeamCode:assembleDebug` is the competition APK; a tuning APK prints `!! TUNING BUILD` on every match init card (`BuildFlavor`) |
+| **R704** | no continuous video stream; **FTC Dashboard, FTControl Panels and similar streaming tools are prohibited during matches** | no Panels; AutoTune **and FTC Dashboard** (both bind a web server whenever present) are **in every build** for now, so the everyday APK is not match legal: before an event both are removed by hand along with the sources that import them (HANDOFF §4). Nothing on the card warns |
 | R708 | single-sensor UVC webcams only; no stereo | — |
 | R801 | no pneumatics, blowers, vacuums; flywheels/rollers fine | ✓ |
-| SDK | **v12.0** (2026-09-12), Android Studio Narwhal 3 Feature Drop+; no minimum version mandated for inspection | repo is on SDK 11.2.1 via the Pedro Quickstart; upgrade needed for AprilTag clusters |
+| SDK | **v12.0** (2026-09-12), Android Studio Narwhal 3 Feature Drop+; no minimum version mandated for inspection | repo is on SDK 11.2.1 via the Pedro Quickstart; **fine**, because the Limelight reads the tags, not the SDK's `AprilTagProcessor` (§9 item 13) |
 
 ## 7. Strategy signals [COMMUNITY, 24 h after kickoff]
 - All four vendor StarterBots (goBILDA, AndyMark, REV, Studica) are **4-piece indexed magazine +
@@ -252,7 +252,7 @@ are sourced season facts and are unchanged; this section is the only part that t
 | 8 | Match clock | 30 s AUTO, 8 s transition, 120 s TELEOP, no endgame. `MatchClock` models the 0:20 warning (one long rumble) and `isExpired()` drives the autonomous stop (G403). The 1:00 FLOWER unlock has no code because there is no FLOWER mechanism. |
 | 9 | Start positions | G304: own side, touching the wall, outside the LOADING ZONE and FLOWER volumes, holding 4 POLLEN. Placed **rear (shooter) toward the up-facing CELL**. One start pose per alliance (`FieldPoses.BLUE_START_FACING_HIVE`); the two-option `StartPosition` enum was deleted with the selector. First target: red tags 34–37, blue 42–45. |
 | 10 | Motors and servos | **7 motors, 0 servos**, against R503's limit of 8 and 8: four drive, one for the roller *and* tunnel together, two flywheels. One spare port. |
-| 11 | Electronics | One Control Hub; Limelight 3A (R702's only legal coprocessor); **no Panels or Dashboard** (R704). AutoTune is behind `-Ptuning` and the competition APK is verified free of it. |
+| 11 | Electronics | One Control Hub; Limelight 3A (R702's only legal coprocessor); **no Panels or Dashboard** (R704). AutoTune and FTC Dashboard are in every build and must be stripped by hand before an event (HANDOFF §4). |
 | 12 | Size | 18 in cube at start; 18 × 24 × 29 in during play, physically constrained; no weight limit. The CAD is a parts layout, so the packaged footprint is still unverified. |
 | 13 | SDK version | **11.2.1 is fine.** The v12.0 upgrade was previously listed as a prerequisite for AprilTag work, but the tags are read by the *Limelight's own pipeline* over USB-Ethernet — the SDK's `AprilTagProcessor` and its new cluster API are never used. The upgrade is a future task, not a blocker. |
 | 14 | Geometry | **Everything is still a placeholder.** The CAD gave mechanisms, not positions, so `game/Field` and `game/FieldPoses` need the Onshape field CAD (§10) and a tape measure at the first event. |

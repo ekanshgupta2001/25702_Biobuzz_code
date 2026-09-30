@@ -13,8 +13,9 @@ Team 25702, FTC 2026-27 game **BIOBUZZ presented by RTX**. Code for the robot in
 roller, carries them down a tunnel, and launches them out of the **rear** into a HIVE CELL.
 
 Stack: **Pedro Pathing 3.0.0** (`revhub` + `core`), **Ivy 1.1.1** command scheduler, **AutoTune**
-(`tuning:1.0.0`, tuning builds only), FTC SDK **11.2.1**, Gradle 9.1.0, Java 8 source level.
-**No Panels, no FTC Dashboard** (R704).
+(`tuning:1.0.1`), FTC SDK **11.2.1**, Gradle 9.1.0, Java 8 source level.
+**No Panels. FTC Dashboard and AutoTune are in every build right now, so the APK is NOT match legal
+(R704)** until they are stripped (§4).
 
 ### The robot, from the CAD
 
@@ -48,22 +49,23 @@ iterations**. They have no code and should not get any.
 | Layer | Files | Lines | Status |
 |---|---|---|---|
 | `Robot.java` | 1 | 208 | composition root |
-| `subsystems/` | 4 | 1,201 | Drivetrain, Intake, Shooter, Limelight |
+| `subsystems/` | 4 | 1,210 | Drivetrain, Intake, Shooter, Limelight |
 | `commands/` | 3 | 541 | Macros, Shoot, Waits |
-| `opmodes/` | 11 | 1,425 | one base, teleop ×2 + Controls, auto ×3, three benches |
+| `opmodes/` | 13 | 1,786 | one base, teleop ×2 + Controls, auto ×3, SelfTest + four benches |
 | `game/`, `util/` | 10 | 805 | field frame, poses, clock, jam detector, maths |
 | `pedro/` | 2 | 178 | Constants + Tuning registration |
 | `pedro/procedures/` | 4 | 2,100 | vendored AutoTune; **0 bytes in the match APK** |
 
-Team code, excluding the vendored procedures: **4,358 lines across 31 files**, down from 7,730 across
-53. Both APKs build. The competition APK contains **zero** AutoTune references across all nineteen dex
+Team code, excluding the vendored procedures: **4,732 lines across 33 files**, down from 7,730 across
+53. Both APKs build. The competition APK contains **zero** AutoTune or Dashboard references across all nineteen dex
 files — verified by scanning dex strings, not by trusting the Gradle exclusion.
 
 **There is no test suite and none is planned.** The JVM suite was deleted in `0efa320`. Verification is
 the compile gate plus §8's on-robot sequence.
 
 Driver Station OpModes: `Teleop BLUE`, `Teleop RED`, `Auto BLUE`, `Auto RED` (group **Main**);
-`Bench: Shooter`, `Bench: Intake`, `SelfTest` (group **Bench**).
+`Bench: Intake`, `Bench: Drive`, `Bench: Limelight`, `SelfTest` (group **Bench**), plus `Bench: Shooter`
+in the tuning APK only.
 
 ## 3. Read these first
 
@@ -85,13 +87,15 @@ Driver Station OpModes: `Teleop BLUE`, `Teleop RED`, `Auto BLUE`, `Auto RED` (gr
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
   ./gradlew :TeamCode:compileDebugJavaWithJavac --console=plain
 
-./gradlew :TeamCode:assembleDebug              # COMPETITION APK — no AutoTune
-./gradlew -Ptuning :TeamCode:assembleDebug     # tuning APK — AutoTune web UI on :10158
+./gradlew :TeamCode:assembleDebug   # the one APK — AutoTune on :10158, Dashboard on :8080/dash
 ```
 
-**The Run button deploys whichever variant you built last.** After any tuning session, rebuild the
-competition APK before you go to a match. There used to be a runtime `BuildFlavor` warning on the init
-card that caught this; it was deleted, so it is now a human check. Build plain, then deploy.
+**There is one build, and it always contains AutoTune and FTC Dashboard.** The team chose this on
+2026-09-30 so that every file sits in the normal folders and Android Studio resolves them with no
+variant to select. The price: **every APK binds two web servers and is not match legal (R704).** Before
+an event, delete the `tuning` and `dashboard` lines from `build.dependencies.gradle` and the three sources that import them (`pedro/Tuning.java`, `pedro/procedures/`, `opmodes/test/ShooterBench.java`), then build and deploy. Nothing on the card warns you; the giveaway is `Bench: Shooter` in the OpMode
+list. (A two-variant split with the tuning files in `src/tuning/java` was tried and reverted before it was
+committed, because the team wanted every file in the normal folders.)
 
 ## 5. Repo map
 
@@ -118,12 +122,12 @@ opmodes/
   teleop/{BlueTeleop, RedTeleop}   13 lines each: the annotation and the side
   auto/Auto                    30 s routine; tuned (aim, shoot, park) and untuned (shoot, timed leave)
   auto/{BlueAuto, RedAuto}     13 lines each
-  test/{SelfTest, ShooterBench, IntakeBench}
+  test/{SelfTest, IntakeBench, DriveBench, LimelightBench}, ShooterBench (Dashboard)
 game/{Field, FieldPoses}       field frame, HIVE CELL poses, tag ranges. Every number a placeholder.
 util/
   field/{Alliance, FieldConstants, PoseStorage}   ROTATE_180; PoseStorage carries the pose only
   math/{Angles, DriveScaling}   time/MatchClock   control/JamDetector
-pedro/{Constants, Tuning, procedures/*}          tuning build only for the last two
+pedro/{Constants, Tuning, procedures/*}          configs + create(); AutoTune factories and tuners
 ```
 
 ### Teleop at a glance
@@ -182,7 +186,7 @@ At the buzzer anything still running is cancelled and every mechanism stopped (G
 | **Every macro reports a terminal `Outcome`** | A timeout or an abort used to leave it `RUNNING` for ever. Built as `deadline(sequential(...), onInterrupt(markCancelled))` — **not** `setEnd` on the group, because Ivy's `setEnd` *replaces* the group's own end, the one that ends its children. |
 | **`FieldConstants` rotates, it does not mirror** | The BIOBUZZ field is 180° rotationally symmetric: GARDEN A1/F6, LOADING ZONE A5/F2. A C/D mirror would put them on F1 and F5 and every blue auto in the wrong place. The enum with three arms is gone — a run-time selector over a fact the field cannot change is just somewhere for a wrong value to hide. |
 | **SDK 11.2.1 is fine** | The docs used to defer a 12.0 upgrade for the AprilTag *cluster* API. The tags are read by the Limelight's own pipeline over USB-Ethernet, not by the SDK's `AprilTagProcessor`, so nothing in the confirmed hardware needs it. It is a future task, not a prerequisite. |
-| **No Panels, no Dashboard; AutoTune behind `-Ptuning`** | R704 prohibits streaming tools during matches, and AutoTune's HTTP server is bound whenever the library is on the classpath. |
+| **No Panels; AutoTune and FTC Dashboard always built in, stripped by hand before events** | Dashboard is worth it on the bench: `Bench: Shooter` tunes kS/kV/kP live instead of one redeploy per number. Both bind a web server whenever they are in the APK, and R704 prohibits streaming tools during matches, so the event APK must have them removed (§4). One build with everything in the normal folders was chosen over a two-variant split so Android Studio just works. |
 
 ## 7. Rules that bite
 
@@ -225,7 +229,7 @@ At the buzzer anything still running is cancelled and every mechanism stopped (G
 - G407: at most 4 controlled scoring elements. **Nothing on this robot enforces it — the operator does.**
 - G408: never control the opponent's NECTAR. There is no colour sensing, so this is also the operator's job.
 - R503: 8 motors and 8 servos max. We use 7 motors, 0 servos.
-- R704: no dashboard or streaming tools in matches. Competition APK is plain `assembleDebug`.
+- R704: no dashboard or streaming tools in matches. The everyday APK is **not** match legal: strip AutoTune and Dashboard first (§4).
 - AUTO 30 s → 8 s no-motion transition (G403) → TELEOP 120 s. No endgame. FLOWER unlock at 1:00.
 
 ## 8. On the real robot, in this order
@@ -237,23 +241,35 @@ At the buzzer anything still running is cancelled and every mechanism stopped (G
    robot forward — fix any reversed one in `Constants.drivetrainConfig`. Confirm the two flywheels
    **counter-rotate**.
 3. **`SelfTest`**: every row PASS, or WARN on the follower row before AutoTune has run.
-4. **`-Ptuning` build → AutoTune** at `http://192.168.43.1:10158`: Mecanum Tuner → `drivetrainConfig`;
+4. **AutoTune** at `http://192.168.43.1:10158`: Mecanum Tuner → `drivetrainConfig`;
    Pinpoint Tuner → `localizerConfig`; Foresight Tuner → `foresightConfig`. Paste all three. `create()`
    then returns a follower and the heading hold, aim lock, snap turns and paths all come alive.
-5. **`Bench: Intake`**: one clean capture (note the peak current), then anti-jam off and a deliberate
-   stall (note that peak). `STALL_CURRENT_AMPS` goes between them; `STALL_TIMEOUT_MS` must outlast a
-   clean capture's longest over-threshold run. Confirm one motor turns **both** roller and tunnel.
-6. **`Bench: Shooter`**, the four steps on the card: `kS` (lowest power the wheel still turns at),
-   `kV` (steady power ÷ settled velocity), `kP` (fire a piece with RB and trim until recovery is quick
-   without overshoot), then the distance table from 24/48/72/96 in into `DISTANCES_INCHES` /
-   `TICKS_PER_SEC`. Set `MANUAL_TICKS_PER_SEC` to whatever scores from your usual spot.
+5. **`Bench: Intake`**: A/B/X each earn a PASS (IN, OUT, IDLE turning the way their power says).
+   Then one clean capture (note the peak current and the over-threshold run), RB to clear, anti-jam
+   off (LB) and a deliberate stall (note that peak). `STALL_CURRENT_AMPS` goes between the two peaks;
+   `STALL_TIMEOUT_MS` must outlast the clean capture's run. Confirm one motor turns **both** roller and
+   tunnel.
+6. **`Bench: Shooter`** with FTC Dashboard open at `http://192.168.43.1:8080/dash`:
+   `kS` (B for open loop, raise `ShooterBench.OPEN_LOOP_POWER` until the wheel just keeps turning),
+   `kV` (open loop near full, read `kV estimate`), `kP` (A to arm, RB to fire a piece, trim `kP` in
+   Dashboard until the graph recovers quickly without overshoot), then the distance table from
+   24/48/72/96 in into `DISTANCES_INCHES` / `TICKS_PER_SEC`. Set `MANUAL_TICKS_PER_SEC` to whatever
+   scores from your usual spot. **Dashboard edits are not saved: paste the card's values into
+   `Shooter.java`.**
+6a. **`Bench: Drive`**: robot-centric first, then field-centric once tuned (LB). Tune the feel with
+   dpad (deadband up/down, expo left/right) and copy the values into `DriveScaling`; the bench puts the
+   old ones back when it stops.
+6b. **`Bench: Limelight`**: pick the alliance on the dpad in init; confirm the other alliance's tags
+   are listed as ignored. Enter the camera pose in the Limelight web UI, then at a tape-measured floor
+   distance confirm `Distance` agrees and `Axis check` says OK (else flip `ROBOT_SPACE_Y_SIGN`). The
+   flywheel speed it shows is the table's for that distance.
 7. **Teleop on the practice field**: drive, arm, fire — one pulse should move one piece. Face the HIVE,
    pull the aim lock, turn away, and confirm the card still says `tag-corrected`. Then press dpad-up and
    confirm MANUAL really takes the table and the aim law out.
 8. **`Auto BLUE`** with the 30 s clock. Set `Auto.LEAVE_POWER` / `LEAVE_MS` so the robot clearly stops
    touching the wall and never reaches the HIVE. Then check teleop inherits the pose.
-9. **Before every match**: build the **plain** APK. The tuning build is not match legal and nothing
-   warns you any more.
+9. **Before every event**: delete the `tuning` and `dashboard` lines from `build.dependencies.gradle` and the three sources that import them (`pedro/Tuning.java`, `pedro/procedures/`, `opmodes/test/ShooterBench.java`), then build and deploy. Confirm `Bench: Shooter` is gone from the
+   OpMode list. The everyday build is not match legal and nothing else warns you.
 
 ## 9. Constants to measure
 

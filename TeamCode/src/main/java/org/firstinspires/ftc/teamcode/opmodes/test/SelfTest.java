@@ -184,8 +184,6 @@ public class SelfTest extends MatchOpMode {
         telemetry.addLine("Wheel DIRECTIONS are not checked here: use Utility > TestHardware.");
     }
 
-    @Override
-    protected void onStop() {
-        robot.stopMechanisms();
-    }
+    // No onStop: the SDK rejects motor writes from stop() and zeroes the motors itself. Inside the
+    // loop, onDecide() already returns every mechanism to rest before each step.
 }

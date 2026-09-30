@@ -2,6 +2,7 @@ repositories {
     mavenCentral()
     maven { url 'https://repo.dairy.foundation/releases/'}
     google() // Needed for androidx
+    maven { url = 'https://maven.brott.dev/' }   // FTC Dashboard
 }
 
 dependencies {
@@ -17,15 +18,15 @@ dependencies {
     implementation 'androidx.appcompat:appcompat:1.2.0'
 
     implementation 'com.pedropathing:revhub:3.0.1'
-    // AutoTune binds an HTTP server (port 10158) and a WebSocket (12649) whenever it is on the
-    // classpath, and BIOBUZZ R704 prohibits streaming/dashboard tools during matches. So it is in
-    // development builds only:
-    //     ./gradlew -Ptuning :TeamCode:assembleDebug       (tuning APK: AutoTune web UI on)
-    //     ./gradlew :TeamCode:assembleDebug                (competition APK: no AutoTune)
-    // The sources that import it (pedro/Tuning.java, pedro/procedures/) are excluded from the
-    // competition build in TeamCode/build.gradle.
-    if (project.hasProperty('tuning')) {
-        implementation 'com.pedropathing:tuning:1.0.1'
-    }
     implementation 'com.pedropathing.ivy:pedro:1.1.1'
+
+    // !! NOT MATCH LEGAL WHILE THESE TWO ARE HERE (BIOBUZZ R704) !!
+    // AutoTune (web UI :10158) and FTC Dashboard (:8080/dash) each bind a web server whenever they are
+    // in the APK, and R704 prohibits streaming/dashboard tools during matches. Before an event, delete
+    // these two lines AND pedro/Tuning.java, pedro/procedures/ and opmodes/test/ShooterBench.java (the
+    // only sources that import them), or the build will not compile.
+    implementation 'com.pedropathing:tuning:1.0.1'
+    implementation('com.acmerobotics.dashboard:dashboard:0.6.0') {
+        exclude group: 'org.firstinspires.ftc'
+    }
 }

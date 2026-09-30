@@ -26,9 +26,10 @@ import org.firstinspires.ftc.teamcode.subsystems.Shooter;
  * telemetry says so.
  *
  * <h2>What it requires</h2>
- * The intake only. The flywheel is held by a separate command running alongside
- * ({@code Macros.heldFlywheel}), so an armed wheel is never told to stop when a shot starts, and the
- * drivetrain is left alone so the driver keeps translating and aiming through a shot.
+ * The intake only. The flywheel is held by {@code Shooter.armedCommand()}, passed to
+ * {@code Macros.reporting} as an alongside child, so an armed wheel is never told to stop when a
+ * shot starts, and the drivetrain is left alone so the driver keeps translating and aiming through
+ * a shot.
  */
 public class Shoot {
     /**

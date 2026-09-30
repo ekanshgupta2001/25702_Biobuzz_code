@@ -7,27 +7,34 @@ import org.firstinspires.ftc.teamcode.subsystems.Intake;
 import org.firstinspires.ftc.teamcode.util.field.Alliance;
 import org.firstinspires.ftc.teamcode.util.time.MatchClock;
 
+import java.util.EnumSet;
+import java.util.Set;
+
 /**
- * Finds {@link Intake#STALL_CURRENT_AMPS} and {@link Intake#STALL_TIMEOUT_MS}, and confirms the CAD
- * claim that one motor drives both the roller and the tunnel.
+ * Proves the {@code Intake} subsystem works: every mode turns the motor the right way, the current
+ * is sampled while pulling, and the jam detector reacts. One motor drives the roller <em>and</em> the
+ * tunnel, so the check a human makes by eye is that both move.
  *
- * <h2>Two separate runs, and the threshold goes between them</h2>
- * A clean capture and a real jam both draw a lot of current; the whole difficulty is that they
- * overlap. So: run one clean capture and read the peak, then switch anti-jam off, deliberately stall
- * the roller, and read that peak. {@code STALL_CURRENT_AMPS} belongs between the two, and
- * {@code STALL_TIMEOUT_MS} must outlast the longest over-threshold run a clean capture produces.
+ * <p>Each mode earns a PASS on the card once it has been seen turning in the direction of its power,
+ * faster than {@link #MIN_TICKS_PER_SEC}. Direction is judged against the commanded sign only: the
+ * SDK applies {@code Direction} to power and velocity together, so a motor wired backwards still
+ * passes here. Whether the roller pulls <em>in</em> is for the eye.
  *
- * <p>Both are <b>peak-held</b>, because a capture's current spike passes faster than anyone can read
- * a number off the Driver Station.
+ * <p>The peak current and the longest over-threshold run are held so HANDOFF §8 step 5 still works:
+ * one clean capture, then a deliberate stall with anti-jam off. {@link Intake#STALL_CURRENT_AMPS} goes
+ * between the two peaks, and {@link Intake#STALL_TIMEOUT_MS} must outlast the clean capture's run.
  */
 @TeleOp(name = "Bench: Intake", group = "Bench")
 public class IntakeBench extends MatchOpMode {
+    /** Slower than this does not count as the mode working. */
+    public static double MIN_TICKS_PER_SEC = 50;
+
+    private final Set<Intake.Mode> passed = EnumSet.noneOf(Intake.Mode.class);
     private double peakAmps = 0;
-    private double peakVelocity = 0;
-    private double peakIdleVelocity = 0;
-    /** Longest unbroken run of over-threshold current, milliseconds. Feeds STALL_TIMEOUT_MS. */
+    /** Longest unbroken run of current at or over the threshold, ms. Feeds STALL_TIMEOUT_MS. */
     private long longestOverRunMs = 0;
     private long overSinceMs = 0;
+    private boolean antiJamAtStart;
 
     @Override
     protected Alliance alliance() {
@@ -45,92 +52,87 @@ public class IntakeBench extends MatchOpMode {
     }
 
     @Override
+    protected void onInit() {
+        antiJamAtStart = Intake.ANTI_JAM_ENABLED;
+    }
+
+    @Override
     protected void onDecide() {
-        // Latched, not held: freeing a jam by hand takes both of them.
+        // Latched, not held: freeing a jam by hand takes both hands.
         if (gamepad1.aWasPressed()) robot.intake.in();
         if (gamepad1.bWasPressed()) robot.intake.out();
         if (gamepad1.xWasPressed()) robot.intake.idle();
         if (gamepad1.yWasPressed()) robot.intake.stop();
 
         if (gamepad1.leftBumperWasPressed()) Intake.ANTI_JAM_ENABLED = !Intake.ANTI_JAM_ENABLED;
-        if (gamepad1.rightBumperWasPressed()) clearPeaks();
-
-        if (gamepad1.dpadUpWasPressed()) Intake.STALL_CURRENT_AMPS += 0.5;
-        if (gamepad1.dpadDownWasPressed()) Intake.STALL_CURRENT_AMPS -= 0.5;
-        if (gamepad1.dpadRightWasPressed()) Intake.STALL_TIMEOUT_MS += 50;
-        if (gamepad1.dpadLeftWasPressed()) Intake.STALL_TIMEOUT_MS -= 50;
-    }
-
-    private void clearPeaks() {
-        peakAmps = 0;
-        peakVelocity = 0;
-        peakIdleVelocity = 0;
-        longestOverRunMs = 0;
-        overSinceMs = 0;
+        if (gamepad1.rightBumperWasPressed()) {
+            peakAmps = 0;
+            longestOverRunMs = 0;
+            overSinceMs = 0;
+        }
     }
 
     @Override
     protected void onAfterAct() {
-        double amps = robot.intake.getCurrentAmps();
-        double velocity = Math.abs(robot.intake.getVelocity());
-
-        // NaN is "not sampled": the current read only happens while the roller pulls in.
-        if (!Double.isNaN(amps)) {
-            if (amps > peakAmps) peakAmps = amps;
-
-            long now = System.currentTimeMillis();
-            if (amps >= Intake.STALL_CURRENT_AMPS) {
-                if (overSinceMs == 0) overSinceMs = now;
-                longestOverRunMs = Math.max(longestOverRunMs, now - overSinceMs);
-            } else {
-                overSinceMs = 0;
-            }
-        } else {
-            overSinceMs = 0;
+        Intake.Mode mode = robot.intake.getMode();
+        double power = robot.intake.powerFor(mode);
+        double velocity = robot.intake.getVelocity();
+        if (power != 0 && !robot.intake.isUnjamming()
+                && Math.signum(velocity) == Math.signum(power)
+                && Math.abs(velocity) >= MIN_TICKS_PER_SEC) {
+            passed.add(mode);
         }
 
-        if (robot.intake.getMode() == Intake.Mode.IN && velocity > peakVelocity) peakVelocity = velocity;
-        if (robot.intake.getMode() == Intake.Mode.IDLE && velocity > peakIdleVelocity) {
-            peakIdleVelocity = velocity;
+        // NaN is "not sampled": the current read only happens while the roller pulls in.
+        double amps = robot.intake.getCurrentAmps();
+        if (!Double.isNaN(amps) && amps > peakAmps) peakAmps = amps;
+        if (!Double.isNaN(amps) && amps >= Intake.STALL_CURRENT_AMPS) {
+            long now = System.currentTimeMillis();
+            if (overSinceMs == 0) overSinceMs = now;
+            longestOverRunMs = Math.max(longestOverRunMs, now - overSinceMs);
+        } else {
+            overSinceMs = 0;
         }
     }
 
     @Override
     protected void onTelemetry() {
         telemetry.addData("Loop", "%.0f Hz", robot.getLoopHz());
-        telemetry.addLine("A=in  B=out  X=idle  Y=off   LB=anti-jam   RB=clear peaks");
-        telemetry.addLine("dpad up/down = STALL_CURRENT_AMPS    left/right = STALL_TIMEOUT_MS");
+        telemetry.addLine("A=in  B=out  X=idle  Y=off   LB=anti-jam on/off   RB=clear peaks");
         telemetry.addLine();
 
-        telemetry.addData("Mode", "%s  (power %.2f)", robot.intake.getMode(),
-                robot.intake.powerFor(robot.intake.getMode()));
-        telemetry.addData("Velocity", "%.0f t/s   peak in %.0f   peak idle %.0f",
-                robot.intake.getVelocity(), peakVelocity, peakIdleVelocity);
-
+        Intake.Mode mode = robot.intake.getMode();
+        telemetry.addData("Mode", "%s  (power %.2f)", mode, robot.intake.powerFor(mode));
+        telemetry.addData("Velocity", "%.0f t/s", robot.intake.getVelocity());
         double amps = robot.intake.getCurrentAmps();
-        telemetry.addData("Current", "%s A   PEAK %.2f A",
-                Double.isNaN(amps) ? "not sampled" : String.format("%.2f", amps), peakAmps);
-        telemetry.addData("Over threshold", "longest unbroken run %d ms", longestOverRunMs);
-        telemetry.addLine();
-
+        telemetry.addData("Current", "%s   PEAK %.2f A",
+                Double.isNaN(amps) ? "not sampled" : String.format("%.2f A", amps), peakAmps);
         telemetry.addData("Anti-jam", "%s   suspect=%s unjamming=%s attempts=%d givenUp=%s",
                 Intake.ANTI_JAM_ENABLED ? "ON" : "OFF", robot.intake.isStallSuspected(),
                 robot.intake.isUnjamming(), robot.intake.getUnjamAttempts(),
                 robot.intake.hasGivenUpUnjamming());
         telemetry.addLine();
 
-        telemetry.addData("PASTE Intake.STALL_CURRENT_AMPS", "%.2f  (currently %.2f)",
-                peakAmps, Intake.STALL_CURRENT_AMPS);
-        telemetry.addData("PASTE Intake.STALL_TIMEOUT_MS", "> %d  (currently %d)",
-                longestOverRunMs, Intake.STALL_TIMEOUT_MS);
+        telemetry.addLine("Checks");
+        telemetry.addData("  IN", verdict(Intake.Mode.IN));
+        telemetry.addData("  OUT", verdict(Intake.Mode.OUT));
+        telemetry.addData("  IDLE", verdict(Intake.Mode.IDLE));
+        telemetry.addData("  current sampled", peakAmps > 0 ? "PASS" : "-  (run IN)");
+        telemetry.addLine("By eye: the roller AND the tunnel both turn; IN pulls a piece inward.");
         telemetry.addLine();
-        telemetry.addLine("1. clean capture, anti-jam ON  -> note PEAK");
-        telemetry.addLine("2. RB, anti-jam OFF, stall it  -> note PEAK; threshold goes between");
-        telemetry.addLine("CHECK: the roller AND the tunnel must both turn. One motor drives both.");
+        telemetry.addData("STALL_CURRENT_AMPS", "%.2f  (between a clean capture's PEAK and a stall's)",
+                Intake.STALL_CURRENT_AMPS);
+        telemetry.addData("STALL_TIMEOUT_MS", "%d  (must beat a clean capture's run over threshold: %d ms)",
+                Intake.STALL_TIMEOUT_MS, longestOverRunMs);
+    }
+
+    private String verdict(Intake.Mode mode) {
+        return passed.contains(mode) ? "PASS" : "-";
     }
 
     @Override
     protected void onStop() {
-        robot.stopMechanisms();
+        // No motor writes here: the SDK rejects them from stop() and zeroes the motors itself.
+        Intake.ANTI_JAM_ENABLED = antiJamAtStart;
     }
 }

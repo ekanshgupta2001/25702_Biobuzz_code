@@ -506,10 +506,9 @@ Every tuner OpMode: construct → `setPose(zero)` → `Thread.sleep(1000)` → `
 `setPose(zero)` → `update()` → `follow(...)` → loop `update()`; chain on `atParametricEnd()`.
 
 To remove AutoTune for competition, drop the `tuning` dependency (there is no runtime off switch).
-In this repo that is a Gradle property: `./gradlew -Ptuning :TeamCode:assembleDebug` builds the
-tuning APK; plain `assembleDebug` builds the competition APK without the dependency, and
-`TeamCode/build.gradle` excludes `pedro/Tuning.java` and `pedro/procedures/**` from that build so the
-sources that import it still compile.
+In this repo the dependency is always in the build (a team choice, 2026-09-30), so before an event it
+is removed by hand from `build.dependencies.gradle` together with `pedro/Tuning.java` and
+`pedro/procedures/**`, the sources that import it. See HANDOFF §4.
 
 **`@Tuner` factories run at Robot Controller start-up** (`TunerScanner` invokes every one to list
 it), so they must be `public static`, zero-arg, declared to return exactly `Procedure`, and must

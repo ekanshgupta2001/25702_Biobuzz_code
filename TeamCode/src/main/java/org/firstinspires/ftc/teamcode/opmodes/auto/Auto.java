@@ -27,8 +27,8 @@ import org.firstinspires.ftc.teamcode.util.time.MatchClock;
  *       first event if AutoTune has not happened yet.</li>
  * </ul>
  * There is no alliance selector and no lock: {@code BlueAuto} and {@code RedAuto} carry the side in
- * the OpMode name, so there is no way to start the wrong route and no "started UNLOCKED" state to
- * warn about.
+ * the OpMode name, so there is no way to start the wrong route. The side is also left in
+ * {@code PoseStorage} so Teleop's dpad alliance pick starts on it.
  *
  * <h2>The first TIP only needs three POLLEN</h2>
  * The up-CELL starts with 3 NECTAR and the robot pre-loads 4 POLLEN, and a HIVE tips on 3 POLLEN + 3
@@ -55,11 +55,6 @@ public abstract class Auto extends MatchOpMode {
     }
 
     @Override
-    protected final Alliance alliance() {
-        return side;
-    }
-
-    @Override
     protected final MatchClock.Period matchPeriod() {
         return MatchClock.Period.AUTONOMOUS;
     }
@@ -67,6 +62,7 @@ public abstract class Auto extends MatchOpMode {
     @Override
     protected void onInit() {
         Scheduler.schedule(robot.intake.defaultIdleCommand(), robot.shooter.defaultIdleCommand());
+        PoseStorage.saveAlliance(side);   // Teleop's alliance pick starts on this side
     }
 
     @Override

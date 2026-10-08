@@ -2,7 +2,6 @@ package org.firstinspires.ftc.teamcode.subsystems;
 
 import com.qualcomm.hardware.limelightvision.LLResult;
 import com.qualcomm.hardware.limelightvision.LLResultTypes;
-import com.qualcomm.hardware.limelightvision.LLStatus;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
@@ -81,16 +80,6 @@ public class Limelight {
     /** False once a call to the camera has failed: it is configured but not answering. */
     public boolean isConnected() {
         return !cameraFailed;
-    }
-
-    /** Temperature, frame rate, pipeline. Diagnostics only — another call over the wire. */
-    public LLStatus getStatus() {
-        try {
-            return limelight.getStatus();
-        } catch (RuntimeException e) {
-            cameraFailed = true;
-            return null;
-        }
     }
 
     /** True when the last frame carried a target and is fresh. */

@@ -1,14 +1,10 @@
 package org.firstinspires.ftc.teamcode.subsystems;
 
-import com.pedropathing.controllers.Controller;
-import com.pedropathing.controllers.PIDController;
 import com.pedropathing.drivetrain.DrivePowers;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.follower.ManualDrive;
 import com.pedropathing.ivy.Command;
-import com.pedropathing.ivy.behaviors.BlockedBehavior;
 import com.pedropathing.ivy.behaviors.EndCondition;
-import com.pedropathing.ivy.behaviors.InterruptedBehavior;
 import com.pedropathing.math.Pose;
 import com.pedropathing.paths.Path;
 import com.pedropathing.revhub.drivetrains.Mecanum;
@@ -17,11 +13,10 @@ import com.qualcomm.robotcore.hardware.HardwareMap;
 import org.firstinspires.ftc.teamcode.pedro.Constants;
 import org.firstinspires.ftc.teamcode.util.math.Angles;
 
-import java.util.function.DoubleSupplier;
 import java.util.function.Supplier;
 
 /**
- * The mecanum drivetrain: stick driving, pose, heading hold, the aim lock, and Pedro paths.
+ * The mecanum drivetrain: stick driving, pose, and Pedro paths.
  *
  * <h2>One motor layer</h2>
  * This class owns exactly one {@link Mecanum}, built from names and directions alone, and hands that
@@ -30,52 +25,24 @@ import java.util.function.Supplier;
  *   <li><b>Sticks always work.</b> With a follower they go through {@code follower.manual(...)},
  *       field-centric against the Pinpoint's heading. Without one they go straight to
  *       {@code mecanum.drive(...)}, robot-centric, because there is no pose to rotate against.</li>
- *   <li><b>Paths, the heading hold and the aim lock need the follower</b> and are inert until
+ *   <li><b>Paths and turns need the follower</b> and are inert until
  *       AutoTune has filled {@code Constants.localizerConfig} and {@code foresightConfig}.</li>
  * </ul>
  * There is deliberately no second drivetrain class for the untuned case. Two {@code Mecanum} objects
  * over four motors keep two independent {@code CachedMotor} power caches and fight; one instance is
  * the whole fix, and it is why this code no longer needs a rule about which layer may exist.
  *
- * <h2>Arbitration</h2>
- * This subsystem is an Ivy <em>resource</em>: every command that moves the robot declares
- * {@code requiring(drivetrain)}. {@link #driverControlCommand} sits at priority -1 with
- * {@link InterruptedBehavior#SUSPEND}, so scheduling a macro parks driver control and ending the
- * macro restores it. The one thing Ivy cannot do is stop the follower, which drives itself once
+ * <h2>Who drives it</h2>
+ * Teleop calls {@link #drive} directly every loop. Autonomous drives it through Ivy commands that
+ * declare {@code requiring(drivetrain)}. Ivy cannot stop the follower, which drives itself once
  * handed a path, so every path command hands control back in its {@code setEnd}.
  */
 public class Drivetrain {
-    public static int DRIVER_CONTROL_PRIORITY = -1;
-
-    /**
-     * Whether the robot holds its heading when the driver is not turning. Only as good as the
-     * localizer's heading; {@link #resetHeading()} is the driver's escape hatch.
-     */
-    public static boolean HEADING_HOLD_ENABLED = true;
-    /**
-     * Turn-stick magnitude above which the driver is considered to be steering. The stick arrives
-     * already shaped ({@code DriveScaling.shape}: raw deadband, then expo, then the slow scale), so
-     * noise is already zero and any non-zero value is intent. This is compared against the
-     * <em>shaped</em> value: 0.05 here threw away raw deflections up to ~0.28 and the hold fought the
-     * driver's small corrections.
-     */
-    public static double HEADING_HOLD_STICK_DEADBAND = 0.001;
-    /** Error is in RADIANS, so a gain of 1.5 maps 10 degrees (0.17 rad) to ~0.26 turn power. */
-    public static double HEADING_HOLD_P = 1.5;
-    public static double HEADING_HOLD_I = 0.0;
-    public static double HEADING_HOLD_D = 0.08;
-    public static double HEADING_HOLD_MAX_TURN = 0.4;
-    /** Below this error, stop correcting, or the robot hunts around the setpoint. */
-    public static double HEADING_HOLD_TOLERANCE_RAD = Math.toRadians(1.0);
-
     /**
      * Minimum time a started path or turn must run before it may report complete. A zero-length path
      * is at its parametric end on tick one and would otherwise read as a perfect zero-time run.
      */
     public static long MIN_PATH_MS = 60;
-    /** A turn that has not settled by then hands the sticks back anyway. */
-    public static long TURN_TIMEOUT_MS = 2500;
-    public static double TURN_TOLERANCE_RAD = Math.toRadians(2.0);
     /**
      * How long a freshly constructed Pinpoint spends recalibrating its IMU. A pose written before
      * that is lost (docs/01 A.9 gotcha 6), so a {@link #setPose} inside the window is repeated once by
@@ -92,7 +59,7 @@ public class Drivetrain {
     /**
      * Field heading the driver calls "forward", radians. Field-centric sticks are rotated by
      * (heading - this), so a blue driver standing behind the +X wall facing -X pushes the stick up
-     * and the robot drives -X. Season value from {@code game/Field.driverForwardHeading}; the aim lock
+     * and the robot drives -X. Season value from {@code game/Field.driverForwardHeading}; aiming
      * and every macro stay in the true field frame.
      */
     private double driverHeadingOffset = 0;
@@ -103,29 +70,15 @@ public class Drivetrain {
     /** How many times the pose estimate has been rewritten; anything derived from an older frame is stale. */
     private int poseWrites = 0;
 
-    private final PIDController headingController =
-            Controller.pid(HEADING_HOLD_P, HEADING_HOLD_I, HEADING_HOLD_D);
-    /** The heading being held, radians, or null while the driver is steering. */
-    private Double heldHeading = null;
-    /** External setpoint for the hold (an aim lock), or null. NaN from it means no opinion this loop. */
-    private DoubleSupplier aimLock = null;
-
     public Drivetrain(HardwareMap hardwareMap) {
         this.builtAtMs = System.currentTimeMillis();
         this.mecanum = Constants.createMecanum(hardwareMap);
         this.follower = Constants.create(hardwareMap, mecanum);
     }
 
-    /** True once AutoTune's configs exist, so paths, the heading hold and the aim lock are live. */
+    /** True once AutoTune's configs exist, so field-centric, the pose and paths are live. */
     public boolean hasFollower() {
         return follower != null;
-    }
-
-    /**
-     * The raw Pedro follower for path introspection, or {@code null} before tuning.
-     */
-    public Follower getFollower() {
-        return follower;
     }
 
     /**
@@ -188,10 +141,6 @@ public class Drivetrain {
     /**
      * Writes the pose estimate, at init or from an external fix.
      *
-     * <p>Also drops the held heading: the hold's setpoint was captured in the old heading frame, and
-     * keeping it across a frame change makes the controller chase a number that no longer means
-     * anything, rotating the robot by the size of the correction.
-     *
      * <p>A write inside {@link #LOCALIZER_SETTLE_MS} of construction lands during the Pinpoint's IMU
      * calibration and is lost, so it is repeated once by {@link #update()} after the window. If the
      * robot has already moved by then (START within a second of INIT), that second of motion is
@@ -204,7 +153,6 @@ public class Drivetrain {
             reapplyWhenSettled = !isLocalizerSettled();
             poseWrites++;
         }
-        releaseHeadingHold();
     }
 
     /**
@@ -219,14 +167,6 @@ public class Drivetrain {
     /** The pose estimate, or {@code null} before tuning (there is no localizer). */
     public Pose getPose() {
         return follower == null ? null : follower.pose();
-    }
-
-    public boolean isFollowingPath() {
-        return follower != null && follower.mode() == Follower.Mode.FOLLOW;
-    }
-
-    public boolean isHoldingPose() {
-        return follower != null && follower.mode() == Follower.Mode.HOLD;
     }
 
     /** Whether the robot is within the given distance of a pose on each axis. False without a pose. */
@@ -256,88 +196,11 @@ public class Drivetrain {
 
     /**
      * Treats the robot's current facing as "away from the driver wall", keeping its x/y. The escape
-     * hatch when odometry has drifted: face away from your wall and press it. Also the one-button
-     * recovery after a hard collision, since the aim law and the shooter's distance lookup are both
-     * pose-derived.
+     * hatch when odometry has drifted: face away from your wall and press it.
      */
     public void resetHeading() {
         Pose p = getPose();
-        // setPose() releases the heading hold; without that the hold would still aim at the heading
-        // this call just discarded and would spin the robot back toward it.
         if (p != null) setPose(new Pose(p.x(), p.y(), driverHeadingOffset));
-    }
-
-    // ---- Heading hold ----
-
-    /**
-     * Replaces a centred turn stick with a correction back toward the held heading.
-     *
-     * <p>A mecanum robot does not track straight on its own. <b>It must never fight the driver:</b>
-     * any deliberate turn input hands control straight back and re-captures the heading on release,
-     * so the robot holds wherever the driver left it.
-     */
-    private double applyHeadingHold(double turn) {
-        if (!HEADING_HOLD_ENABLED || follower == null) {
-            heldHeading = null;
-            return turn;
-        }
-        if (Math.abs(turn) >= HEADING_HOLD_STICK_DEADBAND) {
-            heldHeading = null;
-            return turn;
-        }
-        Pose pose = follower.pose();
-        if (pose == null) {
-            heldHeading = null;
-            return turn;
-        }
-        double locked = aimLock == null ? Double.NaN : aimLock.getAsDouble();
-        if (!Double.isNaN(locked)) {
-            // An aim lock supplies the setpoint every loop; the correction starts at once.
-            if (heldHeading == null) resetHeadingController();
-            heldHeading = Angles.normalizeAngle(locked);
-        } else if (heldHeading == null) {
-            heldHeading = pose.heading();
-            resetHeadingController();
-            return 0;
-        }
-        // Fed as an error rather than a position, so the controller never sees the raw angles and the
-        // 0/2pi seam cannot produce a full-speed spin the short way round.
-        double error = Angles.angleError(pose.heading(), heldHeading);
-        if (Math.abs(error) <= HEADING_HOLD_TOLERANCE_RAD) return 0;
-        double correction = headingController.calculate(0, error);
-        return Math.max(-HEADING_HOLD_MAX_TURN, Math.min(HEADING_HOLD_MAX_TURN, correction));
-    }
-
-    private void resetHeadingController() {
-        headingController.reset();
-        headingController.kP = HEADING_HOLD_P;
-        headingController.kI = HEADING_HOLD_I;
-        headingController.kD = HEADING_HOLD_D;
-    }
-
-    /** Forgets the held heading, so the next centred-stick loop captures a fresh one. */
-    public void releaseHeadingHold() {
-        heldHeading = null;
-    }
-
-    /**
-     * Locks the heading hold to an externally supplied field heading (radians): aiming a fixed
-     * shooter while the driver keeps translating. Read on every centred-stick loop; NaN means no
-     * opinion, which falls back to capture-and-hold. A deliberate turn still passes straight through
-     * and the lock resumes on release.
-     */
-    public void setAimLock(DoubleSupplier fieldHeadingRad) {
-        aimLock = fieldHeadingRad;
-        heldHeading = null;
-    }
-
-    public void clearAimLock() {
-        aimLock = null;
-        heldHeading = null;
-    }
-
-    public boolean isAimLocked() {
-        return aimLock != null;
     }
 
     /**
@@ -349,15 +212,6 @@ public class Drivetrain {
         if (follower == null) return;
         Pose here = follower.pose();
         if (here != null) follower.hold(here.withHeading(headingRadians), false);
-    }
-
-    public boolean isHeadingHoldActive() {
-        return heldHeading != null;
-    }
-
-    /** The heading being held in radians, or NaN when not holding. */
-    public double getHeldHeading() {
-        return heldHeading == null ? Double.NaN : heldHeading;
     }
 
     /**
@@ -379,35 +233,6 @@ public class Drivetrain {
     // ---- Ivy commands ----
 
     /**
-     * The default command: feeds stick values to the drivetrain whenever nothing else owns it.
-     * Schedule once at OpMode init.
-     *
-     * <p>Priority -1 plus {@link InterruptedBehavior#SUSPEND} is what makes macros cancellable for
-     * free; {@link BlockedBehavior#QUEUE} keeps it from being silently dropped if something already
-     * holds the resource. The behaviour lives in {@code setExecute} because the Scheduler's resume
-     * path re-adds a suspended command without re-calling {@code start()}. The following-path guard
-     * is a safety net: a manual write would abandon a path mid-flight.
-     */
-    public Command driverControlCommand(DoubleSupplier forward, DoubleSupplier strafe,
-                                        DoubleSupplier turn) {
-        return Command.build()
-                .setExecute(() -> {
-                    if (isFollowingPath()) return;
-                    drive(forward.getAsDouble(), strafe.getAsDouble(),
-                            applyHeadingHold(turn.getAsDouble()));
-                })
-                .setDone(() -> false)
-                .setEnd(ec -> {
-                    releaseHeadingHold();
-                    drive(0, 0, 0);
-                })
-                .setPriority(DRIVER_CONTROL_PRIORITY)
-                .setInterruptedBehavior(InterruptedBehavior.SUSPEND)
-                .setBlockedBehavior(BlockedBehavior.QUEUE)
-                .requiring(this);
-    }
-
-    /**
      * Follows a path that is not known until the command starts.
      *
      * <p>The supplier runs in {@code start()}, so the path is built from where the robot is
@@ -419,7 +244,7 @@ public class Drivetrain {
      * With {@code holdEnd = true} a natural end leaves the follower station-keeping at the path's end
      * pose, commanded explicitly so the robot does not stop at the 97.5% parametric threshold while
      * Pedro's tracker catches up. With {@code holdEnd = false}, or on any interruption,
-     * {@link #cancelPath()} runs and control goes back to the driver. Pedro's own
+     * {@link #cancelPath()} runs and the follower goes back to manual. Pedro's own
      * {@code PedroCommands.follow} does neither, which is why this exists.
      */
     public Command followLazyCommand(Supplier<Path> pathSupplier, boolean holdEnd) {
@@ -463,34 +288,9 @@ public class Drivetrain {
     }
 
     /**
-     * Turns in place to an absolute field heading, then hands control back.
-     *
-     * <p>Pedro 3 has no turn primitive; a hold at the current position with the new heading is the
-     * same thing. Done within {@link #TURN_TOLERANCE_RAD} or after {@link #TURN_TIMEOUT_MS}; either
-     * way {@code setEnd} releases the hold, because a snap is something a driver does mid-drive and
-     * wants the sticks back from immediately.
-     */
-    public Command turnToCommand(double headingRadians) {
-        if (follower == null) return finishedCommand();
-        final long[] startedAt = new long[1];
-        return Command.build()
-                .setStart(() -> {
-                    startedAt[0] = System.currentTimeMillis();
-                    holdHeading(headingRadians);
-                })
-                .setDone(() -> {
-                    long elapsed = System.currentTimeMillis() - startedAt[0];
-                    if (elapsed < MIN_PATH_MS) return false;
-                    return atHeading(headingRadians, TURN_TOLERANCE_RAD) || elapsed >= TURN_TIMEOUT_MS;
-                })
-                .setEnd(ec -> cancelPath())
-                .requiring(this);
-    }
-
-    /**
-     * Drives at fixed robot-frame powers for {@code ms}, then hands control back. Bypasses
-     * field-centric mixing and the heading hold on purpose, and works with or without a follower,
-     * which is what lets the first-event autonomous leave the wall before anything is tuned.
+     * Drives at fixed powers for {@code ms}, then hands control back. Works with or without a
+     * follower, which is what lets the first-event autonomous leave the wall before anything is
+     * tuned. It goes through {@link #drive}, so once tuned the powers are field-centric.
      */
     public Command driveForMsCommand(double forward, double strafe, double turn, long ms) {
         final long[] startedAt = new long[1];

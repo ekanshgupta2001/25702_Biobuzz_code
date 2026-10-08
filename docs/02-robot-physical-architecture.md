@@ -70,8 +70,8 @@ Design constraints the software inherits:
 
 - **The shooter is fixed and fires out the rear, so the drivetrain aims.** The robot's heading must be
   the bearing to the target CELL minus the firing offset (`Shooter.HEADING_OFFSET_RAD`, π). In teleop
-  that is an aim-lock setpoint inside the heading hold, so the driver keeps translating while the robot
-  points the shooter (`Macros.aimHeading`); in autonomous it is a turn in place (`Macros.aimAt`).
+  that is the aim trigger replacing the turn stick (`Teleop.aimTurn`), so the driver keeps translating
+  while the robot points the shooter; in autonomous it is a turn in place (`Macros.aimAndShootAll`).
 - **Nothing in the path can be counted.** There is no sensor between the funnel and the flywheel, so no
   code anywhere claims to know how many pieces are aboard. "Shoot one" is one tunnel pulse; "shoot all"
   is `Macros.PIECES_PER_LOAD` (4) pulses; `Macros.getShotsFired()` is a count of pulses. **The operator
@@ -91,7 +91,7 @@ Design constraints the software inherits:
 | Mecanum drivetrain | 4 × `DcMotorEx` | goBILDA Pinpoint + 2 pods (the Pinpoint's own IMU supplies heading) | `subsystems/Drivetrain` — one Pedro `Mecanum`, plus a `Follower` once AutoTune has run |
 | Front funnel | none | none | none (geometry only) |
 | Roller **and** tunnel | 1 × `DcMotorEx`, open-loop power | motor current only, and only while pulling | `subsystems/Intake` |
-| Flywheel pair | 2 × `DcMotorEx`, open-loop power | one flywheel's encoder velocity | `subsystems/Shooter` (+ the `Drivetrain` aim lock) |
+| Flywheel pair | 2 × `DcMotorEx`, open-loop power | one flywheel's encoder velocity | `subsystems/Shooter` (+ the drivetrain heading, which aims it) |
 | Limelight 3A | none | the camera | `subsystems/Limelight` |
 | — | — | **no piece sensors of any kind** | — |
 
@@ -161,7 +161,7 @@ Because the CAD is a parts layout, **every one of these is a placeholder**:
 | the field frame's HIVE and CELL positions | `game/Field` (INFERRED, from docs/04) | Onshape field CAD, then a tape measure at the first event |
 | start pose, shooting spot, park | `game/FieldPoses` | drive the real field; correct the BLUE value and red follows |
 | robot half-length, wall standoffs | `FieldPoses.ROBOT_HALF_LENGTH_INCHES` | measure the built chassis with pre-loads in |
-| flywheel speed per distance | `Shooter`'s distance table | `Bench: Shooter`, four distances, HANDOFF §8 |
+| flywheel speed per distance | `Shooter`'s distance table | Teleop's fixed-speed mode, four distances, HANDOFF §8 |
 | camera yaw, and its height above the tiles | `Limelight.CAMERA_YAW_OFFSET_DEGREES` (0 = front) | a tag dead ahead must read tx ≈ 0 |
 | which way "off the wall" is in autonomous | `Auto.LEAVE_POWER`, `LEAVE_MS` | the practice field |
 

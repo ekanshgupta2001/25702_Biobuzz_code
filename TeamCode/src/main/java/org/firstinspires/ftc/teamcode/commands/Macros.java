@@ -16,7 +16,6 @@ import org.firstinspires.ftc.teamcode.subsystems.Limelight;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.util.math.Angles;
 
-import java.util.Locale;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
@@ -25,8 +24,8 @@ import java.util.function.Supplier;
  *
  * <h2>Every macro is bounded and reports an outcome</h2>
  * Each is built through {@link #reporting}, so a timeout or an abort always leaves a terminal
- * {@link Outcome} rather than {@code RUNNING} for ever. The drivers read the outcome through the
- * rumble patterns, which is the only channel that works mid-match.
+ * {@link Outcome} rather than {@code RUNNING} for ever, shown on the telemetry card by
+ * {@link #getStatus()}.
  *
  * <h2>The aim law, and why a front camera helps a rear shooter</h2>
  * The flywheel is bolted to the chassis firing out the rear ({@link Shooter#HEADING_OFFSET_RAD}), so
@@ -66,8 +65,6 @@ public class Macros {
      */
     public static long AIM_BIAS_MAX_AGE_MS = 5000;
 
-    public static long SNAP_TIMEOUT_MS = 1500;
-    public static double SNAP_TOLERANCE_DEGREES = 3.0;
     public static long DRIVE_TO_TIMEOUT_MS = 6000;
     public static double DRIVE_TO_TOLERANCE_INCHES = 3.0;
     /**
@@ -218,21 +215,6 @@ public class Macros {
                 && robot.drivetrain.getPoseWrites() == aimBiasPoseWrites;
     }
 
-    /** The correction in force, degrees (positive = the tags say the target is further CCW), or NaN. */
-    public double getAimBiasDegrees() {
-        return hasAimBias() ? Math.toDegrees(aimBias) : Double.NaN;
-    }
-
-    /**
-     * Turns in place until the shooter faces {@code target} (tag-refined when one is visible), then
-     * hands the sticks back.
-     */
-    public Command aimAt(Pose target, int minTagId, int maxTagId) {
-        return reporting("aim",
-                Waits.bounded(aimCore(target, minTagId, maxTagId), AIM_TIMEOUT_MS),
-                Outcome.SUCCESS, Outcome.TIMED_OUT, () -> aimed(target, minTagId, maxTagId));
-    }
-
     /**
      * Pedro's hold as the turn primitive, re-issued whenever the wanted heading moves by more than
      * {@link #AIM_REISSUE_DEGREES} so a newly visible tag can refine it. {@code setEnd} hands control
@@ -271,23 +253,12 @@ public class Macros {
                 && robot.drivetrain.atHeading(wanted, Math.toRadians(AIM_TOLERANCE_DEGREES));
     }
 
-    // ---- Heading and position ----
-
-    /** Turns in place to an absolute heading; hands the follower back either way. */
-    public Command snapToHeading(double headingRadians) {
-        String name = String.format(Locale.US, "snapTo %.0f",
-                Math.toDegrees(Angles.normalizeAngle(headingRadians)));
-        return reporting(name,
-                Waits.bounded(robot.drivetrain.turnToCommand(headingRadians), SNAP_TIMEOUT_MS),
-                Outcome.SUCCESS, Outcome.TIMED_OUT,
-                () -> robot.drivetrain.atHeading(headingRadians, Math.toRadians(SNAP_TOLERANCE_DEGREES)));
-    }
+    // ---- Position ----
 
     /**
      * Drives a straight Pedro path from the current pose to {@code target}, then hands the follower
      * back. The path is built at start, so the target may be computed any time earlier.
-     * {@code holdEnd} is false: in teleop the driver-control default resumes the moment this releases
-     * the drivetrain, and in auto the next leg follows.
+     * {@code holdEnd} is false: in auto the next leg follows straight on.
      */
     public Command driveTo(Pose target) {
         return reporting("driveTo",

@@ -35,16 +35,11 @@ import java.util.function.Supplier;
 public class Intake {
     public static double IN = 1.0;
     public static double OUT = -1.0;
-    /**
-     * Enough to hold pieces against the tunnel without grinding them, for carrying a load between
-     * scoring positions. Borrowed from the reference robot's {@code idle = 0.5}; measure it.
-     */
-    public static double IDLE = 0.35;
 
     /**
      * A 117 RPM 5203 stalls near 9 A and the roller pulling a piece in sits at 5-6 A for a moment,
-     * so a 5 A threshold spits pieces mid-capture. Measure both with {@code Bench: Intake} — the
-     * peak of a clean capture, then of a deliberate jam — and set this between them.
+     * so a 5 A threshold spits pieces mid-capture. Read the current on {@code Bench: Intake} — a
+     * clean capture, then a deliberate jam — and set this between them.
      */
     public static double STALL_CURRENT_AMPS = 7.0;
     public static long STALL_TIMEOUT_MS = 300;
@@ -62,7 +57,7 @@ public class Intake {
 
     public static int DEFAULT_IDLE_PRIORITY = -1;
 
-    public enum Mode { OFF, IN, OUT, IDLE }
+    public enum Mode { OFF, IN, OUT }
 
     private final DcMotorEx motor;
     private Mode mode = Mode.OFF;
@@ -86,7 +81,6 @@ public class Intake {
 
     public void in()    { setMode(Mode.IN); }
     public void out()   { setMode(Mode.OUT); }
-    public void idle()  { setMode(Mode.IDLE); }
     public void stop()  { setMode(Mode.OFF); }
 
     private void setMode(Mode next) {
@@ -108,7 +102,6 @@ public class Intake {
         switch (m) {
             case IN:   return IN;
             case OUT:  return OUT;
-            case IDLE: return IDLE;
             default:   return 0;
         }
     }
@@ -120,18 +113,6 @@ public class Intake {
 
     public double getVelocity() {
         return motor.getVelocity();
-    }
-
-    public boolean isStallSuspected() {
-        return jamDetector.isStallSuspected();
-    }
-
-    public boolean isUnjamming() {
-        return jamDetector.isUnjamming(System.currentTimeMillis());
-    }
-
-    public int getUnjamAttempts() {
-        return jamDetector.getAttempts();
     }
 
     /** True once anti-jam has exhausted {@link #MAX_UNJAM_ATTEMPTS}. The driver should reverse it by hand. */
@@ -190,10 +171,6 @@ public class Intake {
                 .requiring(this);
     }
 
-    public Command inCommand()   { return holdMode(this::in); }
-    public Command outCommand()  { return holdMode(this::out); }
-    public Command idleCommand() { return holdMode(this::idle); }
-
     /**
      * Schedule once at OpMode init. Suspends when a real command takes the resource and resumes when
      * that command ends. Logic in {@code setExecute} because the Scheduler's resume path does not
@@ -208,14 +185,6 @@ public class Intake {
                 .setPriority(DEFAULT_IDLE_PRIORITY)
                 .setInterruptedBehavior(InterruptedBehavior.SUSPEND)
                 .setBlockedBehavior(BlockedBehavior.QUEUE)
-                .requiring(this);
-    }
-
-    private Command holdMode(Runnable start) {
-        return Command.build()
-                .setStart(start)
-                .setDone(() -> false)
-                .setEnd(ec -> stop())
                 .requiring(this);
     }
 }

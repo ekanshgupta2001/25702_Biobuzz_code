@@ -9,21 +9,10 @@ import com.pedropathing.math.Pose;
  * drive, which is the mode that depends most on a correct heading. The driver's first stick input
  * then sends the robot in an arbitrary direction.
  *
- * <h2>The pose is the only thing that crosses the gap</h2>
- * This used to carry an alliance and a piece count as well. Neither has anywhere to come from now:
- *
- * <ul>
- *   <li>The alliance is baked into the OpMode class — {@code BlueTeleop} and {@code RedTeleop} are
- *       separate entries on the Driver Station — so it is chosen by the driver at the moment of
- *       selection and cannot be inherited stale from whatever ran last. That is strictly safer than
- *       surviving an OpMode switch.</li>
- *   <li>There are no game-piece sensors on the robot and nothing counts pieces, so there is no
- *       count to hand over.</li>
- * </ul>
- *
- * <p>It also carried a start position that was written on every save and read by nothing: no getter
- * for it ever existed. Handoff state that no one reads is a lie about what the handoff contains, so
- * it is gone with the rest.
+ * <h2>The alliance rides along, but only as a default</h2>
+ * Autonomous records its side so Teleop's init can start its dpad alliance pick on it. The driver
+ * still sees the alliance on the init card and changes it with the dpad, so a stale value from an
+ * earlier run is one button press away from fixed.
  *
  * <h2>Lifetime</h2>
  * Static state, so it survives between OpMode runs but <em>not</em> a Robot Controller restart or an
@@ -36,6 +25,7 @@ import com.pedropathing.math.Pose;
  */
 public final class PoseStorage {
     private static volatile Pose pose = null;
+    private static volatile Alliance alliance = null;
 
     private PoseStorage() {}
 
@@ -54,8 +44,24 @@ public final class PoseStorage {
         return pose != null;
     }
 
-    /** Forgets the stored pose. Call when starting a genuinely new match. */
+    /** Forgets the pose only. Teleop calls this once it has used it. */
+    public static void clearPose() {
+        pose = null;
+    }
+
+    /** Records which side autonomous ran on. */
+    public static void saveAlliance(Alliance side) {
+        alliance = side;
+    }
+
+    /** The side the last autonomous ran on, or {@code fallback} if none has run. */
+    public static Alliance getAlliance(Alliance fallback) {
+        return alliance == null ? fallback : alliance;
+    }
+
+    /** Forgets the stored pose and alliance. Call when starting a genuinely new match. */
     public static void clear() {
         pose = null;
+        alliance = null;
     }
 }

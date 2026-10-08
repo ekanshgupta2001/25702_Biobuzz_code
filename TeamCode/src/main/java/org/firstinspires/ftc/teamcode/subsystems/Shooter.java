@@ -11,6 +11,7 @@ import com.qualcomm.robotcore.hardware.HardwareMap;
 import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
 
 import java.util.Locale;
+import java.util.function.BooleanSupplier;
 
 /**
  * The rear-firing shooter: two motors on GT2/HTD belts driving a counter-rotating pair of 2.9 in
@@ -32,7 +33,7 @@ import java.util.Locale;
  * recovery slow and then overshoot. {@code kV} carries the steady-state speed, {@code kP} closes
  * what is left of the gap, {@code kS} pays for belt and bearing drag. The three values are a
  * competition-proven reference robot's, for the same wheel size — a place to start measuring with
- * {@code Bench: Shooter}, not an answer.
+ * the Shooter Tuner on the Pedro tuning site, not an answer.
  *
  * <h2>Arming, not spinning up</h2>
  * The wheel is either holding {@link #getTarget()} or off; there is no idle speed, because a wheel
@@ -42,8 +43,8 @@ import java.util.Locale;
 public class Shooter {
     /**
      * The one gain set: {@code kV} is power per tick per second, {@code kP} power per tick per second
-     * of error, {@code kS} the power that just overcomes drag. Tune in that order — raise {@code kV}
-     * until the wheel sits on its target, then {@code kP} until a shot recovers without hunting.
+     * of error, {@code kS} the power that just overcomes drag. Tune them with the Shooter Tuner on the
+     * Pedro tuning site (http://192.168.43.1:10158), which reports the spin-up time for each set.
      */
     public static double kS = 0.08, kV = 0.00039, kP = 0.01;
 
@@ -77,7 +78,7 @@ public class Shooter {
 
     /**
      * Distance to the CELL, inches, against the speed that scores from there. <b>Every number below
-     * is a placeholder.</b> Measure them with {@code Bench: Shooter}: park at a distance, raise the
+     * is a placeholder.</b> Measure them in Teleop's fixed-speed mode: park at a distance, trim the
      * speed until the piece drops in the middle of the CELL, write the pair down, move on.
      *
      * <p>A table, and not a fit, on purpose. The reference team fitted a line to their measurements,
@@ -94,9 +95,6 @@ public class Shooter {
     private final DcMotorEx right;
 
     private boolean armed = false;
-    /** Open-loop bench mode: {@link #update()} writes {@link #openLoopPower} and nothing else. */
-    private boolean openLoop = false;
-    private double openLoopPower = 0;
     private double target = TARGET_TICKS_PER_SEC;
     private double lastWritten = Double.NaN;
 
@@ -189,65 +187,9 @@ public class Shooter {
         return TICKS_PER_SEC[TICKS_PER_SEC.length - 1];
     }
 
-    /**
-     * Runs the flywheel at a raw power with the closed loop switched OFF. This is how
-     * {@code Bench: Shooter} measures {@link #kS} (the lowest power the wheel turns at) and
-     * {@link #kV} (that power divided by the settled velocity) — neither is measurable while the
-     * controller is correcting.
-     *
-     * <p>It sets a mode rather than writing the motor, so {@link #update()} remains the only thing
-     * that touches hardware. A bench that held its own {@code DcMotorEx} would give the port a second
-     * power cache, and {@code Robot.stopMechanisms()} would no longer be able to stop it.
-     */
-    public void setOpenLoopPower(double power) {
-        openLoop = true;
-        armed = false;
-        openLoopPower = power;
-    }
-
-    /** Leaves open-loop mode and stops the wheel. */
-    public void endOpenLoop() {
-        openLoop = false;
-        openLoopPower = 0;
-        armed = false;
-    }
-
-    public boolean isOpenLoop() {
-        return openLoop;
-    }
-
-    /** The power {@link #update()} last actually wrote. NaN before the first write. */
-    public double getLastWritten() {
-        return lastWritten;
-    }
-
-    /**
-     * The opposing flywheel's velocity. The pair counter-rotates, so with
-     * {@link #SECOND_MOTOR_REVERSED} correct both read the same sign: a steady mismatch means they
-     * are fighting and the belt or the direction is wrong.
-     */
-    public double getSecondVelocity() {
-        return right.getVelocity();
-    }
-
-    /** What the distance table would command, without setting anything. For a bench card. */
-    public double tableTargetFor(double inches) {
-        return interpolate(inches);
-    }
-
-    /**
-     * Re-applies {@link #SECOND_MOTOR_REVERSED} to the motor. The constructor reads it once, so a
-     * bench that flips the static has to call this for the change to reach the hardware.
-     */
-    public void applySecondMotorDirection() {
-        right.setDirection(SECOND_MOTOR_REVERSED
-                ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
-    }
-
     /** Writes hardware. Called once per loop from {@code Robot.writeActuators()}, after commands run. */
     public void update() {
-        if (openLoop) write(openLoopPower);
-        else if (armed) write(kV * target + kP * (target - getVelocity()) + kS);
+        if (armed) write(kV * target + kP * (target - getVelocity()) + kS);
         else write(0);
     }
 
@@ -283,12 +225,6 @@ public class Shooter {
     }
 
     /**
-     * Schedule once at OpMode init: disarms whenever nothing else owns the shooter. The logic is in
-     * {@code setExecute} because the Scheduler's resume path does not re-call {@code start()};
-     * {@link BlockedBehavior#QUEUE} so it is not silently dropped if something already holds the
-     * shooter at init.
-     */
-    /**
      * The operator's flywheel toggle, as a default command: it re-reads {@code armed} every loop
      * rather than being re-scheduled on every press. Ivy has no duplicate guard, so re-scheduling
      * would re-run {@code start()} every loop; and because Ivy <em>ends</em> rather than suspends a
@@ -296,7 +232,7 @@ public class Shooter {
      * after every shot. At priority -1 with {@code SUSPEND} a shooting cycle's own hold preempts this
      * and it resumes by itself, still armed.
      */
-    public Command armedControlCommand(java.util.function.BooleanSupplier armedWanted) {
+    public Command armedControlCommand(BooleanSupplier armedWanted) {
         return Command.build()
                 .setExecute(() -> {
                     if (armedWanted.getAsBoolean()) arm();
@@ -305,11 +241,17 @@ public class Shooter {
                 .setDone(() -> false)
                 .setEnd(ec -> disarm())
                 .setPriority(DEFAULT_IDLE_PRIORITY)
-                .setInterruptedBehavior(com.pedropathing.ivy.behaviors.InterruptedBehavior.SUSPEND)
-                .setBlockedBehavior(com.pedropathing.ivy.behaviors.BlockedBehavior.QUEUE)
+                .setInterruptedBehavior(InterruptedBehavior.SUSPEND)
+                .setBlockedBehavior(BlockedBehavior.QUEUE)
                 .requiring(this);
     }
 
+    /**
+     * Autonomous's default: disarms whenever nothing else owns the shooter. The logic is in
+     * {@code setExecute} because the Scheduler's resume path does not re-call {@code start()};
+     * {@link BlockedBehavior#QUEUE} so it is not silently dropped if something already holds the
+     * shooter at init.
+     */
     public Command defaultIdleCommand() {
         return Command.build()
                 .setExecute(this::disarm)

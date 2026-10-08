@@ -9,6 +9,7 @@ import com.pedropathing.tuning.autotune.Tuner;
 import org.firstinspires.ftc.teamcode.pedro.procedures.ForesightTuner;
 import org.firstinspires.ftc.teamcode.pedro.procedures.MecanumTuner;
 import org.firstinspires.ftc.teamcode.pedro.procedures.PinpointTuner;
+import org.firstinspires.ftc.teamcode.pedro.procedures.ShooterTuner;
 import org.firstinspires.ftc.teamcode.pedro.procedures.Tests;
 
 /**
@@ -21,6 +22,9 @@ import org.firstinspires.ftc.teamcode.pedro.procedures.Tests;
  * <p>Tuning order (docs/01 section A.7): Mecanum Tuner → Tests/Driving → Pinpoint Tuner →
  * Tests/Odometry → Foresight Tuner → Tests/Hold, Line, Curve. Each tuner ends with a code block to
  * paste into {@link Constants}. The web UI is {@code http://192.168.43.1:10158} on the robot's Wi-Fi.
+ *
+ * <p>The Shooter Tuner is ours, not the Quickstart's: it times flywheel spin-ups for kS / kV / kP and
+ * ends with a block to paste into {@code Shooter.java}. This site is the only tuning tool in the repo.
  *
  * <p>BIOBUZZ R704: AutoTune's web servers are always bound while the library is on the classpath, so
  * before an event this file, {@code pedro/procedures/*} and the {@code tuning} dependency are removed
@@ -57,6 +61,12 @@ public class Tuning {
                 h -> new Mecanum(h, Constants.drivetrainConfig),
                 Constants.localizerConfig == null ? null : h -> new PinpointLocalizer(h, Constants.localizerConfig),
                 Constants.foresightConfig == null ? null : () -> new Foresight(Constants.foresightConfig));
+    }
+
+    /** Flywheel spin-up timing, for {@code Shooter.kS / kV / kP}. Needs no Pedro config. */
+    @Tuner
+    public static Procedure shooterTuner() {
+        return new ShooterTuner();
     }
 
     /** A listed tuner that, when run, says what to do instead of failing with a NullPointerException. */

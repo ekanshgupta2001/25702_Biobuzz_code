@@ -9,7 +9,6 @@ import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
 import org.firstinspires.ftc.teamcode.subsystems.Intake;
 import org.firstinspires.ftc.teamcode.subsystems.Limelight;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
-import org.firstinspires.ftc.teamcode.util.field.Alliance;
 import org.firstinspires.ftc.teamcode.util.time.MatchClock;
 
 import java.util.ArrayList;
@@ -52,9 +51,6 @@ public class Robot {
     public final Limelight limelight;
     public final Macros macros;
 
-    /** Which side we are on. Fixed by the OpMode class, so it can never be stale or unconfirmed. */
-    public final Alliance alliance;
-
     private MatchClock matchClock;
 
     private final List<LynxModule> hubs;
@@ -68,9 +64,7 @@ public class Robot {
     private int loopsSinceStamp = 0;
     private double loopMs = 0;
 
-    public Robot(HardwareMap hardwareMap, Alliance alliance) {
-        this.alliance = alliance;
-
+    public Robot(HardwareMap hardwareMap) {
         // MANUAL bulk caching batches every encoder and current read on a hub into one bus
         // transaction per loop. Without it each getVelocity()/getCurrent() is its own USB round trip.
         hubs = hardwareMap.getAll(LynxModule.class);

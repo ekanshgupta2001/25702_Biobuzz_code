@@ -1,6 +1,7 @@
 # HANDOFF — FTC Team 25702 BIOBUZZ Robot Code
 
-State as of **2026-09-27**, after the rebase onto the real robot. Read this first: it says what
+State as of **2026-10-07**: the rebase onto the real robot (2026-09-27), then Teleop and the tests
+simplified (2026-10-07). Read this first: it says what
 exists, what does not, why, and what to do next. Everything here is backed by a file in the repo or a
 measurement you can repeat.
 
@@ -14,8 +15,8 @@ roller, carries them down a tunnel, and launches them out of the **rear** into a
 
 Stack: **Pedro Pathing 3.0.0** (`revhub` + `core`), **Ivy 1.1.1** command scheduler, **AutoTune**
 (`tuning:1.0.1`), FTC SDK **11.2.1**, Gradle 9.1.0, Java 8 source level.
-**No Panels. FTC Dashboard and AutoTune are in every build right now, so the APK is NOT match legal
-(R704)** until they are stripped (§4).
+**No Panels, no FTC Dashboard: AutoTune (the Pedro tuning site) is the only tuning tool. It is in every
+build, so the APK is NOT match legal (R704)** until it is stripped (§4).
 
 ### The robot, from the CAD
 
@@ -48,24 +49,23 @@ iterations**. They have no code and should not get any.
 
 | Layer | Files | Lines | Status |
 |---|---|---|---|
-| `Robot.java` | 1 | 208 | composition root |
-| `subsystems/` | 4 | 1,210 | Drivetrain, Intake, Shooter, Limelight |
-| `commands/` | 3 | 541 | Macros, Shoot, Waits |
-| `opmodes/` | 13 | 1,786 | one base, teleop ×2 + Controls, auto ×3, SelfTest + four benches |
-| `game/`, `util/` | 10 | 805 | field frame, poses, clock, jam detector, maths |
-| `pedro/` | 2 | 178 | Constants + Tuning registration |
-| `pedro/procedures/` | 4 | 2,100 | vendored AutoTune; **0 bytes in the match APK** |
+| `Robot.java` | 1 | 203 | composition root |
+| `subsystems/` | 4 | 910 | Drivetrain, Intake, Shooter, Limelight |
+| `commands/` | 3 | 513 | Macros, Shoot, Waits (used by Auto and Teleop's shot buttons) |
+| `opmodes/` | 8 | 774 | Teleop (one OpMode), Auto ×3 + its base, three benches |
+| `game/`, `util/` | 9 | 748 | field frame, poses, clock, jam detector, angles |
+| `pedro/` | 2 | 188 | Constants + Tuning registration |
+| `pedro/procedures/` | 5 | 2,212 | the four Quickstart AutoTune procedures + our Shooter Tuner; stripped before events |
 
-Team code, excluding the vendored procedures: **4,732 lines across 33 files**, down from 7,730 across
-53. Both APKs build. The competition APK contains **zero** AutoTune or Dashboard references across all nineteen dex
-files — verified by scanning dex strings, not by trusting the Gradle exclusion.
+Team code, excluding the procedures: **3,336 lines across 27 files**, down from 4,732 across 33 before
+the 2026-10-07 simplification. The APK builds.
 
 **There is no test suite and none is planned.** The JVM suite was deleted in `0efa320`. Verification is
 the compile gate plus §8's on-robot sequence.
 
-Driver Station OpModes: `Teleop BLUE`, `Teleop RED`, `Auto BLUE`, `Auto RED` (group **Main**);
-`Bench: Intake`, `Bench: Drive`, `Bench: Limelight`, `SelfTest` (group **Bench**), plus `Bench: Shooter`
-in the tuning APK only.
+Driver Station OpModes: `Teleop`, `Auto BLUE`, `Auto RED` (group **Main**); `Bench: Drive`,
+`Bench: Intake`, `Bench: Limelight` (group **Bench**). The Shooter Tuner is on the AutoTune site, not in
+the OpMode list.
 
 ## 3. Read these first
 
@@ -75,7 +75,7 @@ in the tuning APK only.
 | `docs/02-robot-physical-architecture.md` | the real mechanism set and which subsystem owns each |
 | `docs/01-libraries-pedro-3.0.0-ivy-1.1.1.md` | the two libraries' real APIs, verified from bytecode. Read before touching `Drivetrain` or `Macros` |
 | `docs/04-biobuzz-season-analysis.md` | sourced game and rule facts, and §9's implications |
-| `opmodes/teleop/Controls.java` | every binding and the help card. Change a button there and nowhere else |
+| `opmodes/teleop/Teleop.java` | every binding, read straight off the gamepads; the header comment is the button card |
 | `game/Field.java` Javadoc | the field frame (origin A1, +X toward F, +Y toward 6) that every pose depends on |
 | `util/hardware/HardwareNames.java` | the exact strings the Robot Controller configuration must use |
 | `fixthese.md` | five review rounds. Round 5 is this rebase; rounds 1–4 describe code that no longer exists |
@@ -87,15 +87,18 @@ in the tuning APK only.
 JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
   ./gradlew :TeamCode:compileDebugJavaWithJavac --console=plain
 
-./gradlew :TeamCode:assembleDebug   # the one APK — AutoTune on :10158, Dashboard on :8080/dash
+./gradlew :TeamCode:assembleDebug   # the one APK — AutoTune on :10158
 ```
 
-**There is one build, and it always contains AutoTune and FTC Dashboard.** The team chose this on
-2026-09-30 so that every file sits in the normal folders and Android Studio resolves them with no
-variant to select. The price: **every APK binds two web servers and is not match legal (R704).** Before
-an event, delete the `tuning` and `dashboard` lines from `build.dependencies.gradle` and the three sources that import them (`pedro/Tuning.java`, `pedro/procedures/`, `opmodes/test/ShooterBench.java`), then build and deploy. Nothing on the card warns you; the giveaway is `Bench: Shooter` in the OpMode
-list. (A two-variant split with the tuning files in `src/tuning/java` was tried and reverted before it was
-committed, because the team wanted every file in the normal folders.)
+**There is one build, and it always contains AutoTune.** The team chose this on 2026-09-30 so that
+every file sits in the normal folders and Android Studio resolves them with no variant to select. FTC
+Dashboard was removed on 2026-10-07: AutoTune is the only tuning tool, and the shooter is tuned there
+too. The price: **every APK binds AutoTune's web server and is not match legal (R704).** Before an
+event, delete the `tuning` line from `build.dependencies.gradle` and the two sources that import it
+(`pedro/Tuning.java`, `pedro/procedures/`), then build and deploy. Nothing on the card warns you; the
+giveaway is the tuning site still answering at :10158. (A two-variant split with the tuning files in
+`src/tuning/java` was tried and reverted before it was committed, because the team wanted every file in
+the normal folders.)
 
 ## 5. Repo map
 
@@ -105,53 +108,48 @@ committed, because the team wanted every file in the normal folders.)
 Robot.java                     composition root: 4 public final subsystems, readSensors()/writeActuators(),
                                loop Hz, battery, alliance. No supplier wiring, no sensor policy.
 subsystems/
-  Drivetrain.java              ONE Mecanum, plus a Follower once tuned. Sticks, heading hold, aim lock,
-                               followLazy/turnTo/driveForMs. hasFollower() gates the tuned half.
-  Intake.java                  roller + tunnel on one motor: in/out/idle/off on setPower, JamDetector
+  Drivetrain.java              ONE Mecanum, plus a Follower once tuned. Sticks (field/robot centric), pose,
+                               followLazy/driveForMs for Auto. hasFollower() gates the tuned half.
+  Intake.java                  roller + tunnel on one motor: in/out/off on setPower, JamDetector
   Shooter.java                 2 opposed motors, kS/kV/kP on setPower, distance->ticks/sec table,
-                               manual override, open-loop bench mode
+                               fixed-speed override (MANUAL_TICKS_PER_SEC)
   Limelight.java               the target CELL's tag tx, and nothing else. The one fail-soft device.
 commands/
-  Macros.java                  shootOne/shootAll/aimAndShootAll/aimAt/snapToHeading/driveTo; the aim law
+  Macros.java                  shootOne/shootAll/aimAndShootAll/driveTo; Auto's aim law
   Shoot.java                   the cycle as one state machine: SPIN_UP -> FEED -> SETTLE -> RECOVER -> DWELL
   Waits.java                   waitMs, and bounded() — the every-wait-has-a-deadline rule
 opmodes/
-  MatchOpMode.java             THE base. Final read -> decide -> execute -> write. Benches override
-                               usesScheduler() to false and drive subsystems directly.
-  teleop/{Teleop, Controls}    behaviour and bindings
-  teleop/{BlueTeleop, RedTeleop}   13 lines each: the annotation and the side
+  MatchOpMode.java             Auto's base. Final read -> decide -> execute -> write.
+  teleop/Teleop                the one match TeleOp: dpad alliance pick in init, every binding inline
   auto/Auto                    30 s routine; tuned (aim, shoot, park) and untuned (shoot, timed leave)
   auto/{BlueAuto, RedAuto}     13 lines each
-  test/{SelfTest, IntakeBench, DriveBench, LimelightBench}, ShooterBench (Dashboard)
+  test/{DriveBench, IntakeBench, LimelightBench}   plain OpModes, one subsystem each
 game/{Field, FieldPoses}       field frame, HIVE CELL poses, tag ranges. Every number a placeholder.
 util/
   field/{Alliance, FieldConstants, PoseStorage}   ROTATE_180; PoseStorage carries the pose only
-  math/{Angles, DriveScaling}   time/MatchClock   control/JamDetector
-pedro/{Constants, Tuning, procedures/*}          configs + create(); AutoTune factories and tuners
+  math/Angles   time/MatchClock   control/JamDetector
+pedro/{Constants, Tuning, procedures/*}          configs + create(); AutoTune factories, tuners, ShooterTuner
 ```
 
 ### Teleop at a glance
 
-`Controls` is the source of truth and the init card prints it.
+One OpMode, `Teleop`. During init, gamepad 1's **dpad left = RED, dpad right = BLUE**; it starts on the
+side the last autonomous ran (BLUE if none). The header comment of `Teleop.java` is the button card.
 
 | Pad | Input | Does |
 |---|---|---|
-| driver | L-stick / R-stick X | drive. Field-centric with the alliance's driver frame and a heading hold once tuned; robot-centric before that |
-| driver | L-trigger | precision slow mode |
-| driver | **R-trigger (hold)** | **aim lock**: points the rear shooter at the up-CELL while the sticks still translate. Tag-corrected when the camera saw the tags recently. Off in MANUAL. |
-| driver | LB / Y / **A** / BACK | drive frame toggle / re-zero heading / **re-seed pose (robot must be on its start)** / abort macro |
-| driver | B / RB | path to the shooting spot / to park |
-| driver | dpad | snap to 90 / 0 / 270 / 180° |
-| operator | RB / LB / X | intake on-off / reverse on-off / stop intake and cancel any macro |
-| operator | R-trigger / A | shoot one pulse / shoot four |
-| operator | L-trigger | flywheel armed on/off |
-| operator | **dpad up** | **MANUAL**: flywheel speed becomes `Shooter.MANUAL_TICKS_PER_SEC` and the aim lock switches off. Odometry, the distance table and the aim law all leave the loop. |
-| operator | dpad left / right | trim `MANUAL_TICKS_PER_SEC` by `Teleop.SPEED_TRIM_TICKS_PER_SEC` |
-| operator | dpad down | "our HIVE tipped": the aim target flips to the other CELL |
+| driver | L-stick / R-stick X | drive. Field-centric with the alliance's driver frame once tuned; robot-centric before that |
+| driver | L-trigger (hold) | slow mode (`Teleop.SLOW_SCALE`) |
+| driver | **R-trigger (hold)** | **aim**: turns the rear shooter to the up-CELL while the sticks still translate. Odometry bearing, plus a Limelight correction taken while the tags were in view (kept `TAG_CORRECTION_MS`). Needs the tuned pose |
+| driver | options / Y | field ↔ robot centric / re-zero heading (face away from your wall) |
+| operator | RB / LB / both | intake in / out / stop (both also cancels a running shot; bumpers are ignored until both are up) |
+| operator | L-trigger | flywheel on / off |
+| operator | R-trigger / A | shoot one pulse / shoot four (ignored while a shot is running) |
+| operator | dpad up | flywheel speed from the distance table ↔ fixed `Shooter.MANUAL_TICKS_PER_SEC` (fixed is automatic with no pose) |
+| operator | dpad left / right | fixed speed −/+ `Teleop.SPEED_STEP_TICKS_PER_SEC` |
+| operator | dpad down | "our HIVE tipped": aim and distance switch to the other CELL. **Press once at the start if auto tipped it** |
 
-Rumbles, because a driver cannot read telemetry mid-match: **1 blip** a macro succeeded · **3 blips** a
-macro failed, or a drive control was refused with no follower · **3 blips on the operator pad** the
-intake has jammed and anti-jam has given up — reverse it by hand · **one long buzz on both** 20 s left.
+No rumbles: everything is on the telemetry card.
 
 ### Auto at a glance
 
@@ -175,18 +173,18 @@ At the buzzer anything still running is cancelled and every mechanism stopped (G
 | **A hand-measured distance table, not a curve fit** | Taken from a competition-proven reference robot whose own source preserves four abandoned attempts in comments — a linear fit, a quartic, then a quadratic — before it settled on a measured table. Do not re-derive a polynomial. |
 | **Crash loudly on a bad config name** | No `Hardware` wrapper, no `isAvailable()`, no null-motor guards. The old code had 51 `isAvailable()` guards, and what they bought was a robot that boots, drives onto the field, and silently plays a match with one mechanism disabled. A throw at init names the device while you are still in the pit. |
 | **…except the Limelight** | Its constructor and `update()` are synchronous network calls to another computer over USB-Ethernet, not config lookups. A camera that is unpowered but correctly configured must not kill the OpMode, so it keeps a try/catch and `isConnected()`. That is the distinction: a missing *name* is a build error, an unreachable *peer* is a runtime condition. |
-| **Alliance is the OpMode class** | `BlueTeleop`/`RedTeleop`/`BlueAuto`/`RedAuto`, 13 lines each. Deletes `AutoSelector`, the A-locks/B-unlocks ceremony and the whole "started UNLOCKED" failure mode. The side is chosen by picking the OpMode, so it cannot be stale, unconfirmed, or inherited wrong. |
-| **MANUAL is a first-class mode, on one button** | Every automatic path is pose-derived — the aim law, the distance table, field-centric drive — so one hard collision breaks all of them at once and no sensor on this robot would notice. Operator dpad-up takes odometry, the table and the aim law out of the loop together, and dpad left/right trims the speed. This is the legal substitute for the dashboard slider an FTC-Dashboard robot would trim with (R704). |
+| **Teleop and the benches are plain OpModes** (2026-10-07) | The team could not debug the hook-based base class, the `Controls` enum and the heading-hold/aim-lock layer. Teleop now reads the gamepads directly and writes the loop out (`readSensors` → gamepads → `Scheduler.execute()` → `writeActuators`); each bench builds only the subsystem it tests. Ivy stays for Auto and for Teleop's shot buttons. |
+| **Alliance: Auto from the OpMode class, Teleop from the dpad** | `BlueAuto`/`RedAuto` fix the route, so the wrong one cannot run. Teleop is one OpMode with a dpad pick in init that starts on the side Auto last ran (`PoseStorage`); the card shows the alliance in capitals. |
+| **A fixed-speed override, on one button** | Every automatic shot input is pose-derived, so one hard collision breaks the distance table and the aim at once. Operator dpad-up switches the flywheel to `MANUAL_TICKS_PER_SEC` (trimmed on dpad left/right); the driver simply stops holding the aim trigger. |
 | **Two default commands read a supplier every loop** | `Intake.operatorControlCommand` and `Shooter.armedControlCommand`. Ivy has **no duplicate guard**, so re-scheduling an intent on each press re-runs `start()` every loop; and Ivy *ends* rather than suspends a preempted priority-0 command, so a press-scheduled hold needs restoring by hand after every shot. At priority −1 with `SUSPEND` a shooting cycle preempts them and they resume by themselves. |
 | **The shooting cycle is one state machine, not an Ivy group tree** | Ivy's `Sequential` hands off one child per `execute()` and never executes the child it just started, so every boundary costs a whole ~20 ms loop and an `instant` costs one by itself. The old nine-level tree spent 7 idle loops between "flywheel recovered" and "next pulse". A state machine chains every zero-duration transition inside one `execute()`. It also sidesteps the `Repeat.end()` NPE for free. |
 | **`Shoot` refuses to run with a zero flywheel target** | `atTarget()` is `|target − velocity| < tolerance`, so a zero target is "at speed" on tick one and the tunnel would push the whole load through a dead wheel. |
-| **Benches hold no motor handles of their own** | A second `DcMotorEx` on a port the subsystem already holds is a second power cache, and `Robot.stopMechanisms()` then cannot stop it — a bench could leave a flywheel spinning after the OpMode ends. `Shooter.setOpenLoopPower` is a *mode*, so `update()` stays the only writer. |
-| **`SelfTest` does not check wheel direction** | The SDK applies `Direction` to commanded power and reported velocity together, so a backwards wheel reads positive. Directions are **Utility → TestHardware**'s job. The card says so rather than implying a check it cannot make. |
+| **Benches and tuners go through the subsystem classes** | They construct `Drivetrain`/`Intake`/`Limelight`/`Shooter` rather than grabbing motors by name, so a bench drives exactly the code the match runs and each motor has one power cache. |
 | **Every wait has a deadline (`Waits.bounded`)** | The reference codebase writes `waitUntil(shooter::atTarget)` with no timeout; a dead flywheel hangs its autonomous for the rest of the match. One `race` against a timer is the whole fix. |
 | **Every macro reports a terminal `Outcome`** | A timeout or an abort used to leave it `RUNNING` for ever. Built as `deadline(sequential(...), onInterrupt(markCancelled))` — **not** `setEnd` on the group, because Ivy's `setEnd` *replaces* the group's own end, the one that ends its children. |
 | **`FieldConstants` rotates, it does not mirror** | The BIOBUZZ field is 180° rotationally symmetric: GARDEN A1/F6, LOADING ZONE A5/F2. A C/D mirror would put them on F1 and F5 and every blue auto in the wrong place. The enum with three arms is gone — a run-time selector over a fact the field cannot change is just somewhere for a wrong value to hide. |
 | **SDK 11.2.1 is fine** | The docs used to defer a 12.0 upgrade for the AprilTag *cluster* API. The tags are read by the Limelight's own pipeline over USB-Ethernet, not by the SDK's `AprilTagProcessor`, so nothing in the confirmed hardware needs it. It is a future task, not a prerequisite. |
-| **No Panels; AutoTune and FTC Dashboard always built in, stripped by hand before events** | Dashboard is worth it on the bench: `Bench: Shooter` tunes kS/kV/kP live instead of one redeploy per number. Both bind a web server whenever they are in the APK, and R704 prohibits streaming tools during matches, so the event APK must have them removed (§4). One build with everything in the normal folders was chosen over a two-variant split so Android Studio just works. |
+| **AutoTune is the only tuning tool; always built in, stripped by hand before events** | The Pedro tuning site tunes the drivetrain, and our `ShooterTuner` procedure on the same site tunes kS/kV/kP by timing spin-ups. FTC Dashboard was removed on 2026-10-07. AutoTune binds a web server whenever it is in the APK, and R704 prohibits streaming tools during matches, so the event APK must have it removed (§4). |
 
 ## 7. Rules that bite
 
@@ -219,8 +217,8 @@ At the buzzer anything still running is cancelled and every mechanism stopped (G
 - **`setEnd` on a group replaces the group's own end.** Run interrupt work as a child.
 
 **SDK gamepads and OpModes**
-- `*WasPressed()` consumes its flag on read. Read every edge once per loop (`Controls.read`), and
-  `resetEdgeDetection()` in `start()` — `MatchOpMode` does it.
+- `*WasPressed()` consumes its flag on read. Read every edge once per loop, in one place, and
+  `resetEdgeDetection()` in `start()` — `Teleop` and `MatchOpMode` both do.
 - Iterative OpModes may not write motors from `stop()`; the SDK zeroes them itself.
 - `Direction` is applied to commanded power *and* reported velocity, so a reversed motor reads positive.
 - **Utility → TestHardware** spins any motor by config name. First check at every event.
@@ -229,7 +227,7 @@ At the buzzer anything still running is cancelled and every mechanism stopped (G
 - G407: at most 4 controlled scoring elements. **Nothing on this robot enforces it — the operator does.**
 - G408: never control the opponent's NECTAR. There is no colour sensing, so this is also the operator's job.
 - R503: 8 motors and 8 servos max. We use 7 motors, 0 servos.
-- R704: no dashboard or streaming tools in matches. The everyday APK is **not** match legal: strip AutoTune and Dashboard first (§4).
+- R704: no dashboard or streaming tools in matches. The everyday APK is **not** match legal: strip AutoTune first (§4).
 - AUTO 30 s → 8 s no-motion transition (G403) → TELEOP 120 s. No endgame. FLOWER unlock at 1:00.
 
 ## 8. On the real robot, in this order
@@ -240,49 +238,43 @@ At the buzzer anything still running is cancelled and every mechanism stopped (G
 2. **Utility → TestHardware**: spin each of the seven motors by name. Each drive motor must push the
    robot forward — fix any reversed one in `Constants.drivetrainConfig`. Confirm the two flywheels
    **counter-rotate**.
-3. **`SelfTest`**: every row PASS, or WARN on the follower row before AutoTune has run.
+3. **`Bench: Drive`**: robot-centric, every stick direction moves the robot the way it says.
 4. **AutoTune** at `http://192.168.43.1:10158`: Mecanum Tuner → `drivetrainConfig`;
    Pinpoint Tuner → `localizerConfig`; Foresight Tuner → `foresightConfig`. Paste all three. `create()`
-   then returns a follower and the heading hold, aim lock, snap turns and paths all come alive.
-5. **`Bench: Intake`**: A/B/X each earn a PASS (IN, OUT, IDLE turning the way their power says).
-   Then one clean capture (note the peak current and the over-threshold run), RB to clear, anti-jam
-   off (LB) and a deliberate stall (note that peak). `STALL_CURRENT_AMPS` goes between the two peaks;
-   `STALL_TIMEOUT_MS` must outlast the clean capture's run. Confirm one motor turns **both** roller and
-   tunnel.
-6. **`Bench: Shooter`** with FTC Dashboard open at `http://192.168.43.1:8080/dash`:
-   `kS` (B for open loop, raise `ShooterBench.OPEN_LOOP_POWER` until the wheel just keeps turning),
-   `kV` (open loop near full, read `kV estimate`), `kP` (A to arm, RB to fire a piece, trim `kP` in
-   Dashboard until the graph recovers quickly without overshoot), then the distance table from
-   24/48/72/96 in into `DISTANCES_INCHES` / `TICKS_PER_SEC`. Set `MANUAL_TICKS_PER_SEC` to whatever
-   scores from your usual spot. **Dashboard edits are not saved: paste the card's values into
-   `Shooter.java`.**
-6a. **`Bench: Drive`**: robot-centric first, then field-centric once tuned (LB). Tune the feel with
-   dpad (deadband up/down, expo left/right) and copy the values into `DriveScaling`; the bench puts the
-   old ones back when it stops.
-6b. **`Bench: Limelight`**: pick the alliance on the dpad in init; confirm the other alliance's tags
-   are listed as ignored. Enter the camera pose in the Limelight web UI, then at a tape-measured floor
-   distance confirm `Distance` agrees and `Axis check` says OK (else flip `ROBOT_SPACE_Y_SIGN`). The
-   flywheel speed it shows is the table's for that distance.
-7. **Teleop on the practice field**: drive, arm, fire — one pulse should move one piece. Face the HIVE,
-   pull the aim lock, turn away, and confirm the card still says `tag-corrected`. Then press dpad-up and
-   confirm MANUAL really takes the table and the aim law out.
+   then returns a follower and field-centric, the pose, aiming and Auto's paths all come alive. Back on
+   `Bench: Drive`, OPTIONS switches to field-centric and x / y / heading should track a tape measure.
+5. **`Bench: Intake`**: RB in, LB out, both stop. Confirm one motor turns **both** roller and tunnel.
+   Note the current of a clean pick-up and of a deliberate stall; `STALL_CURRENT_AMPS` goes between them.
+6. **Shooter Tuner** on the AutoTune site: set a target, then raise `kV` until the wheel gets close on its
+   own, `kS` until it starts cleanly, and `kP` until the spin-up time stops improving without a big
+   overshoot. Tick Done and **paste the code block into `Shooter.java`** (values typed there only last
+   until the RC app restarts). Then the distance table: in Teleop's fixed-speed mode, park at
+   24/48/72/96 in, trim until the piece lands in the CELL, and write each pair into
+   `DISTANCES_INCHES` / `TICKS_PER_SEC`.
+6a. **`Bench: Limelight`**: enter the camera pose in the Limelight web UI, then at a tape-measured floor
+   distance confirm `distance` and `x`/`y` agree (if a tag on the left shows negative `y`, flip
+   `ROBOT_SPACE_Y_SIGN`). Once tuned, compare "Pose from tags" with the Pinpoint pose.
+7. **Teleop on the practice field**: pick the alliance on the dpad, drive, flywheel on, shoot one —
+   one pulse should move one piece. Face the HIVE so the card says `tag-corrected`, then hold the aim
+   trigger and confirm the rear swings onto the CELL. Press dpad-up and confirm the speed goes fixed.
 8. **`Auto BLUE`** with the 30 s clock. Set `Auto.LEAVE_POWER` / `LEAVE_MS` so the robot clearly stops
-   touching the wall and never reaches the HIVE. Then check teleop inherits the pose.
-9. **Before every event**: delete the `tuning` and `dashboard` lines from `build.dependencies.gradle` and the three sources that import them (`pedro/Tuning.java`, `pedro/procedures/`, `opmodes/test/ShooterBench.java`), then build and deploy. Confirm `Bench: Shooter` is gone from the
-   OpMode list. The everyday build is not match legal and nothing else warns you.
+   touching the wall and never reaches the HIVE. Then check Teleop inherits the pose and the alliance.
+9. **Before every event**: delete the `tuning` line from `build.dependencies.gradle` and the two sources
+   that import it (`pedro/Tuning.java`, `pedro/procedures/`), then build and deploy. Confirm the tuning
+   site no longer answers at :10158. The everyday build is not match legal and nothing else warns you.
 
 ## 9. Constants to measure
 
 | File | Constant | How |
 |---|---|---|
-| `Shooter` | `kS`, `kV`, `kP` | `Bench: Shooter` steps 1–3 |
-| `Shooter` | `DISTANCES_INCHES` / `TICKS_PER_SEC`, `MANUAL_TICKS_PER_SEC`, `TOLERANCE_TICKS_PER_SEC` | `Bench: Shooter` step 4, from real shots |
-| `Shooter` | `SECOND_MOTOR_REVERSED` | `Bench: Shooter` X flips it live; matched signs at the same power |
+| `Shooter` | `kS`, `kV`, `kP` | Shooter Tuner on the AutoTune site (§8 step 6) |
+| `Shooter` | `DISTANCES_INCHES` / `TICKS_PER_SEC`, `MANUAL_TICKS_PER_SEC`, `TOLERANCE_TICKS_PER_SEC` | Teleop fixed-speed mode, from real shots (§8 step 6) |
+| `Shooter` | `SECOND_MOTOR_REVERSED` | TestHardware: the two wheels must counter-rotate at the same power |
 | `Shooter` | `HEADING_OFFSET_RAD` | π = fires out the rear. Confirm on the built robot |
-| `Intake` | `IN`, `OUT`, `IDLE` | `Bench: Intake`: enough to carry pieces without grinding them |
-| `Intake` | `STALL_CURRENT_AMPS`, `STALL_TIMEOUT_MS` | `Bench: Intake`, two runs (§8 step 5) |
-| `Shoot` | `FEED_PULSE_MS`, `RECOVER_TIMEOUT_MS`, `FINAL_DWELL_MS` | `Bench: Shooter` RB: one pulse must move exactly one piece |
-| `Drivetrain` | `HEADING_HOLD_P/I/D`, `HEADING_HOLD_MAX_TURN` | on the field, once tuned |
+| `Intake` | `IN`, `OUT` | `Bench: Intake`: enough to carry pieces without grinding them |
+| `Intake` | `STALL_CURRENT_AMPS`, `STALL_TIMEOUT_MS` | `Bench: Intake` current readout, two runs (§8 step 5) |
+| `Shoot` | `FEED_PULSE_MS`, `RECOVER_TIMEOUT_MS`, `FINAL_DWELL_MS` | Teleop shoot one: one pulse must move exactly one piece |
+| `Teleop` | `AIM_P`, `AIM_MAX_TURN`, `TAG_CORRECTION_MS`, `SLOW_SCALE` | on the field, once tuned: aiming should settle without wobbling |
 | `Macros` | `AIM_TOLERANCE_DEGREES`, `AIM_BIAS_MAX_AGE_MS`, the `*_TIMEOUT_MS` values | on the field. A shot wide is the tolerance; a shot that never fires is a timeout |
 | `Auto` | `LEAVE_POWER`, `LEAVE_MS`, `SETTLE_MS`, `SHOOT_BUDGET_MS` | practice field |
 | `game/Field` | `HIVE_CENTER`, `CELL_SPACING_INCHES`, `HIVE_LATERAL_OFFSET_INCHES` | Onshape field CAD (docs/04 §10), then a tape measure |

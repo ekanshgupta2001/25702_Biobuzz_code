@@ -318,8 +318,8 @@ takes it back. Always keep the single `follower.update()` per loop.
 and `gamepad1.right_stick_x` to `manual` un-negated. With the `Mecanum` mixing above (+strafe is
 robot-left, +turn is counter-clockwise) that inverts strafe and turn: stick-right would strafe left
 and turn left. The Quickstart's own `procedures/Tests.java` negates all three
-(`-left_stick_y, -left_stick_x, -right_stick_x`), and so does `opmodes/teleop/Controls`. Do not
-"fix" `Controls` toward the docs page; the check that settles it on the robot is the SDK's
+(`-left_stick_y, -left_stick_x, -right_stick_x`), and so do `opmodes/teleop/Teleop` and
+`Bench: Drive`. Do not "fix" them toward the docs page; the check that settles it on the robot is the SDK's
 TestHardware or the Tests/Driving procedure.
 
 ## A.5 Paths

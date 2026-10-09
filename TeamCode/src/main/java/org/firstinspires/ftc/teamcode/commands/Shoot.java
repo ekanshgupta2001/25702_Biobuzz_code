@@ -18,10 +18,11 @@ import org.firstinspires.ftc.teamcode.subsystems.Shooter;
  * same loop the flywheel comes back. It also sidesteps the {@code Repeat.end()} NPE
  * (docs/01 B.5 trap 8) for free.
  *
- * <h2>Feeding is running the intake</h2>
- * One motor drives the roller and the tunnel, and there is no gate and no sensor anywhere in the
- * path. A piece reaches the flywheel because the tunnel ran long enough to carry it there, so a
- * "shot" is a {@link #FEED_PULSE_MS} pulse of the intake. That makes {@link #getShotsFired()}
+ * <h2>Feeding is running the intake and the up-wheels</h2>
+ * One motor drives the roller and the tunnel, the shooter's up-wheels carry the piece the rest of
+ * the way, and there is no gate and no sensor anywhere in the path. A piece reaches the flywheel
+ * because both ran long enough to carry it there, so a "shot" is a {@link #FEED_PULSE_MS} pulse of
+ * the intake and the up-wheels together. That makes {@link #getShotsFired()}
  * honestly a count of pulses, not of pieces — nothing on this robot can know the difference, and the
  * telemetry says so.
  *
@@ -29,7 +30,8 @@ import org.firstinspires.ftc.teamcode.subsystems.Shooter;
  * The intake only. The flywheel is held by {@code Shooter.armedCommand()}, passed to
  * {@code Macros.reporting} as an alongside child, so an armed wheel is never told to stop when a
  * shot starts, and the drivetrain is left alone so the driver keeps translating and aiming through
- * a shot.
+ * a shot. The up-wheels are switched through that same shooter, which nothing else touches while
+ * the shot holds it.
  */
 public class Shoot {
     /**
@@ -82,6 +84,7 @@ public class Shoot {
                 .setDone(() -> state == State.DONE)
                 .setEnd(ec -> {
                     intake.stop();
+                    shooter.feederOff();
                     state = State.DONE;
                 })
                 .requiring(intake);
@@ -103,8 +106,13 @@ public class Shoot {
         state = next;
         stateSinceMs = System.currentTimeMillis();
         // The action for a state is applied on entry, so a transition costs no loop.
-        if (next == State.FEED) intake.in();
-        else intake.stop();
+        if (next == State.FEED) {
+            intake.in();
+            shooter.feederOn();
+        } else {
+            intake.stop();
+            shooter.feederOff();
+        }
     }
 
     private long elapsed() {

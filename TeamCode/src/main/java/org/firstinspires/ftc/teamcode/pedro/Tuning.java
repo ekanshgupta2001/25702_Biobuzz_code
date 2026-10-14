@@ -23,8 +23,10 @@ import org.firstinspires.ftc.teamcode.pedro.procedures.Tests;
  * Tests/Odometry → Foresight Tuner → Tests/Hold, Line, Curve. Each tuner ends with a code block to
  * paste into {@link Constants}. The web UI is {@code http://192.168.43.1:10158} on the robot's Wi-Fi.
  *
- * <p>The Shooter Tuner is ours, not the Quickstart's: it times flywheel spin-ups for kS / kV / kP and
- * ends with a block to paste into {@code Shooter.java}. This site is the only tuning tool in the repo.
+ * <p>The Shooter Tuner is ours, not the Quickstart's: it times spin-ups of the flywheel (gamepad 1
+ * dpad left), the counter-roller (dpad right) or both with a test shot (dpad up) for each wheel's
+ * kS / kV / kP, and ends with a block to paste into {@code Shooter.java}. This site is the only
+ * tuning tool in the repo.
  *
  * <p>BIOBUZZ R704: AutoTune's web servers are always bound while the library is on the classpath, so
  * before an event this file, {@code pedro/procedures/*} and the {@code tuning} dependency are removed

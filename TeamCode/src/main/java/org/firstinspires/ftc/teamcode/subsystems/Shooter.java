@@ -35,8 +35,8 @@ import java.util.function.BooleanSupplier;
  * the hub's velocity loop integrates, and on a wheel that is unloaded except for the instant a piece
  * crosses it, the integrator is exactly what makes recovery slow and then overshoot. {@code kV}
  * carries the steady-state speed, {@code kP} closes what is left of the gap, {@code kS} pays for belt
- * and bearing drag. The flywheel's three are tuned with the Shooter Tuner on the Pedro tuning site;
- * the counter-roller's ({@code ROLLER_*}) are typed in here.
+ * and bearing drag. Both wheels' gains (the counter-roller's are {@code ROLLER_*}) are tuned with the
+ * Shooter Tuner on the Pedro tuning site.
  *
  * <h2>Arming, not spinning up</h2>
  * The wheels are either holding their targets or off; there is no idle speed. {@link #armedCommand()}
@@ -50,7 +50,7 @@ public class Shooter {
      * on the Pedro tuning site (http://192.168.43.1:10158).
      */
     public static double kS = 0.01, kV = 0.00000, kP = 0.00;
-    /** The counter-roller's gains, same meaning. Placeholders: start from the flywheel's. */
+    /** The counter-roller's gains, same meaning, tuned the same way. Placeholders: start from the flywheel's. */
     public static double ROLLER_kS = 0.01, ROLLER_kV = 0.00000, ROLLER_kP = 0.00;
 
     /** Nominal speeds, and what a freshly built shooter holds until the table or the driver says otherwise. */
@@ -242,8 +242,10 @@ public class Shooter {
     /** Writes hardware. Called once per loop from {@code Robot.writeActuators()}, after commands run. */
     public void update() {
         if (armed) {
-            writeWheels(kV * target + kP * (target - getVelocity()) + kS,
-                    ROLLER_kV * rollerTarget + ROLLER_kP * (rollerTarget - getRollerVelocity()) + ROLLER_kS);
+            // A wheel with a target of 0 is off. The Shooter Tuner uses this to spin one wheel alone.
+            writeWheels(target <= 0 ? 0 : kV * target + kP * (target - getVelocity()) + kS,
+                    rollerTarget <= 0 ? 0
+                            : ROLLER_kV * rollerTarget + ROLLER_kP * (rollerTarget - getRollerVelocity()) + ROLLER_kS);
         } else {
             writeWheels(0, 0);
         }

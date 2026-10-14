@@ -107,7 +107,7 @@ game ────────────────► util.field, Pedro math.
 util.field ──────────► util.math.Angles, Pedro math.Pose
 util.math, util.time, util.control ──► java.* ONLY
 util.hardware ───────► nothing at all (string constants)
-pedro ───────────────► util.hardware, Pedro; pedro.procedures.ShooterTuner ─► subsystems.Shooter
+pedro ───────────────► util.hardware, Pedro; pedro.procedures.ShooterTuner ─► subsystems.{Shooter, Intake}, commands.Shoot
 ```
 
 Rules that are worth stating because breaking them is easy:
@@ -521,11 +521,15 @@ Controller start-up**, so each must be `public static`, zero-arg, declared to re
 `Procedure`, and must never throw; a factory whose config is not filled yet returns a `NotReady`
 procedure that says what to paste first.
 
-**The Shooter Tuner** (`procedures/ShooterTuner.java`) is how kS / kV / kP are tuned, on the same site:
-a form takes the target speed and the three gains, writes them into `Shooter`'s statics, runs a
-`TuningOpMode` that spins the flywheel up from rest and times how long it takes to reach the target, and
-shows that result in the next form. "Done" ends it with a block to paste into `Shooter.java`. The values
-typed there live until the RC app restarts.
+**The Shooter Tuner** (`procedures/ShooterTuner.java`) is how both wheels' kS / kV / kP are tuned, on
+the same site: a form takes each wheel's target speed and three gains and writes them into `Shooter`'s
+statics, then runs a `TuningOpMode` that does one test, picked on gamepad 1's dpad: **left** spins the
+flywheel up from rest alone, **right** the counter-roller alone (the other wheel gets a target of 0,
+which `Shooter.update()` treats as off), **up** both, and then **A** fires one ball with the same
+intake-and-up-wheels pulse as `commands/Shoot` and measures how far each wheel dips and how long it takes
+to come back. The result (time to target, overshoot, time at full power, settled error, and the dip) is
+shown in the next form. "Done" ends it with two lines to paste into `Shooter.java`. The values typed
+there live until the RC app restarts.
 
 `Tuning.java`, `pedro/procedures/**` and the `tuning` dependency are **always in the build**; AutoTune
 binds a web server whenever it is in the APK, so under R704 **the everyday APK is not match legal**, and

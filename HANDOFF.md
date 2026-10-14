@@ -245,12 +245,15 @@ At the buzzer anything still running is cancelled and every mechanism stopped (G
    `Bench: Drive`, OPTIONS switches to field-centric and x / y / heading should track a tape measure.
 5. **`Bench: Intake`**: RB in, LB out, both stop. Confirm one motor turns **both** roller and tunnel.
    Note the current of a clean pick-up and of a deliberate stall; `STALL_CURRENT_AMPS` goes between them.
-6. **Shooter Tuner** on the AutoTune site: set a target, then raise `kV` until the wheel gets close on its
-   own, `kS` until it starts cleanly, and `kP` until the spin-up time stops improving without a big
-   overshoot. Tick Done and **paste the code block into `Shooter.java`** (values typed there only last
-   until the RC app restarts). Then the distance table: in Teleop's fixed-speed mode, park at
-   24/48/72/96 in, trim until the piece lands in the CELL, and write each pair into
-   `DISTANCES_INCHES` / `TICKS_PER_SEC`.
+6. **Shooter Tuner** on the AutoTune site, with gamepad 1 assigned on the Driver Station. Each run is one
+   test, picked on the dpad: **left** = flywheel alone, **right** = counter-roller alone, **up** = both,
+   then **A** fires one ball and the next form shows how far each wheel dipped and how fast it came back.
+   For each wheel set a target, then raise `kV` until it gets close on its own, `kS` until it starts
+   cleanly, and `kP` until the spin-up time stops improving without a big overshoot. Tick Done and
+   **paste the two lines into `Shooter.java`** (values typed there only last until the RC app restarts).
+   Then the distance table: in Teleop's fixed-speed mode, park at 24/48/72/96 in, trim until the piece
+   lands in the CELL, and write each row into `DISTANCES_INCHES` / `FLYWHEEL_TICKS_PER_SEC` /
+   `ROLLER_TICKS_PER_SEC`.
 6a. **`Bench: Limelight`**: enter the camera pose in the Limelight web UI, then at a tape-measured floor
    distance confirm `distance` and `x`/`y` agree (if a tag on the left shows negative `y`, flip
    `ROBOT_SPACE_Y_SIGN`). Once tuned, compare "Pose from tags" with the Pinpoint pose.
@@ -267,7 +270,7 @@ At the buzzer anything still running is cancelled and every mechanism stopped (G
 
 | File | Constant | How |
 |---|---|---|
-| `Shooter` | `kS`, `kV`, `kP` | Shooter Tuner on the AutoTune site (§8 step 6) |
+| `Shooter` | `kS`, `kV`, `kP`; `ROLLER_kS`, `ROLLER_kV`, `ROLLER_kP` | Shooter Tuner on the AutoTune site: dpad left for the flywheel, right for the counter-roller, up to test a shot (§8 step 6) |
 | `Shooter` | `DISTANCES_INCHES` / `TICKS_PER_SEC`, `MANUAL_TICKS_PER_SEC`, `TOLERANCE_TICKS_PER_SEC` | Teleop fixed-speed mode, from real shots (§8 step 6) |
 | `Shooter` | `SECOND_MOTOR_REVERSED` | TestHardware: the two wheels must counter-rotate at the same power |
 | `Shooter` | `HEADING_OFFSET_RAD` | π = fires out the rear. Confirm on the built robot |

@@ -111,6 +111,7 @@ public class Teleop extends OpMode {
         gamepad1.resetEdgeDetection();
         gamepad2.resetEdgeDetection();
         robot.drivetrain.setDriverHeadingOffset(Field.driverForwardHeading(alliance));
+        robot.limelight.setAlliance(alliance);   // pipeline 0 = BLUE, 1 = RED
         pickTargetCell();
         robot.drivetrain.onStart();
     }

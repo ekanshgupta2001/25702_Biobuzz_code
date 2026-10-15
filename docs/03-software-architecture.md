@@ -643,6 +643,9 @@ to the CELL the shooter must hit**, which `Macros.aimHeading` turns into a headi
   MegaTag2, no pose fusion — the pose is the Pinpoint's alone. The whole localisation stack was deleted
   in Round 4 and is not coming back this season.
 - There is **no piece detection**. The colour-blob pipeline was deleted with it.
+- **Two pipelines, one per alliance**: `BLUE_PIPELINE` 0 (tags 38–45) and `RED_PIPELINE` 1 (tags 30–37),
+  each passing both of its alliance's CELLs. `setAlliance` switches, called once from Teleop `start()`
+  and Auto `onInit()`; `getTagTx(min, max)` still narrows to the target CELL's four IDs.
 - `MAX_STALENESS_MS` is 250: a result older than that means the camera has stopped delivering frames,
   and `hasTarget()` goes false.
 - `CAMERA_YAW_OFFSET_DEGREES` is 0 (front). If the camera ever moves to the rear, set it to 180 and the

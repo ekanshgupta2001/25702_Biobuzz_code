@@ -63,6 +63,7 @@ public abstract class Auto extends MatchOpMode {
     protected void onInit() {
         Scheduler.schedule(robot.intake.defaultIdleCommand(), robot.shooter.defaultIdleCommand());
         PoseStorage.saveAlliance(side);   // Teleop's alliance pick starts on this side
+        robot.limelight.setAlliance(side);   // in init, so the pipeline has switched before the aim
     }
 
     @Override

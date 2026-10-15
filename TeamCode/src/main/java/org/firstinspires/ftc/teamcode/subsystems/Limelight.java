@@ -5,6 +5,7 @@ import com.qualcomm.hardware.limelightvision.LLResultTypes;
 import com.qualcomm.hardware.limelightvision.Limelight3A;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
+import org.firstinspires.ftc.teamcode.util.field.Alliance;
 import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
 
 import java.util.Collections;
@@ -31,7 +32,9 @@ import java.util.Locale;
  * only those — are caught, recorded in {@link #isConnected()}, and reported on the driver station.
  */
 public class Limelight {
-    public static int APRILTAG_PIPELINE_INDEX = 0;
+    /** Limelight web UI pipelines, one per alliance; each passes only that alliance's tags. */
+    public static int BLUE_PIPELINE = 0;   // tags 38-45, both blue CELLs
+    public static int RED_PIPELINE = 1;    // tags 30-37, both red CELLs
     /** The camera's forward axis relative to the robot's, degrees CCW: 0 = front, 180 = rear. */
     public static double CAMERA_YAW_OFFSET_DEGREES = 0.0;
     /** A result older than this means the camera has stopped delivering frames. */
@@ -54,11 +57,24 @@ public class Limelight {
     public Limelight(HardwareMap hardwareMap, String name) {
         limelight = hardwareMap.get(Limelight3A.class, name);
         try {
-            limelight.pipelineSwitch(APRILTAG_PIPELINE_INDEX);
+            limelight.pipelineSwitch(BLUE_PIPELINE);   // BLUE until setAlliance says otherwise
             limelight.start();
         } catch (RuntimeException e) {
             cameraFailed = true;
         }
+    }
+
+    /** Switches to the alliance's pipeline. Once, when the alliance is known: it is a network call. */
+    public void setAlliance(Alliance alliance) {
+        try {
+            limelight.pipelineSwitch(pipelineFor(alliance));
+        } catch (RuntimeException e) {
+            cameraFailed = true;
+        }
+    }
+
+    public static int pipelineFor(Alliance alliance) {
+        return alliance == Alliance.RED ? RED_PIPELINE : BLUE_PIPELINE;
     }
 
     /** Takes the camera's latest frame; once per loop from {@code Robot.readSensors()}. */
@@ -89,6 +105,11 @@ public class Limelight {
 
     public boolean isStale() {
         return latestResult != null && latestResult.getStaleness() > MAX_STALENESS_MS;
+    }
+
+    /** The pipeline the camera reports in its latest fresh frame (tag or not), or -1 when there is none. */
+    public int getPipelineIndex() {
+        return latestResult == null || isStale() ? -1 : latestResult.getPipelineIndex();
     }
 
     public void stop() {

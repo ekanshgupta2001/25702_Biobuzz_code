@@ -254,7 +254,10 @@ At the buzzer anything still running is cancelled and every mechanism stopped (G
    Then the distance table: in Teleop's fixed-speed mode, park at 24/48/72/96 in, trim until the piece
    lands in the CELL, and write each row into `DISTANCES_INCHES` / `FLYWHEEL_TICKS_PER_SEC` /
    `ROLLER_TICKS_PER_SEC`.
-6a. **`Bench: Limelight`**: enter the camera pose in the Limelight web UI, then at a tape-measured floor
+6a. **`Bench: Limelight`**: in the Limelight web UI make two AprilTag pipelines, **0 = BLUE (ID filter
+   38–45)** and **1 = RED (ID filter 30–37)**; on the bench, dpad right / left should show "Camera is
+   running: pipeline 0 / 1", and no tag should be marked `<- not this pipeline`. Then enter the camera
+   pose in the Limelight web UI, and at a tape-measured floor
    distance confirm `distance` and `x`/`y` agree (if a tag on the left shows negative `y`, flip
    `ROBOT_SPACE_Y_SIGN`). Once tuned, compare "Pose from tags" with the Pinpoint pose.
 7. **Teleop on the practice field**: pick the alliance on the dpad, drive, flywheel on, shoot one —

@@ -43,7 +43,15 @@ public class Constants {
      * follower, because the follower drives this very config.
      */
     public static MecanumConfig drivetrainConfig = new MecanumConfig(c -> {
-
+        c.frontLeftName.set(HardwareNames.FRONT_LEFT_MOTOR);
+        c.backLeftName.set(HardwareNames.BACK_LEFT_MOTOR);
+        c.frontRightName.set(HardwareNames.FRONT_RIGHT_MOTOR);
+        c.backRightName.set(HardwareNames.BACK_RIGHT_MOTOR);
+        c.frontLeftDirection.set(DcMotorSimple.Direction.REVERSE);
+        c.backLeftDirection.set(DcMotorSimple.Direction.REVERSE);
+        c.frontRightDirection.set(DcMotorSimple.Direction.FORWARD);
+        c.backRightDirection.set(DcMotorSimple.Direction.FORWARD);
+        c.manualBrakeMode.set(true);
     });
 
     /**

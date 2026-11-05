@@ -48,8 +48,9 @@ import java.util.function.DoubleSupplier;
  *       the Robot Controller app restarts.</li>
  * </ol>
  *
- * Every test writes a CSV to /sdcard/FIRST/data (over USB: {@code adb pull /sdcard/FIRST/data}).
- * Builds only the {@link Shooter}: no intake, no up-wheels.
+ * The menu is locked while a test runs (STEP and FF FIT wait for the wheels to stop first). While B is
+ * held no other button counts. Every test writes a CSV to /sdcard/FIRST/data (over USB:
+ * {@code adb pull /sdcard/FIRST/data}). Builds only the {@link Shooter}: no intake, no up-wheels.
  */
 @TeleOp(name = "Shooter Tuner", group = "Tuning")
 public class ShooterTuner extends OpMode {
@@ -70,6 +71,8 @@ public class ShooterTuner extends OpMode {
 
     private static final int MAX_SHOTS = 4;
     private static final double SHOT_IDLE_TIMEOUT_MS = 15000;
+    /** Both wheels in tolerance this long before SHOT calls them READY. */
+    private static final double READY_DWELL_MS = 150;
     /** A dip lasts at least this long, so a wheel the ball reaches a moment later is not missed. */
     private static final double MIN_DIP_MS = 100;
     private static final double DIP_TIMEOUT_MS = 2000;
@@ -108,6 +111,7 @@ public class ShooterTuner extends OpMode {
     private int cursor = 0;
 
     private Mode mode = Mode.IDLE;
+    private Test pendingTest = Test.STEP;   // what WAIT_FOR_REST starts once the wheels have stopped
     private double modeStartMs;
     private String note = "";
     private final List<String> result = new ArrayList<>();
@@ -121,6 +125,7 @@ public class ShooterTuner extends OpMode {
     private int fitIndex;
     private double fitStepStartMs;
     private boolean shotReady;
+    private double readySinceMs = -1;
     private double shotIdleSinceMs;
     private double lowSinceMs = -1;
     private Dip dip;
@@ -173,12 +178,16 @@ public class ShooterTuner extends OpMode {
         // 1. One snapshot of the encoders, the clock and the battery.
         double dtMs = beginLoop();
 
-        // 2. Buttons. B first, so STOP wins over anything else pressed in the same loop.
-        if (pressed(cur.b, prev.b)) stopAll("Stopped (B).");
-        handleMenu();
-        if (pressed(cur.a, prev.a)) toggleHold();
-        if (pressed(cur.x, prev.x)) startOrEndTest();
-        if (pressed(cur.y, prev.y)) applyFit();
+        // 2. Buttons. While B is held nothing else counts, so a thumb that also catches A or X
+        //    cannot spin the wheels straight back up.
+        if (cur.b) {
+            if (pressed(cur.b, prev.b)) stopAll("Stopped (B).");
+        } else {
+            handleMenu();
+            if (pressed(cur.a, prev.a)) toggleHold();
+            if (pressed(cur.x, prev.x)) startOrEndTest();
+            if (pressed(cur.y, prev.y)) applyFit();
+        }
 
         // 3. The mode decides the targets (or the raw power) and moves its test along.
         switch (mode) {
@@ -190,15 +199,16 @@ public class ShooterTuner extends OpMode {
             default:            setTargets(false, false); break;
         }
 
-        // 4. Write. FF FIT writes raw power itself and update() would overwrite it.
+        // 4. Log this loop's speed with the power that was on while it was measured (last loop's).
+        if (log != null) log.row(nowMs - modeStartMs, dtMs, volts, fw, rl);
+
+        // 5. Write. FF FIT writes raw power itself and update() would overwrite it.
         if (mode != Mode.FF_FIT) shooter.update();
         fw.power = shooter.getFlywheelPower();
         rl.power = shooter.getRollerPower();
         fw.measure(nowMs);
         rl.measure(nowMs);
 
-        // 5. Record and show.
-        if (log != null) log.row(nowMs - modeStartMs, dtMs, volts, fw, rl);
         addScreen();
     }
 
@@ -248,8 +258,9 @@ public class ShooterTuner extends OpMode {
         else shooter.disarm();
     }
 
+    /** Any test, SHOT included. The menu is locked so the numbers being measured stay put. */
     private boolean testRunning() {
-        return mode == Mode.WAIT_FOR_REST || mode == Mode.STEP || mode == Mode.FF_FIT;
+        return mode == Mode.WAIT_FOR_REST || mode == Mode.STEP || mode == Mode.FF_FIT || mode == Mode.SHOT;
     }
 
     // ------------------------------------------------------------------ buttons
@@ -258,7 +269,7 @@ public class ShooterTuner extends OpMode {
         int lines = 2 + rows.size();
         if (pressed(cur.dpad_up, prev.dpad_up)) cursor = (cursor + lines - 1) % lines;
         if (pressed(cur.dpad_down, prev.dpad_down)) cursor = (cursor + 1) % lines;
-        if (testRunning()) return;   // the numbers a test is measuring stay put; B still stops it
+        if (testRunning()) return;   // B still stops it
 
         int change = pressed(cur.dpad_right, prev.dpad_right) ? 1
                 : pressed(cur.dpad_left, prev.dpad_left) ? -1 : 0;
@@ -296,20 +307,21 @@ public class ShooterTuner extends OpMode {
         }
         if (testRunning()) return;
         note = "";
-        result.clear();
-        switch (test) {
-            case STEP:
-                setTargets(false, false);
-                mode = Mode.WAIT_FOR_REST;
-                modeStartMs = nowMs;
-                break;
-            case FF_FIT:
-                startFit();
-                break;
-            case SHOT:
-                startShot();
-                break;
+        if (test == Test.SHOT) {
+            startShot();
+            return;
         }
+        if (test == Test.STEP && ((flywheelSelected() && Shooter.TARGET_TICKS_PER_SEC <= 0)
+                || (rollerSelected() && Shooter.ROLLER_TARGET_TICKS_PER_SEC <= 0))) {
+            note = "STEP needs the chosen wheels' targets above 0.";
+            return;
+        }
+        // STEP and FF FIT both start from rest: a wheel still coasting would skew the timing or the fit.
+        result.clear();
+        pendingTest = test;
+        setTargets(false, false);
+        mode = Mode.WAIT_FOR_REST;
+        modeStartMs = nowMs;
     }
 
     /** B: whatever is running ends now. The last result stays on screen. */
@@ -318,9 +330,10 @@ public class ShooterTuner extends OpMode {
             finishShot(why);
             return;
         }
-        if (testRunning()) result.add(why);
-        else note = why;
+        boolean wasTest = testRunning();
         endMode();
+        if (wasTest) result.add(why);
+        else note = why;
     }
 
     /** The end of every test and of HOLD: wheels off (they coast), CSV closed, back to IDLE. */
@@ -329,11 +342,12 @@ public class ShooterTuner extends OpMode {
         fw.target = 0;
         rl.target = 0;
         mode = Mode.IDLE;
+        note = "";
         closeLog();
     }
 
     private void applyFit() {
-        if (testRunning() || mode == Mode.SHOT) {
+        if (testRunning()) {
             note = "Y works once the test is over.";
             return;
         }
@@ -353,13 +367,18 @@ public class ShooterTuner extends OpMode {
 
     // ------------------------------------------------------------------ STEP
 
-    /** A floating wheel coasts for a while; time the spin-up from rest, not from a roll. */
+    /** A floating wheel coasts for a while; STEP and FF FIT start from rest, not from a roll. */
     private void runWaitForRest() {
         setTargets(false, false);
         boolean fwMoving = flywheelSelected() && Math.abs(fw.velocity) > AT_REST_TICKS_PER_SEC;
         boolean rlMoving = rollerSelected() && Math.abs(rl.velocity) > AT_REST_TICKS_PER_SEC;
         if ((fwMoving || rlMoving) && nowMs - modeStartMs < MAX_WAIT_FOR_REST_MS) return;
 
+        if (pendingTest == Test.FF_FIT) {
+            startFit();
+            runFit();   // power on in this same loop
+            return;
+        }
         fwStep = flywheelSelected() ? new StepStats("FW", Shooter.TARGET_TICKS_PER_SEC, Shooter.kS, Shooter.kV, fw.velocity) : null;
         rlStep = rollerSelected() ? new StepStats("RL", Shooter.ROLLER_TARGET_TICKS_PER_SEC, Shooter.ROLLER_kS, Shooter.ROLLER_kV, rl.velocity) : null;
         mode = Mode.STEP;
@@ -433,9 +452,11 @@ public class ShooterTuner extends OpMode {
             note = "SHOT needs both targets above 0.";
             return;
         }
+        result.clear();
         dips.clear();
         dip = null;
         shotReady = false;
+        readySinceMs = -1;
         lowSinceMs = -1;
         shotIdleSinceMs = nowMs;
         mode = Mode.SHOT;
@@ -448,8 +469,13 @@ public class ShooterTuner extends OpMode {
         setTargets(true, true);   // a shot needs both wheels, whatever the Wheels line says
         if (dip == null) {
             if (!shotReady) {
-                shotReady = fw.inBand() && rl.inBand();
-                if (shotReady) shotIdleSinceMs = nowMs;
+                // READY once both wheels have stayed in tolerance for a moment, not on one lucky sample.
+                boolean bothIn = fw.inBand() && rl.inBand();
+                readySinceMs = bothIn ? (readySinceMs < 0 ? nowMs : readySinceMs) : -1;
+                if (readySinceMs >= 0 && nowMs - readySinceMs >= READY_DWELL_MS) {
+                    shotReady = true;
+                    shotIdleSinceMs = nowMs;
+                }
             } else if (fw.isLow() || rl.isLow()) {
                 // Low two loops running is a ball; one stray sample is ripple.
                 if (lowSinceMs < 0) lowSinceMs = nowMs;
@@ -469,32 +495,45 @@ public class ShooterTuner extends OpMode {
         double t = nowMs - dip.startMs;
         dip.fw.add(t, fw);
         dip.rl.add(t, rl);
-        boolean over = t >= MIN_DIP_MS && dip.fw.recovered() && dip.rl.recovered();
-        if (!over && t < DIP_TIMEOUT_MS) return;
+        // Back = both wheels in tolerance in the same loop, which is what Shoot waits for before the next ball.
+        boolean back = t >= MIN_DIP_MS && fw.inBand() && rl.inBand();
+        if (!back && t < DIP_TIMEOUT_MS) return;
 
+        dip.recoveryMs = back ? t : -1;
         dips.add(dip);
         result.add(dip.line(dips.size(), Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC));
-        shotReady = over;   // a wheel that never came back must be READY again before the next ball counts
         dip = null;
+        shotReady = false;   // READY has to be earned again before the next ball counts
+        readySinceMs = -1;
         lowSinceMs = -1;
         shotIdleSinceMs = nowMs;
         if (dips.size() >= MAX_SHOTS) finishShot("");
     }
 
     private void finishShot(String why) {
+        if (dip != null) {   // ended while a ball was still going through: keep what was seen
+            dip.cutShort = true;
+            dips.add(dip);
+            result.add(dip.line(dips.size(), Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC));
+            dip = null;
+        }
         if (!why.isEmpty()) result.add(why);
+
+        int complete = 0;
         double worst = -1;
         boolean saturated = false;
         boolean notBack = false;
         for (Dip d : dips) {
-            worst = Math.max(worst, Math.max(d.fw.recoveryMs(), d.rl.recoveryMs()));
+            if (d.cutShort) continue;
+            complete++;
+            if (d.recoveryMs < 0) notBack = true;
+            else worst = Math.max(worst, d.recoveryMs);
             saturated |= d.fw.saturated || d.rl.saturated;
-            notBack |= !d.fw.recovered() || !d.rl.recovered();
         }
-        if (dips.isEmpty()) {
-            result.add("No dips seen. Drop the ball into the wheels once it says READY.");
+        if (complete == 0) {
+            result.add("No complete dips. Drop the ball into the wheels once it says READY.");
         } else if (notBack) {
-            result.add("-> A wheel was not back in 2 s: it can't hold this target. Lower it or check FF FIT.");
+            result.add("-> Not back in 2 s: the wheels can't hold this target. Lower it or check FF FIT.");
         } else if (worst > Shoot.RECOVER_TIMEOUT_MS) {
             result.add(String.format(Locale.US, "-> Slowest %.0f ms > match wait %d ms. %s", worst,
                     Shoot.RECOVER_TIMEOUT_MS, saturated ? "It hit full power: lower the target." : "Raise kP."));
@@ -503,7 +542,6 @@ public class ShooterTuner extends OpMode {
                     worst, Shoot.RECOVER_TIMEOUT_MS));
         }
         addLogPath();
-        dip = null;
         endMode();
     }
 
@@ -532,12 +570,13 @@ public class ShooterTuner extends OpMode {
 
     private void addScreen() {
         telemetry.addLine(String.format(Locale.US, "SHOOTER TUNER %-7s %5.2fV loop %.0f/%.0fms",
-                mode == Mode.WAIT_FOR_REST ? "STEP" : mode.name().replace('_', ' '),
+                mode == Mode.WAIT_FOR_REST ? pendingTest.label : mode.name().replace('_', ' '),
                 volts, loopTimer.avgMs, loopTimer.maxMs));
         addWarnings();
         addLive(fw);
         addLive(rl);
         telemetry.addLine(status());
+        if (testRunning() && !note.isEmpty()) telemetry.addLine(note);
         addSettings();
         if (!result.isEmpty()) {
             telemetry.addLine("-- result -------------------------------");
@@ -590,7 +629,7 @@ public class ShooterTuner extends OpMode {
             case HOLD:
                 return "HOLD: change values live. " + note;
             case WAIT_FOR_REST:
-                return String.format(Locale.US, "STEP: waiting for the wheels to stop (%.1f s)", t);
+                return String.format(Locale.US, "%s: waiting for the wheels to stop (%.1f s)", pendingTest.label, t);
             case STEP:
                 return String.format(Locale.US, "STEP: %.1f / %.1f s", t, runTimeSec);
             case FF_FIT:
@@ -855,6 +894,7 @@ public class ShooterTuner extends OpMode {
                 double mean = eSum / n;
                 double spread = Math.sqrt(Math.max(0, eeSum / n - mean * mean));
                 lines.add(String.format(Locale.US, "   settled err %+.0f +-%.0f  pwr %.2f", mean, spread, pSum / n));
+                lines.add(String.format(Locale.US, "   still changing %+.0f t/s per s (0 = flat)", slope()));
             }
             lines.add("   -> " + diagnosis());
             return lines;
@@ -977,52 +1017,42 @@ public class ShooterTuner extends OpMode {
     }
 
     /**
-     * One ball through the wheels, timed from the moment the first wheel dropped below its band. Each
-     * wheel's recovery is measured from that same moment: how long after the ball it was ready again.
+     * One ball through the wheels, timed from the moment the first wheel dropped below its band, until
+     * both are back in tolerance in the same loop (-1 if not within {@link #DIP_TIMEOUT_MS}).
      */
     private static final class Dip {
         final double startMs;
         final WheelDip fw = new WheelDip(), rl = new WheelDip();
+        double recoveryMs = -1;
+        boolean cutShort;
 
         Dip(double startMs) {
             this.startMs = startMs;
         }
 
         String line(int number, double fwTarget, double rlTarget) {
-            return String.format(Locale.US, "#%d FW %s | RL %s", number, fw.text(fwTarget), rl.text(rlTarget));
+            String back = cutShort ? "cut short" : recoveryMs < 0 ? "NOT back in 2 s"
+                    : String.format(Locale.US, "back %.0fms", recoveryMs);
+            return String.format(Locale.US, "#%d %s  FW %s  RL %s", number, back, fw.text(fwTarget), rl.text(rlTarget));
         }
     }
 
+    /** How far one wheel dropped during a dip, and whether it was flat out at any point. */
     private static final class WheelDip {
         double lowest = Double.MAX_VALUE;
         boolean saturated;
         private boolean left;
-        private double backMs = -1;
 
         void add(double tMs, Wheel w) {
             lowest = Math.min(lowest, w.velocity);
             if (Math.abs(w.power) >= SATURATED) saturated = true;
-            if (!left) {
-                left = !w.inBand();
-            } else if (backMs < 0 && w.inBand()) {
-                backMs = tMs;
-            }
+            if (!w.inBand()) left = true;
         }
 
-        boolean recovered() {
-            return !left || backMs >= 0;
-        }
-
-        /** 0 for a wheel that never left its band. */
-        double recoveryMs() {
-            return left && backMs >= 0 ? backMs : 0;
-        }
-
+        /** "-180 SAT", or "-30 ok" for a wheel that stayed in tolerance. */
         String text(double target) {
             String drop = String.format(Locale.US, "-%.0f", Math.max(0, target - lowest));
-            if (!left) return drop + " ok";
-            return drop + (backMs < 0 ? " NOT back" : String.format(Locale.US, " %.0fms", backMs))
-                    + (saturated ? " SAT" : "");
+            return drop + (!left ? " ok" : saturated ? " SAT" : "");
         }
     }
 

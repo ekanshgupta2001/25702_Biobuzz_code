@@ -64,7 +64,8 @@ the 2026-10-07 simplification. The APK builds.
 **There is no test suite and none is planned.** The JVM suite was deleted in `0efa320`. Verification is
 the compile gate plus §8's on-robot sequence.
 
-Driver Station OpModes: `Teleop`, `Auto BLUE`, `Auto RED` (group **Main**); `Bench: Drive`,
+Driver Station OpModes: `Teleop`, `Auto BLUE`, `Auto RED`, `Auto HARDCODED` (group **Main**; the last
+is timers only, for events before Pedro is tuned); `Bench: Drive`,
 `Bench: Intake`, `Bench: Limelight` (group **Bench**); `Shooter Tuner` (group **Tuning**), a tuning
 dashboard for both shooter wheels on the Driver Station screen (§8 step 6).
 
@@ -126,6 +127,7 @@ opmodes/
   teleop/Teleop                the one match TeleOp: dpad alliance pick in init, every binding inline
   auto/Auto                    30 s routine; tuned (aim, shoot, park) and untuned (shoot, timed leave)
   auto/{BlueAuto, RedAuto}     13 lines each
+  auto/HardcodedAuto           no Pedro, timers only: spin up, 4 balls at 3 s, drive forward DRIVE_MS
   test/{DriveBench, IntakeBench, LimelightBench}   plain OpModes, one subsystem each
 game/{Field, FieldPoses}       field frame, HIVE CELL poses, tag ranges. Every number a placeholder.
 util/
@@ -278,6 +280,9 @@ At the buzzer anything still running is cancelled and every mechanism stopped (G
    trigger and confirm the rear swings onto the CELL. Press dpad-up and confirm the speed goes fixed.
 8. **`Auto BLUE`** with the 30 s clock. Set `Auto.LEAVE_POWER` / `LEAVE_MS` so the robot clearly stops
    touching the wall and never reaches the HIVE. Then check Teleop inherits the pose and the alliance.
+   Until Pedro is tuned, run **`Auto HARDCODED`** instead: set `HardcodedAuto.DRIVE_MS` (default 1 s)
+   and the sign of `DRIVE_POWER` (0.7, forward = intake first) on the practice field, then its two
+   shooter speeds for the starting spot.
 9. **Before every event**: delete the `tuning` line from `build.dependencies.gradle` and the two sources
    that import it (`pedro/Tuning.java`, `pedro/procedures/`), then build and deploy. Confirm the tuning
    site no longer answers at :10158. The everyday build is not match legal and nothing else warns you.

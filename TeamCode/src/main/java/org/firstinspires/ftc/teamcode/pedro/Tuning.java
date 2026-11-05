@@ -25,8 +25,9 @@ import org.firstinspires.ftc.teamcode.pedro.procedures.Tests;
  *
  * <p>The Shooter Tuner is ours, not the Quickstart's: it times spin-ups of the flywheel (gamepad 1
  * dpad left), the counter-roller (dpad right) or both with a test shot (dpad up) for each wheel's
- * kS / kV / kP, and ends with a block to paste into {@code Shooter.java}. This site is the only
- * tuning tool in the repo.
+ * kS / kV / kP, and ends with a block to paste into {@code Shooter.java}. The main shooter tool is
+ * now the {@code Shooter Tuner} OpMode on the Driver Station ({@code subsystems/ShooterTuner}), which
+ * needs no web site and survives the R704 strip.
  *
  * <p>BIOBUZZ R704: AutoTune's web servers are always bound while the library is on the classpath, so
  * before an event this file, {@code pedro/procedures/*} and the {@code tuning} dependency are removed

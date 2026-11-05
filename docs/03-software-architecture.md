@@ -74,6 +74,7 @@ opmodes/
     Auto.java                  the 30 s routine, abstract; tuned and untuned variants
     BlueAuto.java              @Autonomous "Auto BLUE", preselects Teleop
     RedAuto.java               @Autonomous "Auto RED", preselects Teleop
+    HardcodedAuto.java         @Autonomous "Auto HARDCODED": no Pedro, timers only (shoot 4, drive forward)
   test/
     DriveBench.java            "Bench: Drive": Pedro sticks, OPTIONS = field/robot centric, pose readout
     IntakeBench.java           "Bench: Intake": RB in, LB out, both stop
@@ -174,10 +175,16 @@ Subsystem conventions:
 |---|---|---|
 | `Teleop` | `@TeleOp` | Main |
 | `Auto BLUE` / `Auto RED` | `@Autonomous`, `preselectTeleOp = "Teleop"` | Main |
+| `Auto HARDCODED` | `@Autonomous`, `preselectTeleOp = "Teleop"` | Main |
 | `Bench: Drive`, `Bench: Intake`, `Bench: Limelight` | `@TeleOp` | Bench |
 | `Shooter Tuner` | `@TeleOp` | Tuning |
 
 The Shooter Tuner (`subsystems/ShooterTuner.java`) is the shooter's tuning dashboard (§12).
+`Auto HARDCODED` (`opmodes/auto/HardcodedAuto.java`) is the autonomous for events before Pedro is
+tuned. It is a plain `OpMode` that builds only `Shooter`, `Intake` and the four drive motors, with no
+`Robot`, no Pedro and no Ivy. It spins up from START, feeds 4 balls from 3 s on with `Shoot`'s timings,
+then drives forward at `DRIVE_POWER` for `DRIVE_MS`. It works for both alliances because every move is
+relative to the robot.
 
 **Alliance.** Autonomous gets it from the OpMode class (`BlueAuto`/`RedAuto`, ~13 lines each), so the
 wrong route cannot run. Teleop is one OpMode: during init, gamepad 1's dpad left = RED, right = BLUE.

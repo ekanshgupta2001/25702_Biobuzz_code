@@ -61,6 +61,7 @@ subsystems/
   Intake.java                  roller AND tunnel on one motor: in/out/off, JamDetector
   Shooter.java                 2 opposed motors, kS/kV/kP on setPower, distance→ticks/sec table
   Limelight.java               the target CELL's tag tx, for the aim correction, and nothing else
+  ShooterTuner.java            @TeleOp "Shooter Tuner" (group Tuning): the shooter's tuning dashboard (§12)
 commands/
   Macros.java                  shootOne/shootAll/aimAndShootAll/driveTo; Auto's aim law
   Shoot.java                   the shooting cycle as one state machine
@@ -108,6 +109,7 @@ util.field ──────────► util.math.Angles, Pedro math.Pose
 util.math, util.time, util.control ──► java.* ONLY
 util.hardware ───────► nothing at all (string constants)
 pedro ───────────────► util.hardware, Pedro; pedro.procedures.ShooterTuner ─► subsystems.{Shooter, Intake}, commands.Shoot
+subsystems.ShooterTuner ► subsystems.Shooter, commands.Shoot (one constant), SDK   — an OpMode, not a subsystem
 ```
 
 Rules that are worth stating because breaking them is easy:
@@ -173,8 +175,9 @@ Subsystem conventions:
 | `Teleop` | `@TeleOp` | Main |
 | `Auto BLUE` / `Auto RED` | `@Autonomous`, `preselectTeleOp = "Teleop"` | Main |
 | `Bench: Drive`, `Bench: Intake`, `Bench: Limelight` | `@TeleOp` | Bench |
+| `Shooter Tuner` | `@TeleOp` | Tuning |
 
-The Shooter Tuner is not an OpMode: it is a procedure on the AutoTune site (§12).
+The Shooter Tuner (`subsystems/ShooterTuner.java`) is the shooter's tuning dashboard (§12).
 
 **Alliance.** Autonomous gets it from the OpMode class (`BlueAuto`/`RedAuto`, ~13 lines each), so the
 wrong route cannot run. Teleop is one OpMode: during init, gamepad 1's dpad left = RED, right = BLUE.
@@ -521,20 +524,32 @@ Controller start-up**, so each must be `public static`, zero-arg, declared to re
 `Procedure`, and must never throw; a factory whose config is not filled yet returns a `NotReady`
 procedure that says what to paste first.
 
-**The Shooter Tuner** (`procedures/ShooterTuner.java`) is how both wheels' kS / kV / kP are tuned, on
-the same site: a form takes each wheel's target speed and three gains and writes them into `Shooter`'s
-statics, then runs a `TuningOpMode` that does one test, picked on gamepad 1's dpad: **left** spins the
-flywheel up from rest alone, **right** the counter-roller alone (the other wheel gets a target of 0,
-which `Shooter.update()` treats as off), **up** both, and then **A** fires one ball with the same
-intake-and-up-wheels pulse as `commands/Shoot` and measures how far each wheel dips and how long it takes
-to come back. The result (time to target, overshoot, time at full power, settled error, and the dip) is
-shown in the next form. "Done" ends it with two lines to paste into `Shooter.java`. The values typed
-there live until the RC app restarts.
+**The shooter is tuned on the Driver Station** (2026-11-04: the team could not reach the tuning site).
+`subsystems/ShooterTuner.java` is a plain iterative OpMode whose telemetry is the dashboard (MONOSPACE,
+bulk cache MANUAL so each loop reads every encoder once). It builds only a `Shooter` and edits its
+statics directly, and `Shooter.update()` reads those every loop, so a change lands on the next loop:
+
+- **HOLD** (A): the chosen wheels hold their targets; per wheel the velocity, error, average error and
+  ripple over 0.5 s, power (`SAT` when flat out), READY and the time to reach the target, which restarts
+  whenever the target changes. A wheel that is not chosen gets a target of 0, which `Shooter.update()`
+  treats as off.
+- **FF FIT**: open-loop power 0.2…1.0 through `Shooter.setRawPower`, then a least-squares
+  `power = kS + kV · velocity` with R², free speed, and the target as a share of it. Y applies kS/kV.
+- **STEP**: from rest, time to reach and to settle, overshoot, time at full power, settled error and
+  spread, and a diagnosis (reversed / flat out / still accelerating / kV low or high / overshoot).
+- **SHOT**: hand fed, both wheels. Each dip below the band is caught on its own; how far each wheel
+  dropped and how long after the ball it was back, compared with `Shoot.RECOVER_TIMEOUT_MS`.
+
+It also flags an encoder that reads nothing under power, a wheel turning backwards, swapped `sl`/`sr`
+encoder cables and a slow loop; prints the two lines to type into `Shooter.java`; and writes a CSV per
+test to `/sdcard/FIRST/data`. Values set there live until the RC app restarts. It has no web server, so
+it is match legal and survives the AutoTune strip. The older AutoTune procedure
+(`procedures/ShooterTuner.java`) is still registered on the site.
 
 `Tuning.java`, `pedro/procedures/**` and the `tuning` dependency are **always in the build**; AutoTune
 binds a web server whenever it is in the APK, so under R704 **the everyday APK is not match legal**, and
-before an event those are removed by hand (HANDOFF §4). FTC Dashboard was removed on 2026-10-07, so this
-site is the only tuning tool in the repo. One build was a team choice on 2026-09-30: every file in the
+before an event those are removed by hand (HANDOFF §4). FTC Dashboard was removed on 2026-10-07. One
+build was a team choice on 2026-09-30: every file in the
 normal folders and nothing for Android Studio to get wrong, over two things tried before it — a
 `-Ptuning` Gradle property (Studio never passes it) and a `competition`/`tuning` build variant split
 with those sources in `src/tuning/java`.
@@ -687,7 +702,7 @@ the subsystem it tests — no `Robot`, no scheduler — and calls its `update()`
   offset, averaged over that CELL's tags) next to the Pinpoint pose, once Pedro is tuned. A test
   number only: the CELL moves when the HIVE tips (§16). It drives nothing.
 
-The shooter is tuned on the AutoTune site, not by an OpMode (§12).
+The shooter is tuned with the `Shooter Tuner` OpMode, which builds only a `Shooter` (§12).
 
 **The benches hold no motor handles of their own.** A bench that calls
 `hardwareMap.get(DcMotorEx.class, "shooter_left")` gets a *second* handle to a port a subsystem would

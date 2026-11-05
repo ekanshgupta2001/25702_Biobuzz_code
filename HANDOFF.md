@@ -15,8 +15,9 @@ roller, carries them down a tunnel, and launches them out of the **rear** into a
 
 Stack: **Pedro Pathing 3.0.0** (`revhub` + `core`), **Ivy 1.1.1** command scheduler, **AutoTune**
 (`tuning:1.0.1`), FTC SDK **11.2.1**, Gradle 9.1.0, Java 8 source level.
-**No Panels, no FTC Dashboard: AutoTune (the Pedro tuning site) is the only tuning tool. It is in every
-build, so the APK is NOT match legal (R704)** until it is stripped (§4).
+**No Panels, no FTC Dashboard. AutoTune (the Pedro tuning site) tunes the drivetrain; the shooter is
+tuned on the Driver Station with the `Shooter Tuner` OpMode. AutoTune is in every build, so the APK is
+NOT match legal (R704)** until it is stripped (§4).
 
 ### The robot, from the CAD
 
@@ -64,8 +65,8 @@ the 2026-10-07 simplification. The APK builds.
 the compile gate plus §8's on-robot sequence.
 
 Driver Station OpModes: `Teleop`, `Auto BLUE`, `Auto RED` (group **Main**); `Bench: Drive`,
-`Bench: Intake`, `Bench: Limelight` (group **Bench**). The Shooter Tuner is on the AutoTune site, not in
-the OpMode list.
+`Bench: Intake`, `Bench: Limelight` (group **Bench**); `Shooter Tuner` (group **Tuning**), a tuning
+dashboard for both shooter wheels on the Driver Station screen (§8 step 6).
 
 ## 3. Read these first
 
@@ -92,8 +93,9 @@ JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" \
 
 **There is one build, and it always contains AutoTune.** The team chose this on 2026-09-30 so that
 every file sits in the normal folders and Android Studio resolves them with no variant to select. FTC
-Dashboard was removed on 2026-10-07: AutoTune is the only tuning tool, and the shooter is tuned there
-too. The price: **every APK binds AutoTune's web server and is not match legal (R704).** Before an
+Dashboard was removed on 2026-10-07. The shooter is tuned with the `Shooter Tuner` OpMode on the Driver
+Station (2026-11-04, when the tuning site could not be reached); it has no web server, so it stays in the
+event APK. The price of AutoTune: **every APK binds AutoTune's web server and is not match legal (R704).** Before an
 event, delete the `tuning` line from `build.dependencies.gradle` and the two sources that import it
 (`pedro/Tuning.java`, `pedro/procedures/`), then build and deploy. Nothing on the card warns you; the
 giveaway is the tuning site still answering at :10158. (A two-variant split with the tuning files in
@@ -113,6 +115,7 @@ subsystems/
   Intake.java                  roller + tunnel on one motor: in/out/off on setPower, JamDetector
   Shooter.java                 2 opposed motors, kS/kV/kP on setPower, distance->ticks/sec table,
                                fixed-speed override (MANUAL_TICKS_PER_SEC)
+  ShooterTuner.java            the "Shooter Tuner" OpMode: live dashboard, STEP / FF FIT / SHOT tests
   Limelight.java               the target CELL's tag tx, and nothing else. The one fail-soft device.
 commands/
   Macros.java                  shootOne/shootAll/aimAndShootAll/driveTo; Auto's aim law
@@ -184,7 +187,8 @@ At the buzzer anything still running is cancelled and every mechanism stopped (G
 | **Every macro reports a terminal `Outcome`** | A timeout or an abort used to leave it `RUNNING` for ever. Built as `deadline(sequential(...), onInterrupt(markCancelled))` — **not** `setEnd` on the group, because Ivy's `setEnd` *replaces* the group's own end, the one that ends its children. |
 | **`FieldConstants` rotates, it does not mirror** | The BIOBUZZ field is 180° rotationally symmetric: GARDEN A1/F6, LOADING ZONE A5/F2. A C/D mirror would put them on F1 and F5 and every blue auto in the wrong place. The enum with three arms is gone — a run-time selector over a fact the field cannot change is just somewhere for a wrong value to hide. |
 | **SDK 11.2.1 is fine** | The docs used to defer a 12.0 upgrade for the AprilTag *cluster* API. The tags are read by the Limelight's own pipeline over USB-Ethernet, not by the SDK's `AprilTagProcessor`, so nothing in the confirmed hardware needs it. It is a future task, not a prerequisite. |
-| **AutoTune is the only tuning tool; always built in, stripped by hand before events** | The Pedro tuning site tunes the drivetrain, and our `ShooterTuner` procedure on the same site tunes kS/kV/kP by timing spin-ups. FTC Dashboard was removed on 2026-10-07. AutoTune binds a web server whenever it is in the APK, and R704 prohibits streaming tools during matches, so the event APK must have it removed (§4). |
+| **AutoTune tunes the drivetrain; always built in, stripped by hand before events** | FTC Dashboard was removed on 2026-10-07. AutoTune binds a web server whenever it is in the APK, and R704 prohibits streaming tools during matches, so the event APK must have it removed (§4). |
+| **The shooter is tuned on the Driver Station** (2026-11-04) | The team could not reach the tuning site, so `subsystems/ShooterTuner` is a plain OpMode whose telemetry is the dashboard: live error, reach time, a feedforward fit that finds kS/kV, a step test and a hand-fed shot test. No web server, so it is match legal. The older AutoTune `ShooterTuner` procedure is still registered. |
 
 ## 7. Rules that bite
 
@@ -245,12 +249,21 @@ At the buzzer anything still running is cancelled and every mechanism stopped (G
    `Bench: Drive`, OPTIONS switches to field-centric and x / y / heading should track a tape measure.
 5. **`Bench: Intake`**: RB in, LB out, both stop. Confirm one motor turns **both** roller and tunnel.
    Note the current of a clean pick-up and of a deliberate stall; `STALL_CURRENT_AMPS` goes between them.
-6. **Shooter Tuner** on the AutoTune site, with gamepad 1 assigned on the Driver Station. Each run is one
-   test, picked on the dpad: **left** = flywheel alone, **right** = counter-roller alone, **up** = both,
-   then **A** fires one ball and the next form shows how far each wheel dipped and how fast it came back.
-   For each wheel set a target, then raise `kV` until it gets close on its own, `kS` until it starts
-   cleanly, and `kP` until the spin-up time stops improving without a big overshoot. Tick Done and
-   **paste the two lines into `Shooter.java`** (values typed there only last until the RC app restarts).
+6. **`Shooter Tuner`** (group Tuning) on the Driver Station, gamepad 1, hands clear. dpad up/down picks
+   a line, left/right changes it, LB/RB change the step; **A** = HOLD (wheels hold their targets and
+   every change applies at once), **X** = run the Test on the menu, **Y** = apply the fit, **B** = stop.
+   Wheels = FLYWHEEL, then ROLLER:
+   1. **FF FIT, X**: five fixed powers, then kS and kV fitted to them (R² should be ~0.98+). **Y**.
+   2. **A**: average error near 0; raise `kP` until "reach" stops getting shorter without the ripple
+      growing. Bump the target ±50 to re-time it.
+   3. **STEP, X**: from rest, time to reach and to settle, overshoot, settled error, and what to change.
+   4. Wheels = BOTH, **SHOT, X**: once READY, drop balls in by hand one at a time; each dip and its
+      recovery time is listed. Slower than `Shoot.RECOVER_TIMEOUT_MS` means raise `kP`, or lower the
+      target if it hit full power.
+
+   **Type the two lines at the bottom into `Shooter.java`** (values set there only last until the RC app
+   restarts). `!!` lines on the card flag an encoder that reads nothing, a wheel turning backwards, or
+   swapped encoder cables. Every test writes a CSV to `/sdcard/FIRST/data` (`adb pull`).
    Then the distance table: in Teleop's fixed-speed mode, park at 24/48/72/96 in, trim until the piece
    lands in the CELL, and write each row into `DISTANCES_INCHES` / `FLYWHEEL_TICKS_PER_SEC` /
    `ROLLER_TICKS_PER_SEC`.
@@ -273,7 +286,7 @@ At the buzzer anything still running is cancelled and every mechanism stopped (G
 
 | File | Constant | How |
 |---|---|---|
-| `Shooter` | `kS`, `kV`, `kP`; `ROLLER_kS`, `ROLLER_kV`, `ROLLER_kP` | Shooter Tuner on the AutoTune site: dpad left for the flywheel, right for the counter-roller, up to test a shot (§8 step 6) |
+| `Shooter` | `kS`, `kV`, `kP`; `ROLLER_kS`, `ROLLER_kV`, `ROLLER_kP` | `Shooter Tuner` OpMode: FF FIT for kS/kV, HOLD and STEP for kP, SHOT for recovery (§8 step 6) |
 | `Shooter` | `DISTANCES_INCHES` / `TICKS_PER_SEC`, `MANUAL_TICKS_PER_SEC`, `TOLERANCE_TICKS_PER_SEC` | Teleop fixed-speed mode, from real shots (§8 step 6) |
 | `Shooter` | `SECOND_MOTOR_REVERSED` | TestHardware: the two wheels must counter-rotate at the same power |
 | `Shooter` | `HEADING_OFFSET_RAD` | π = fires out the rear. Confirm on the built robot |

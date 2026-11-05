@@ -36,7 +36,7 @@ import java.util.function.BooleanSupplier;
  * crosses it, the integrator is exactly what makes recovery slow and then overshoot. {@code kV}
  * carries the steady-state speed, {@code kP} closes what is left of the gap, {@code kS} pays for belt
  * and bearing drag. Both wheels' gains (the counter-roller's are {@code ROLLER_*}) are tuned with the
- * Shooter Tuner on the Pedro tuning site.
+ * {@code Shooter Tuner} OpMode on the Driver Station.
  *
  * <h2>Arming, not spinning up</h2>
  * The wheels are either holding their targets or off; there is no idle speed. {@link #armedCommand()}
@@ -46,8 +46,8 @@ import java.util.function.BooleanSupplier;
 public class Shooter {
     /**
      * The flywheel's gains: {@code kV} is power per tick per second, {@code kP} power per tick per
-     * second of error, {@code kS} the power that just overcomes drag. Tune them with the Shooter Tuner
-     * on the Pedro tuning site (http://192.168.43.1:10158).
+     * second of error, {@code kS} the power that just overcomes drag. Tune them with the
+     * {@code Shooter Tuner} OpMode (group Tuning) and paste its two lines here.
      */
     public static double kS = 0.01, kV = 0.00000, kP = 0.00;
     /** The counter-roller's gains, same meaning, tuned the same way. Placeholders: start from the flywheel's. */
@@ -141,15 +141,32 @@ public class Shooter {
 
     /**
      * Stops both wheels and the up-wheels now rather than next loop, so a disarm is never one loop of
-     * thrown piece.
+     * thrown piece. Also stops wheels left running by {@link #setRawPower}.
      */
     public void disarm() {
         feederOff();
         writeFeeder(0);
-        if (armed) {
-            armed = false;
-            writeWheels(0, 0);
-        }
+        armed = false;
+        writeWheels(0, 0);   // writes only on change, so calling this every loop costs nothing
+    }
+
+    /**
+     * Shooter Tuner only: fixed open-loop power on each wheel, no gains. Do not call {@link #update()}
+     * while using this, it would overwrite it; {@link #disarm()} stops it.
+     */
+    public void setRawPower(double flywheelPower, double rollerPower) {
+        armed = false;
+        writeWheels(flywheelPower, rollerPower);
+    }
+
+    /** The power last sent to the flywheel. Can be above 1: the hub clips it to full power. */
+    public double getFlywheelPower() {
+        return lastFlywheelPower;
+    }
+
+    /** The power last sent to the counter-roller. Can be above 1: the hub clips it to full power. */
+    public double getRollerPower() {
+        return lastRollerPower;
     }
 
     public boolean isArmed() {

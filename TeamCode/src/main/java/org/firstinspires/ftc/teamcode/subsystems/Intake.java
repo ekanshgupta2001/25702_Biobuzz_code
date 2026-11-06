@@ -57,7 +57,7 @@ public class Intake {
 
     public static int DEFAULT_IDLE_PRIORITY = -1;
 
-    public enum Mode { OFF, IN, OUT }
+    public enum Mode { OFF, IN, OUT, FEED }
 
     private final DcMotorEx motor;
     private Mode mode = Mode.OFF;
@@ -81,6 +81,8 @@ public class Intake {
 
     public void in()    { setMode(Mode.IN); }
     public void out()   { setMode(Mode.OUT); }
+    /** Runs in like {@link #in()} but with anti-jam off: for feed pulses, when the shooter's up-wheels run too. */
+    public void feed()  { setMode(Mode.FEED); }
     public void stop()  { setMode(Mode.OFF); }
 
     private void setMode(Mode next) {
@@ -100,7 +102,8 @@ public class Intake {
     /** The power {@link #update()} will write for the current mode, before anti-jam. */
     public double powerFor(Mode m) {
         switch (m) {
-            case IN:   return IN;
+            case IN:
+            case FEED: return IN;
             case OUT:  return OUT;
             default:   return 0;
         }

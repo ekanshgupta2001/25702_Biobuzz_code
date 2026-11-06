@@ -22,9 +22,10 @@ import java.util.function.Supplier;
  * This class owns exactly one {@link Mecanum}, built from names and directions alone, and hands that
  * same instance to the {@link Follower} when the tuning configs exist. So:
  * <ul>
- *   <li><b>Sticks always work.</b> With a follower they go through {@code follower.manual(...)},
- *       field-centric against the Pinpoint's heading. Without one they go straight to
- *       {@code mecanum.drive(...)}, robot-centric, because there is no pose to rotate against.</li>
+ *   <li><b>Sticks always work, robot-centric by default.</b> With a follower they go through
+ *       {@code follower.manual(...)} (field-centric only after {@link #toggleFieldCentric()}).
+ *       Without one they go straight to {@code mecanum.drive(...)}, robot-centric, because there is
+ *       no pose to rotate against.</li>
  *   <li><b>Paths and turns need the follower</b> and are inert until
  *       AutoTune has filled {@code Constants.localizerConfig} and {@code foresightConfig}.</li>
  * </ul>
@@ -55,7 +56,8 @@ public class Drivetrain {
     /** Null until the tuning configs are filled. Drives {@link #mecanum}, never its own copy. */
     private final Follower follower;
 
-    private boolean fieldCentric = true;
+    /** Robot-centric unless a bench toggles it; Teleop is robot-centric only (no odometry pods). */
+    private boolean fieldCentric = false;
     /**
      * Field heading the driver calls "forward", radians. Field-centric sticks are rotated by
      * (heading - this), so a blue driver standing behind the +X wall facing -X pushes the stick up
@@ -290,7 +292,7 @@ public class Drivetrain {
     /**
      * Drives at fixed powers for {@code ms}, then hands control back. Works with or without a
      * follower, which is what lets the first-event autonomous leave the wall before anything is
-     * tuned. It goes through {@link #drive}, so once tuned the powers are field-centric.
+     * tuned. It goes through {@link #drive}, so the powers are robot-centric.
      */
     public Command driveForMsCommand(double forward, double strafe, double turn, long ms) {
         final long[] startedAt = new long[1];

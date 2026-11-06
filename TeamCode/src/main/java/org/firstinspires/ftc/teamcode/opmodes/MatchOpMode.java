@@ -102,6 +102,6 @@ public abstract class MatchOpMode extends OpMode {
     public final void stop() {
         onStop();
         Scheduler.reset();
-        if (robot != null) robot.stop();
+        // No motor writes here: the SDK rejects them from stop() and stops the motors itself.
     }
 }

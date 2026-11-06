@@ -1,6 +1,7 @@
 package org.firstinspires.ftc.teamcode.commands;
 
 import com.pedropathing.ivy.Command;
+import com.qualcomm.robotcore.util.RobotLog;
 
 import org.firstinspires.ftc.teamcode.subsystems.Intake;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
@@ -64,6 +65,11 @@ public class Shoot {
         this.pieces = Math.max(0, pieces);
     }
 
+    /** The cycle's step, for the telemetry card: SPIN_UP, FEED, SETTLE, RECOVER, DWELL or DONE. */
+    public String getStateName() {
+        return state.name();
+    }
+
     public int getShotsFired() {
         return fired;
     }
@@ -105,9 +111,11 @@ public class Shoot {
     private void enter(State next) {
         state = next;
         stateSinceMs = System.currentTimeMillis();
+        RobotLog.ii("Shoot", "-> %s  fly %.0f/%.0f  roller %.0f/%.0f", next,
+                shooter.getVelocity(), shooter.getTarget(), shooter.getRollerVelocity(), shooter.getRollerTarget());
         // The action for a state is applied on entry, so a transition costs no loop.
         if (next == State.FEED) {
-            intake.in();
+            intake.feed();
             shooter.feederOn();
         } else {
             intake.stop();

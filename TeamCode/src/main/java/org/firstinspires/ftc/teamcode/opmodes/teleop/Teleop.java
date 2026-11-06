@@ -2,202 +2,136 @@ package org.firstinspires.ftc.teamcode.opmodes.teleop;
 
 import com.pedropathing.ivy.Command;
 import com.pedropathing.ivy.Scheduler;
-import com.pedropathing.math.Pose;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
-import com.qualcomm.robotcore.util.Range;
+import com.qualcomm.robotcore.util.RobotLog;
 
 import org.firstinspires.ftc.teamcode.Robot;
-import org.firstinspires.ftc.teamcode.game.Field;
 import org.firstinspires.ftc.teamcode.subsystems.Intake;
-import org.firstinspires.ftc.teamcode.subsystems.Limelight;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
-import org.firstinspires.ftc.teamcode.util.field.Alliance;
-import org.firstinspires.ftc.teamcode.util.field.PoseStorage;
-import org.firstinspires.ftc.teamcode.util.math.Angles;
 
 import java.util.Locale;
 
 /**
- * The match TeleOp, for both alliances. Pick the side during init on gamepad 1's dpad
- * (left = RED, right = BLUE); it starts on the side the last autonomous ran.
+ * The match TeleOp. One gamepad (gamepad 1) runs everything. Drive is robot-centric only: there are
+ * no odometry pods, so nothing here uses a pose.
  *
  * <pre>
- * DRIVER (gamepad 1)                          OPERATOR (gamepad 2)
- *   L-stick / R-stick X  drive / turn            RB / LB / both    intake in / out / stop (+ cancel shot)
- *   L-trigger (hold)     slow mode               L-trigger         flywheel on / off
- *   R-trigger (hold)     aim the shooter         R-trigger / A     shoot one / shoot four
- *   options              field / robot centric   dpad up           speed from distance / fixed speed
- *   Y                    re-zero heading         dpad left / right fixed speed - / +
- *                        (face away from wall)   dpad down         our HIVE tipped: aim at the other CELL
+ * DRIVE    L-stick        drive / strafe (robot centric)
+ *          R-stick X      turn
+ *          LT (hold)      slow mode
+ * INTAKE   RB / LB        intake in / out (stays on until changed)
+ *          RB + LB        intake stop, and cancels a running shot
+ * SHOOTER  X              flywheel on / off
+ *          options        AUTO / MANUAL shooting (starts in AUTO; switching cancels a running shot)
+ *          AUTO    RT     shoot one   (macro)
+ *                  A      shoot four  (macro)
+ *          MANUAL  RT     hold = feed: intake in + up-wheels on, only while the flywheel is on
  * </pre>
  *
- * Every loop: read sensors, handle both gamepads, run the shot macros ({@code Scheduler.execute()}),
- * then write the motors. Everything that needs a pose (field centric, aiming, speed from distance)
- * switches itself off until Pedro is tuned.
+ * MANUAL is the fallback for when the shot macro misbehaves: the driver spins up with X, watches
+ * for READY on the card, and holds RT to feed balls in by hand.
+ *
+ * <p>The controller buzzes once when both wheels first reach speed after X, and three times when the
+ * intake gives up un-jamming, so the driver does not have to look at the card.
+ *
+ * <p>Every loop: read sensors, then one section per mechanism ({@link #drive()},
+ * {@link #intake()}, {@link #shooter()}), then the shot macros ({@code Scheduler.execute()}), then
+ * write the motors. The sections only set fields; the intake's and shooter's default commands apply
+ * those fields every loop.
  */
 @TeleOp(name = "Teleop", group = "Main")
 public class Teleop extends OpMode {
     public static double SLOW_SCALE = 0.4;
-    /** Aiming: turn power per radian of heading error, and the most it may turn. */
-    public static double AIM_P = 1.5;
-    public static double AIM_MAX_TURN = 0.5;
-    /** How long a Limelight sighting keeps correcting the aim after the tags leave view. */
-    public static long TAG_CORRECTION_MS = 5000;
-    public static double SPEED_STEP_TICKS_PER_SEC = 100;
 
     private Robot robot;
-    private Alliance alliance;
 
+    /** The intake as the bumpers last left it. */
     private Intake.Mode intakeMode = Intake.Mode.OFF;
     /** Both bumpers were pressed: ignore a single bumper until both are let go. */
     private boolean waitForBumperRelease = false;
+
     private boolean flywheelOn = false;
-    private boolean fixedSpeed = false;
-    /** The shot macro last started, so both bumpers can cancel it. */
+    /** False = AUTO (RT / A run the shot macros). True = MANUAL (hold RT to feed). */
+    private boolean manualShooting = false;
+    /** MANUAL only: RT held with the flywheel on. Runs the intake in and the up-wheels. */
+    private boolean feeding = false;
+    /** The controller has already buzzed for this spin-up / for this jam, so each buzzes only once. */
+    private boolean readyBuzzed = false;
+    private boolean jamBuzzed = false;
+    /** The shot macro last started, so it can be cancelled. */
     private Command shot = null;
-
-    /** How many times our HIVE has tipped; the up-facing CELL flips each time. */
-    private int tips = 0;
-    private Pose cell;
-    private int minTag, maxTag;
-
-    private boolean hadAutoPose = false;
-
-    /** Camera bearing minus odometry bearing to the CELL, radians, and when it was measured (0 = never). */
-    private double tagCorrection = 0;
-    private long tagCorrectionAtMs = 0;
 
     @Override
     public void init() {
         Scheduler.reset();   // the scheduler is static and survives OpMode restarts
         robot = new Robot(hardwareMap);
-        alliance = PoseStorage.getAlliance(Alliance.BLUE);
-        hadAutoPose = PoseStorage.hasPose();
-        if (hadAutoPose) {
-            robot.drivetrain.setPose(PoseStorage.getPose());
-            // Used once: a second Teleop must not snap back to where auto ended.
-            PoseStorage.clearPose();
-        }
 
-        // The intake and flywheel follow these two fields every loop. A shot macro takes both over
-        // while it runs and hands them back when it ends.
+        // The intake and shooter follow these fields every loop. A shot macro takes both over while
+        // it runs and hands them back when it ends.
         Scheduler.schedule(
-                robot.intake.operatorControlCommand(() -> intakeMode),
-                robot.shooter.armedControlCommand(() -> flywheelOn));
+                robot.intake.operatorControlCommand(() -> feeding ? Intake.Mode.FEED : intakeMode),
+                robot.shooter.armedControlCommand(() -> flywheelOn, () -> feeding));
     }
 
     @Override
     public void init_loop() {
-        if (gamepad1.dpadLeftWasPressed()) alliance = Alliance.RED;
-        if (gamepad1.dpadRightWasPressed()) alliance = Alliance.BLUE;
-
-        telemetry.addLine("ALLIANCE: " + alliance + "   (gamepad 1 dpad: left = RED, right = BLUE)");
-        telemetry.addLine(robot.drivetrain.hasFollower()
-                ? "Pedro tuned"
-                : "Pedro NOT tuned: robot centric, no aiming, fixed flywheel speed");
-        telemetry.addLine(hadAutoPose ? "Using the pose auto left"
-                : "No pose from auto: press Y once, facing away from your wall");
-        telemetry.addLine("If auto tipped our HIVE: operator dpad down once");
+        telemetry.addLine("ONE GAMEPAD (gamepad 1). Drive is robot centric.");
+        telemetry.addLine(String.format(Locale.US, "Shooter speeds: fly %.0f  roller %.0f t/s",
+                Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC));
         telemetry.addLine();
-        telemetry.addLine("DRIVER: sticks drive, LT slow, RT aim, options field/robot, Y re-zero heading");
-        telemetry.addLine("OPERATOR: RB in, LB out, both stop, LT flywheel, RT shoot 1, A shoot 4");
-        telemetry.addLine("  dpad up distance/fixed speed, left/right speed -/+, down HIVE tipped");
+        telemetry.addLine("DRIVE    sticks drive, LT hold = slow");
+        telemetry.addLine("INTAKE   RB in, LB out, both = stop (+ cancel shot)");
+        telemetry.addLine("SHOOTER  X flywheel on/off, options = AUTO/MANUAL");
+        telemetry.addLine("  AUTO    RT shoot one, A shoot four");
+        telemetry.addLine("  MANUAL  hold RT to feed (flywheel must be on)");
+        telemetry.addLine("BUZZ     once = flywheel ready, three = intake jammed");
     }
 
     @Override
     public void start() {
         // *WasPressed() remembers presses until read: forget anything bumped during init.
         gamepad1.resetEdgeDetection();
-        gamepad2.resetEdgeDetection();
-        robot.drivetrain.setDriverHeadingOffset(Field.driverForwardHeading(alliance));
-        robot.limelight.setAlliance(alliance);   // pipeline 0 = BLUE, 1 = RED
-        pickTargetCell();
         robot.drivetrain.onStart();
     }
 
     @Override
     public void loop() {
         robot.readSensors();
-        Pose pose = robot.drivetrain.getPose();   // null until Pedro is tuned
 
-        // Not while aiming: the robot is turning then, and a camera frame is a few loops old, so a
-        // sample taken mid-turn would be off by the turn rate times the camera delay.
-        boolean aiming = gamepad1.right_trigger > 0.5;
-        if (!aiming) updateTagCorrection(pose);
-        driver(pose, aiming);
-        operator(pose);
+        drive();
+        intake();
+        shooter();
 
         Scheduler.execute();
         robot.writeActuators();
-        showTelemetry(pose);
+        showTelemetry();
     }
 
     @Override
     public void stop() {
         Scheduler.reset();
         // No motor writes here: the SDK rejects them from stop() and stops the motors itself.
-        if (robot != null) robot.stop();
     }
 
-    // ---- Driver ----
+    // ---- Drive ----
 
-    private void driver(Pose pose, boolean aiming) {
-        if (gamepad1.optionsWasPressed()) robot.drivetrain.toggleFieldCentric();
-        if (gamepad1.yWasPressed()) {
-            robot.drivetrain.resetHeading();
-            tagCorrectionAtMs = 0;   // it was measured against the old heading
-        }
-
+    private void drive() {
         double scale = gamepad1.left_trigger > 0.5 ? SLOW_SCALE : 1.0;
         // The SDK reports stick-up as negative; Pedro wants +forward, +strafe left, +turn CCW.
         double forward = -gamepad1.left_stick_y * scale;
         double strafe = -gamepad1.left_stick_x * scale;
         double turn = -gamepad1.right_stick_x * scale;
-
-        if (aiming && pose != null) turn = aimTurn(pose);
-
         robot.drivetrain.drive(forward, strafe, turn);
     }
 
-    // ---- Aiming ----
-    // The shooter fires out the rear, so aiming means turning the robot's back to the CELL. Odometry
-    // gives the bearing. The front camera can refine it, but it only sees the CELL's tags while the
-    // robot faces the CELL, i.e. before it turns around. So while the tags are in view we remember
-    // how far the camera disagrees with odometry, and keep adding that for TAG_CORRECTION_MS.
+    // ---- Intake ----
 
-    private double bearingToCell(Pose pose) {
-        return Math.atan2(cell.y() - pose.y(), cell.x() - pose.x());
-    }
-
-    private void updateTagCorrection(Pose pose) {
-        if (pose == null) return;
-        double tx = robot.limelight.getTagTx(minTag, maxTag);   // degrees, + = right; NaN = not seen
-        if (Double.isNaN(tx)) return;
-        double cameraBearing = pose.heading() + Math.toRadians(Limelight.CAMERA_YAW_OFFSET_DEGREES - tx);
-        tagCorrection = Angles.angleError(bearingToCell(pose), cameraBearing);
-        tagCorrectionAtMs = System.currentTimeMillis();
-    }
-
-    private boolean hasTagCorrection() {
-        return tagCorrectionAtMs != 0 && System.currentTimeMillis() - tagCorrectionAtMs < TAG_CORRECTION_MS;
-    }
-
-    /** Turn power that swings the rear-firing shooter onto the CELL. */
-    private double aimTurn(Pose pose) {
-        double bearing = bearingToCell(pose) + (hasTagCorrection() ? tagCorrection : 0);
-        double wanted = bearing - Shooter.HEADING_OFFSET_RAD;
-        double error = Angles.angleError(pose.heading(), wanted);   // + = turn CCW
-        return Range.clip(AIM_P * error, -AIM_MAX_TURN, AIM_MAX_TURN);
-    }
-
-    // ---- Operator ----
-
-    private void operator(Pose pose) {
+    private void intake() {
         // Nobody lets go of two bumpers in the same loop, so after a "both" press the single bumper
         // released last is ignored until both are up; otherwise it would switch the intake back on.
-        boolean in = gamepad2.right_bumper;
-        boolean out = gamepad2.left_bumper;
+        boolean in = gamepad1.right_bumper;
+        boolean out = gamepad1.left_bumper;
         if (in && out) {
             intakeMode = Intake.Mode.OFF;
             cancelShot();
@@ -207,26 +141,42 @@ public class Teleop extends OpMode {
         } else if (!waitForBumperRelease) {
             intakeMode = in ? Intake.Mode.IN : Intake.Mode.OUT;
         }
+    }
 
-        if (gamepad2.leftTriggerWasPressed()) flywheelOn = !flywheelOn;
+    // ---- Shooter ----
 
-        if (gamepad2.dpadUpWasPressed()) fixedSpeed = !fixedSpeed;
-        if (gamepad2.dpadRightWasPressed()) Shooter.MANUAL_TICKS_PER_SEC += SPEED_STEP_TICKS_PER_SEC;
-        if (gamepad2.dpadLeftWasPressed()) {
-            Shooter.MANUAL_TICKS_PER_SEC = Math.max(0, Shooter.MANUAL_TICKS_PER_SEC - SPEED_STEP_TICKS_PER_SEC);
+    private void shooter() {
+        if (gamepad1.xWasPressed()) flywheelOn = !flywheelOn;
+
+        // Feel it instead of looking at the card: one buzz per spin-up when both wheels reach speed,
+        // three blips when the intake gives up un-jamming.
+        if (!flywheelOn) readyBuzzed = false;
+        else if (!readyBuzzed && robot.shooter.atTarget()) {
+            gamepad1.rumble(200);
+            readyBuzzed = true;
         }
-        if (gamepad2.dpadDownWasPressed()) {
-            tips++;
-            pickTargetCell();
+        boolean jammed = robot.intake.hasGivenUpUnjamming();
+        if (jammed && !jamBuzzed) gamepad1.rumbleBlips(3);
+        jamBuzzed = jammed;
+
+        if (gamepad1.optionsWasPressed()) {
+            manualShooting = !manualShooting;
+            RobotLog.ii("Teleop", "shooting mode -> %s", manualShooting ? "MANUAL" : "AUTO");
+            cancelShot();
         }
 
-        // Flywheel speed, every loop: from the distance to the CELL, or the fixed speed when asked
-        // for or when there is no pose. Set before a shot starts so it fires at this speed.
-        if (fixedSpeed || pose == null) robot.shooter.setManualTarget();
-        else robot.shooter.setTargetForDistance(pose.distance(cell));
+        // Read both edges every loop, whichever mode is on, so a press in one mode does not fire
+        // later in the other.
+        boolean rtPressed = gamepad1.rightTriggerWasPressed();
+        boolean aPressed = gamepad1.aWasPressed();
 
-        if (gamepad2.rightTriggerWasPressed()) startShot(robot.macros.shootOne());
-        if (gamepad2.aWasPressed()) startShot(robot.macros.shootAll());
+        if (manualShooting) {
+            feeding = gamepad1.right_trigger > 0.5 && flywheelOn;
+        } else {
+            feeding = false;
+            if (rtPressed) startShot(robot.macros.shootOne());
+            if (aPressed) startShot(robot.macros.shootAll());
+        }
     }
 
     private void startShot(Command command) {
@@ -236,42 +186,30 @@ public class Teleop extends OpMode {
     }
 
     private void cancelShot() {
-        if (shot != null && Scheduler.isScheduled(shot)) Scheduler.cancel(shot);
+        if (shot != null && Scheduler.isScheduled(shot)) {
+            RobotLog.ii("Teleop", "shot cancelled");
+            Scheduler.cancel(shot);
+        }
         shot = null;
-    }
-
-    /** The CELL to shoot at and its tag IDs. Flips each time our HIVE tips. */
-    private void pickTargetCell() {
-        Field.CellSide side = Field.upCellSide(alliance, tips);
-        cell = Field.cell(alliance, side);
-        int[] tags = Field.tagRange(alliance, side);
-        minTag = tags[0];
-        maxTag = tags[1];
-        tagCorrectionAtMs = 0;   // it was measured against the old CELL
     }
 
     // ---- Telemetry ----
 
-    private void showTelemetry(Pose pose) {
+    private void showTelemetry() {
         telemetry.addData("Loop", "%.0f Hz   battery %.1f V", robot.getLoopHz(), robot.getBatteryVolts());
-        telemetry.addData("Alliance", "%s   CELL %s (tags %d-%d), %d tip(s)",
-                alliance, Field.upCellSide(alliance, tips), minTag, maxTag, tips);
-        telemetry.addData("Drive", robot.drivetrain.isFieldCentric() ? "field centric" : "robot centric");
-        telemetry.addData("Pose", pose == null ? "none (Pedro not tuned)"
-                : String.format(Locale.US, "x %.1f  y %.1f  heading %.1f deg",
-                        pose.x(), pose.y(), Math.toDegrees(pose.heading())));
-        telemetry.addData("Aim", hasTagCorrection()
-                ? String.format(Locale.US, "tag-corrected %+.1f deg", Math.toDegrees(tagCorrection))
-                : "odometry only");
-
+        telemetry.addData("SHOOTING", manualShooting
+                ? (feeding ? "MANUAL - FEEDING" : "MANUAL (hold RT to feed)")
+                : "AUTO (RT one, A four)");
         telemetry.addData("Flywheel", robot.shooter.getStatusLine());
-        telemetry.addData("Speed", fixedSpeed || pose == null
-                ? String.format(Locale.US, "fixed %.0f t/s", Shooter.MANUAL_TICKS_PER_SEC)
-                : String.format(Locale.US, "from distance, %.0f in", pose.distance(cell)));
-        telemetry.addData("Intake", intakeMode);
-        telemetry.addData("Shot", "%s  (%d pulses)", robot.macros.getStatus(), robot.macros.getShotsFired());
+        telemetry.addData("Intake", feeding ? "IN (feeding)" : intakeMode.toString());
+        if (!manualShooting) {
+            telemetry.addData("Shot", "%s [%s]  (%d pulses)", robot.macros.getStatus(), robot.macros.getShotState(),
+                    robot.macros.getShotsFired());
+        }
 
+        if (manualShooting && !flywheelOn && gamepad1.right_trigger > 0.5) {
+            telemetry.addLine("!! flywheel is off: press X first");
+        }
         if (robot.intake.hasGivenUpUnjamming()) telemetry.addLine("!! INTAKE JAMMED - run it out (LB)");
-        if (!robot.limelight.isConnected()) telemetry.addLine("!! no Limelight: odometry aim only");
     }
 }

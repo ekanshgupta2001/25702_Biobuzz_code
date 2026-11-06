@@ -7,7 +7,6 @@ import com.qualcomm.robotcore.hardware.VoltageSensor;
 import org.firstinspires.ftc.teamcode.commands.Macros;
 import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
 import org.firstinspires.ftc.teamcode.subsystems.Intake;
-import org.firstinspires.ftc.teamcode.subsystems.Limelight;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.util.time.MatchClock;
 
@@ -15,17 +14,20 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The whole robot: four mechanisms, one camera, and the two loop halves.
+ * The whole robot: the drivetrain, the intake, the shooter, and the two loop halves.
  *
  * <p>Every subsystem is a {@code public final} field. There is no supplier wiring, no sensor policy
- * and no fail-soft layer, because there is nothing left to arbitrate: the robot has seven motors, a
- * Pinpoint and a Limelight, and a missing config name throws at init where it is easy to read.
+ * and no fail-soft layer, because there is nothing left to arbitrate: the robot has eight motors and a
+ * Pinpoint, and a missing config name throws at init where it is easy to read.
+ *
+ * <p>The Limelight is not built here: match code does not use it. {@code Bench: Limelight} builds
+ * its own, so the camera can be left out of the Robot Controller configuration.
  *
  * <h2>The loop is split in two halves, deliberately</h2>
  * The OpMode calls these on either side of the Ivy scheduler:
  * <ul>
- *   <li>{@link #readSensors()} — clear every hub's bulk cache, refresh the Limelight, tick the match
- *       clock, sample the battery. Top of the loop, before commands run.</li>
+ *   <li>{@link #readSensors()} — clear every hub's bulk cache, tick the match clock, sample the
+ *       battery. Top of the loop, before commands run.</li>
  *   <li>{@link #writeActuators()} — push every mechanism's intent to hardware, drivetrain last.
  *       Bottom of the loop, after commands run.</li>
  * </ul>
@@ -48,7 +50,6 @@ public class Robot {
     public final Drivetrain drivetrain;
     public final Intake intake;
     public final Shooter shooter;
-    public final Limelight limelight;
     public final Macros macros;
 
     private MatchClock matchClock;
@@ -82,7 +83,6 @@ public class Robot {
         drivetrain = new Drivetrain(hardwareMap);
         intake = new Intake(hardwareMap);
         shooter = new Shooter(hardwareMap);
-        limelight = new Limelight(hardwareMap);
 
         macros = new Macros(this);   // last: it takes this, so every field must already be set
     }
@@ -97,7 +97,6 @@ public class Robot {
         for (LynxModule hub : hubs) {
             hub.clearBulkCache();
         }
-        limelight.update();
 
         long now = System.currentTimeMillis();
         if (matchClock != null) matchClock.update(now);
@@ -182,7 +181,7 @@ public class Robot {
     /**
      * Stops every mechanism now, from inside the loop. Called by the autonomous buzzer safety net
      * (G403: no powered movement after the period ends). Never from an OpMode's {@code stop()}: it
-     * writes motors, which the SDK rejects there (see {@link #stop()}).
+     * writes motors, which the SDK rejects there (CANCELLED_FOR_SAFETY) and zeroes them itself.
      */
     public void stopMechanisms() {
         intake.stop();
@@ -190,14 +189,5 @@ public class Robot {
         drivetrain.cancelPath();
         intake.update();
         shooter.update();
-    }
-
-    /**
-     * Releases non-actuator hardware at OpMode stop. Deliberately no motor writes: the SDK rejects
-     * them from an iterative OpMode's {@code stop()} (CANCELLED_FOR_SAFETY) and zeroes the motors
-     * itself. Use {@link #stopMechanisms()} for a mid-OpMode stop.
-     */
-    public void stop() {
-        limelight.stop();
     }
 }

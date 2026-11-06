@@ -12,7 +12,6 @@ import com.pedropathing.paths.Path;
 
 import org.firstinspires.ftc.teamcode.Robot;
 import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
-import org.firstinspires.ftc.teamcode.subsystems.Limelight;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.util.math.Angles;
 
@@ -27,14 +26,10 @@ import java.util.function.Supplier;
  * {@link Outcome} rather than {@code RUNNING} for ever, shown on the telemetry card by
  * {@link #getStatus()}.
  *
- * <h2>The aim law, and why a front camera helps a rear shooter</h2>
+ * <h2>Aiming</h2>
  * The flywheel is bolted to the chassis firing out the rear ({@link Shooter#HEADING_OFFSET_RAD}), so
- * <em>aiming is turning the robot's back to the CELL</em>. The camera faces front, which means it sees
- * the HIVE's AprilTags only while the robot is facing the HIVE — exactly when the shooter is pointed
- * the wrong way. So {@link #aimHeading} records how far the tags disagree with the odometry bearing
- * while they are visible, and keeps applying that correction for {@link #AIM_BIAS_MAX_AGE_MS} after
- * they leave view, or until the pose is rewritten. Drive up facing the HIVE, take the correction,
- * turn, and shoot by it.
+ * <em>aiming is turning the robot's back to the CELL</em>. {@link #aimHeading} takes the bearing from
+ * odometry alone; the Limelight is not used.
  *
  * <h2>Nothing counts pieces</h2>
  * There is no sensor in the intake or the tunnel, so "shoot all" means <b>fire
@@ -57,13 +52,6 @@ public class Macros {
     public static double AIM_TOLERANCE_DEGREES = 2.0;
     /** A one-shot aim re-issues Pedro's hold when the wanted heading moves by more than this. */
     public static double AIM_REISSUE_DEGREES = 1.0;
-    /**
-     * How long a tag-derived aim correction is kept after the tags leave view. Odometry heading
-     * drifts little in a few seconds, and the target's placement error does not move at all, so the
-     * correction stays good for about as long as it takes to turn and shoot. Five seconds is a
-     * drive-up-and-turn; it is a strategy call, not a measurement.
-     */
-    public static long AIM_BIAS_MAX_AGE_MS = 5000;
 
     public static long DRIVE_TO_TIMEOUT_MS = 6000;
     public static double DRIVE_TO_TOLERANCE_INCHES = 3.0;
@@ -84,11 +72,6 @@ public class Macros {
     /** The cycle the last shooting macro ran, for its pulse count. */
     private Shoot lastShoot = null;
 
-    /** The tag-derived aim correction, radians, and what it was taken against. NaN when none. */
-    private double aimBias = Double.NaN;
-    private long aimBiasAtMs = 0;
-    private int aimBiasPoseWrites = -1;
-
     public Macros(Robot robot) {
         this.robot = robot;
     }
@@ -107,6 +90,11 @@ public class Macros {
     /** Tunnel pulses the last shooting macro ran. Not a piece count; nothing can know that. */
     public int getShotsFired() {
         return lastShoot == null ? 0 : lastShoot.getShotsFired();
+    }
+
+    /** The step the last shooting macro is on (SPIN_UP, FEED, SETTLE, RECOVER, DWELL, DONE), or "-". */
+    public String getShotState() {
+        return lastShoot == null ? "-" : lastShoot.getStateName();
     }
 
     public String getStatus() {
@@ -145,7 +133,8 @@ public class Macros {
      * hold it displaced (the operator's armed flywheel). Without that the wheel would be told to stop
      * for a loop or two at the start of every shot.
      *
-     * <p>The caller sets the flywheel target first, from the distance table or the manual override.
+     * <p>The wheels run at the Shooter's fixed speeds ({@code Shooter.TARGET_TICKS_PER_SEC} and
+     * {@code ROLLER_TARGET_TICKS_PER_SEC}).
      */
     private Command shoot(String name, int pieces, long timeoutMs) {
         final Shoot cycle = new Shoot(robot.intake, robot.shooter, pieces);
@@ -162,11 +151,11 @@ public class Macros {
      * within {@link #AIM_TOLERANCE_DEGREES} in time it shoots anyway, because in autonomous a piece
      * kept on board scores nothing and a near miss might.
      */
-    public Command aimAndShootAll(Pose target, int minTagId, int maxTagId) {
+    public Command aimAndShootAll(Pose target) {
         final Shoot cycle = new Shoot(robot.intake, robot.shooter, PIECES_PER_LOAD);
         return reporting("aimShootAll",
                 sequential(
-                        Waits.bounded(aimCore(target, minTagId, maxTagId), AIM_TIMEOUT_MS),
+                        Waits.bounded(aimCore(target), AIM_TIMEOUT_MS),
                         Waits.bounded(cycle.build(), SHOOT_ALL_TIMEOUT_MS)),
                 () -> cycle.completed() ? Outcome.SUCCESS : Outcome.TIMED_OUT,
                 instant(() -> lastShoot = cycle),
@@ -176,68 +165,39 @@ public class Macros {
     // ---- Aiming ----
 
     /**
-     * The field heading the robot must hold so the shooter faces {@code target}.
-     *
-     * <p>When a tag in {@code [minTagId, maxTagId]} is visible the bearing comes from its {@code tx}
-     * (heading + camera yaw - tx; tx is positive to the right), and the difference between that and
-     * the odometry bearing is remembered. When no tag is visible the odometry bearing is used, plus
-     * that remembered correction while it is younger than {@link #AIM_BIAS_MAX_AGE_MS} and the pose
-     * has not been rewritten since. {@link Shooter#HEADING_OFFSET_RAD} is then subtracted, so a
-     * rear-firing shooter turns its back to the target. NaN without a pose, or with neither a target
-     * nor a tag.
+     * The field heading the robot must hold so the shooter faces {@code target}: the odometry bearing
+     * to it, minus {@link Shooter#HEADING_OFFSET_RAD} so a rear-firing shooter turns its back to the
+     * target. NaN without a pose or a target.
      */
-    public double aimHeading(Pose target, int minTagId, int maxTagId) {
+    public double aimHeading(Pose target) {
         Pose pose = robot.drivetrain.getPose();
-        if (pose == null) return Double.NaN;
-        double tx = robot.limelight.getTagTx(minTagId, maxTagId);
-        double odometry = target == null ? Double.NaN
-                : Math.atan2(target.y() - pose.y(), target.x() - pose.x());
-        double bearing;
-        if (!Double.isNaN(tx)) {
-            bearing = pose.heading() + Math.toRadians(Limelight.CAMERA_YAW_OFFSET_DEGREES)
-                    - Math.toRadians(tx);
-            if (!Double.isNaN(odometry)) {
-                aimBias = Angles.angleError(odometry, bearing);
-                aimBiasAtMs = System.currentTimeMillis();
-                aimBiasPoseWrites = robot.drivetrain.getPoseWrites();
-            }
-        } else {
-            if (Double.isNaN(odometry)) return Double.NaN;
-            bearing = odometry + (hasAimBias() ? aimBias : 0);
-        }
+        if (pose == null || target == null) return Double.NaN;
+        double bearing = Math.atan2(target.y() - pose.y(), target.x() - pose.x());
         return Angles.normalizeAngle(bearing - Shooter.HEADING_OFFSET_RAD);
-    }
-
-    /** True while a tag-derived correction is in force: young enough, and the pose not rewritten since. */
-    public boolean hasAimBias() {
-        return !Double.isNaN(aimBias)
-                && System.currentTimeMillis() - aimBiasAtMs <= AIM_BIAS_MAX_AGE_MS
-                && robot.drivetrain.getPoseWrites() == aimBiasPoseWrites;
     }
 
     /**
      * Pedro's hold as the turn primitive, re-issued whenever the wanted heading moves by more than
-     * {@link #AIM_REISSUE_DEGREES} so a newly visible tag can refine it. {@code setEnd} hands control
-     * back either way.
+     * {@link #AIM_REISSUE_DEGREES}. {@code setEnd} hands control back either way.
      */
-    private Command aimCore(Pose target, int minTagId, int maxTagId) {
+    private Command aimCore(Pose target) {
         final long[] startedAt = new long[1];
         final double[] commanded = new double[1];
         return Command.build()
                 .setStart(() -> {
                     startedAt[0] = System.currentTimeMillis();
                     commanded[0] = Double.NaN;
-                    reissueAim(target, minTagId, maxTagId, commanded);
+                    reissueAim(target, commanded);
                 })
-                .setExecute(() -> reissueAim(target, minTagId, maxTagId, commanded))
+                .setExecute(() -> reissueAim(target, commanded))
                 .setDone(() -> System.currentTimeMillis() - startedAt[0] >= Drivetrain.MIN_PATH_MS
-                        && aimed(target, minTagId, maxTagId))
+                        && aimed(target))
                 .setEnd(ec -> robot.drivetrain.cancelPath())
                 .requiring(robot.drivetrain);
     }
 
-    private void reissueAim(Pose target, int minTagId, int maxTagId, double[] commanded) {
-        double wanted = aimHeading(target, minTagId, maxTagId);
+    private void reissueAim(Pose target, double[] commanded) {
+        double wanted = aimHeading(target);
         if (Double.isNaN(wanted)) return;
         if (!Double.isNaN(commanded[0])
                 && Math.abs(Angles.angleError(commanded[0], wanted)) < Math.toRadians(AIM_REISSUE_DEGREES)) {
@@ -247,8 +207,8 @@ public class Macros {
         robot.drivetrain.holdHeading(wanted);
     }
 
-    private boolean aimed(Pose target, int minTagId, int maxTagId) {
-        double wanted = aimHeading(target, minTagId, maxTagId);
+    private boolean aimed(Pose target) {
+        double wanted = aimHeading(target);
         return !Double.isNaN(wanted)
                 && robot.drivetrain.atHeading(wanted, Math.toRadians(AIM_TOLERANCE_DEGREES));
     }

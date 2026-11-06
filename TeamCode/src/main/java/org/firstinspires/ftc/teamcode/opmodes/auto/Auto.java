@@ -20,8 +20,8 @@ import org.firstinspires.ftc.teamcode.util.time.MatchClock;
  *
  * <h2>Two routines, chosen by whether Pedro is tuned</h2>
  * <ul>
- *   <li><b>Tuned</b> — aim at the CELL with the tag-refined aim law, shoot, then drive a path to
- *       park in the LOADING ZONE. 20 (TIP) + 3 (LEAVE) + 5 (PARK) are all on the table.</li>
+ *   <li><b>Tuned</b> — aim at the CELL by odometry, shoot, then drive a path to park in the
+ *       LOADING ZONE. 20 (TIP) + 3 (LEAVE) + 5 (PARK) are all on the table.</li>
  *   <li><b>Not tuned</b> — shoot from where the robot was placed (rear toward the CELL), then back
  *       off the wall on a timer. Worth 20 + 3 and needs nothing measured. This is what runs at the
  *       first event if AutoTune has not happened yet.</li>
@@ -29,6 +29,8 @@ import org.firstinspires.ftc.teamcode.util.time.MatchClock;
  * There is no alliance selector and no lock: {@code BlueAuto} and {@code RedAuto} carry the side in
  * the OpMode name, so there is no way to start the wrong route. The side is also left in
  * {@code PoseStorage} so Teleop's dpad alliance pick starts on it.
+ *
+ * <p>Both routines shoot at the Shooter's fixed speeds. The Limelight is not used.
  *
  * <h2>The first TIP only needs three POLLEN</h2>
  * The up-CELL starts with 3 NECTAR and the robot pre-loads 4 POLLEN, and a HIVE tips on 3 POLLEN + 3
@@ -63,7 +65,6 @@ public abstract class Auto extends MatchOpMode {
     protected void onInit() {
         Scheduler.schedule(robot.intake.defaultIdleCommand(), robot.shooter.defaultIdleCommand());
         PoseStorage.saveAlliance(side);   // Teleop's alliance pick starts on this side
-        robot.limelight.setAlliance(side);   // in init, so the pipeline has switched before the aim
     }
 
     @Override
@@ -75,27 +76,21 @@ public abstract class Auto extends MatchOpMode {
                 ? "tuned: aim, shoot, path to park"
                 : "NOT TUNED: shoot in place, then back off the wall on a timer");
         telemetry.addData("Flywheel", robot.shooter.getStatusLine());
-        if (!robot.limelight.isConnected()) telemetry.addLine("!! no Limelight: odometry aim only");
     }
 
     @Override
     protected void onStart() {
-        Field.CellSide up = Field.startingUpCellSide(side);
-        Pose target = Field.cell(side, up);
-        int[] tags = Field.tagRange(side, up);
+        Pose target = Field.cell(side, Field.startingUpCellSide(side));
 
         if (robot.drivetrain.hasFollower()) {
             Pose start = FieldConstants.forAlliance(FieldPoses.BLUE_START_FACING_HIVE, side);
             robot.drivetrain.setPose(start);
-            robot.shooter.setTargetForDistance(start.distance(target));
             Scheduler.schedule(sequential(
-                    Waits.bounded(robot.macros.aimAndShootAll(target, tags[0], tags[1]), SHOOT_BUDGET_MS),
+                    Waits.bounded(robot.macros.aimAndShootAll(target), SHOOT_BUDGET_MS),
                     Waits.waitMs(SETTLE_MS),
                     robot.macros.driveTo(FieldConstants.forAlliance(FieldPoses.BLUE_PARK, side)),
                     instant(robot::stopMechanisms)));
         } else {
-            // No localizer, so no distance to look up: the manual speed is the only number available.
-            robot.shooter.setManualTarget();
             Scheduler.schedule(sequential(
                     Waits.bounded(robot.macros.shootAll(), SHOOT_BUDGET_MS),
                     Waits.waitMs(SETTLE_MS),
@@ -112,6 +107,7 @@ public abstract class Auto extends MatchOpMode {
         if (clock != null && clock.isExpired()) {
             robot.abortMacro();
             robot.stopMechanisms();
+            Scheduler.reset();   // nothing may re-command a motor after the buzzer
         }
     }
 

@@ -7,81 +7,79 @@ import org.firstinspires.ftc.teamcode.subsystems.Intake;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 
 /**
- * The shooting cycle: spin up, then pulse the tunnel once per piece, waiting for the flywheel to
- * recover in between.
+ * The shooting cycle: wait once for both wheels to reach speed, then run the intake and the up-wheels
+ * nonstop, so the balls go through one after another.
  *
- * <h2>Why this is one hand-written command and not an Ivy group tree</h2>
- * Ivy's {@code Sequential} hands off one child per {@code execute()} and never executes the child it
- * has just started, so <em>every child boundary costs a whole 20 ms loop</em> and an {@code instant}
- * costs one by itself. The previous nine-level tree spent 7 idle loops between "flywheel recovered"
- * and "next pulse commanded", about 0.7 s across a four-piece run. A state machine chains every
- * zero-duration transition inside a single {@code execute()}, so the next pulse is commanded in the
- * same loop the flywheel comes back. It also sidesteps the {@code Repeat.end()} NPE
- * (docs/01 B.5 trap 8) for free.
+ * <pre>
+ *   SPIN_UP   wait until both wheels are at speed (or SPIN_UP_TIMEOUT_MS, then feed anyway)
+ *   FEED      intake + up-wheels on, for feedMs (Teleop: until X cancels it)
+ *   DWELL     feed off, wheels still on a moment so the last ball leaves
+ *   DONE
+ * </pre>
  *
- * <h2>Feeding is running the intake and the up-wheels</h2>
- * One motor drives the roller and the tunnel, the shooter's up-wheels carry the piece the rest of
- * the way, and there is no gate and no sensor anywhere in the path. A piece reaches the flywheel
- * because both ran long enough to carry it there, so a "shot" is a {@link #FEED_PULSE_MS} pulse of
- * the intake and the up-wheels together. That makes {@link #getShotsFired()}
- * honestly a count of pulses, not of pieces — nothing on this robot can know the difference, and the
- * telemetry says so.
+ * <h2>The wheels still recover between balls</h2>
+ * This does not wait between balls, and it does not need to for the wheels to recover: the shooter's
+ * own control law ({@code Shooter.update()}, every loop) pushes harder whenever a ball slows a wheel.
+ * The flywheel hold rides alongside this command ({@code Shooter.armedCommand()} in {@code Macros}),
+ * so the wheels stay armed the whole time.
  *
  * <h2>What it requires</h2>
- * The intake only. The flywheel is held by {@code Shooter.armedCommand()}, passed to
- * {@code Macros.reporting} as an alongside child, so an armed wheel is never told to stop when a
- * shot starts, and the drivetrain is left alone so the driver keeps translating and aiming through
- * a shot. The up-wheels are switched through that same shooter, which nothing else touches while
- * the shot holds it.
+ * The intake only. The up-wheels are switched through the shooter, which nothing else touches while
+ * the shot holds it, and the drivetrain is left alone so the driver keeps driving through a shot.
+ * Feeding uses {@code Intake.Mode.FEED}: anti-jam is off, so a jammed ball stalls the intake until the
+ * feed ends. That is why Teleop's feed is still bounded ({@code Macros.SHOOT_TIMEOUT_MS}).
  */
 public class Shoot {
-    /**
-     * How long the tunnel runs to carry one piece into the flywheel. Measure with
-     * {@code Bench: Intake}: too short leaves the piece short of the wheel, too long feeds two.
-     */
-    public static long FEED_PULSE_MS = 400;
-    /** Quiet time after a pulse before the recovery check, so the dip has actually started. */
-    public static long SETTLE_AFTER_PULSE_MS = 80;
-    /** A flywheel that has not recovered by then gets the next piece anyway. */
-    public static long RECOVER_TIMEOUT_MS = 900;
-    /** Spin-up deadline. Past this the cycle gives up rather than holding the intake all match. */
+    /** Pass as {@code feedMs} to feed until the command is cancelled (Teleop's X). */
+    public static final long UNTIL_CANCELLED = Long.MAX_VALUE;
+
+    /** How long autonomous feeds for: long enough for all four pre-loads to go through. */
+    public static long AUTO_FEED_MS = 4000;
+    /** Spin-up deadline. Past this it feeds anyway: a ball kept on the robot scores nothing. */
     public static long SPIN_UP_TIMEOUT_MS = 3000;
-    /** After the last pulse, long enough for the piece to leave before the wheel is released. */
+    /** After the feed ends, long enough for the last piece to leave before the wheels are released. */
     public static long FINAL_DWELL_MS = 150;
 
-    private enum State { SPIN_UP, FEED, SETTLE, RECOVER, DWELL, DONE }
+    /**
+     * Not used by the macro any more (it feeds nonstop). Kept because both shooter tuners use it: their
+     * test shot is one pulse of this length.
+     */
+    public static long FEED_PULSE_MS = 400;
+    /**
+     * Not used by the macro any more (it does not wait between balls). Kept as the shooter tuners'
+     * yardstick for a recovery that is too slow.
+     */
+    public static long RECOVER_TIMEOUT_MS = 900;
+
+    private enum State { SPIN_UP, FEED, DWELL, DONE }
 
     private final Intake intake;
     private final Shooter shooter;
-    private final int pieces;
+    private final long feedMs;
 
     private State state = State.DONE;
     private long stateSinceMs = 0;
-    private int fired = 0;
+    private boolean fedFull = false;
 
-    public Shoot(Intake intake, Shooter shooter, int pieces) {
+    public Shoot(Intake intake, Shooter shooter, long feedMs) {
         this.intake = intake;
         this.shooter = shooter;
-        this.pieces = Math.max(0, pieces);
+        this.feedMs = feedMs;
     }
 
-    /** The cycle's step, for the telemetry card: SPIN_UP, FEED, SETTLE, RECOVER, DWELL or DONE. */
+    /** The cycle's step, for the telemetry card: SPIN_UP, FEED, DWELL or DONE. */
     public String getStateName() {
         return state.name();
     }
 
-    public int getShotsFired() {
-        return fired;
-    }
-
-    /** True once every requested pulse has run (as opposed to having been cut short). */
+    /** True once the feed ran its whole time (as opposed to being cut short). */
     public boolean completed() {
-        return fired >= pieces;
+        return fedFull;
     }
 
     /**
      * The command. Requires the intake for the whole cycle so the default idle command cannot
-     * re-assert "stopped" between pulses.
+     * re-assert "stopped" while feeding.
      */
     public Command build() {
         return Command.build()
@@ -97,11 +95,11 @@ public class Shoot {
     }
 
     private void start() {
-        fired = 0;
+        fedFull = false;
         // A zero target would make atTarget() true on the first tick (|0 - 0| < tolerance) and the
-        // tunnel would push pieces into a dead flywheel. The caller sets the speed; if it did not,
-        // this cycle does nothing rather than dumping the load on the floor.
-        if (pieces == 0 || shooter.getTarget() <= 0) {
+        // tunnel would push pieces into a dead flywheel. If there is no speed, do nothing rather than
+        // dump the load on the floor.
+        if (feedMs <= 0 || shooter.getTarget() <= 0) {
             state = State.DONE;
             return;
         }
@@ -142,21 +140,9 @@ public class Shoot {
                     }
                     return;
                 case FEED:
-                    if (elapsed() >= FEED_PULSE_MS) {
-                        fired++;
-                        enter(fired >= pieces ? State.DWELL : State.SETTLE);
-                        continue;
-                    }
-                    return;
-                case SETTLE:
-                    if (elapsed() >= SETTLE_AFTER_PULSE_MS) {
-                        enter(State.RECOVER);
-                        continue;
-                    }
-                    return;
-                case RECOVER:
-                    if (shooter.atTarget() || elapsed() >= RECOVER_TIMEOUT_MS) {
-                        enter(State.FEED);
+                    if (elapsed() >= feedMs) {
+                        fedFull = true;
+                        enter(State.DWELL);
                         continue;
                     }
                     return;

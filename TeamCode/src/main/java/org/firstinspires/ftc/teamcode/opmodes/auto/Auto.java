@@ -124,8 +124,7 @@ public abstract class Auto extends MatchOpMode {
         MatchClock clock = robot.getMatchClock();
         telemetry.addData("Loop", "%.0f Hz", robot.getLoopHz());
         telemetry.addData("Time", clock == null ? "-" : clock.getStatus());
-        telemetry.addData("Macro", "%s  (%d pulses)", robot.macros.getStatus(),
-                robot.macros.getShotsFired());
+        telemetry.addData("Macro", "%s [%s]", robot.macros.getStatus(), robot.macros.getShotState());
         telemetry.addData("Flywheel", robot.shooter.getStatusLine());
         Pose pose = robot.drivetrain.getPose();
         telemetry.addData("Pose", pose == null ? "none (not tuned)"

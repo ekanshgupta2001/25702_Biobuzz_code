@@ -22,10 +22,10 @@ import java.util.Locale;
  *          LT (hold)      slow mode
  * INTAKE   RB / LB        intake in / out (stays on until changed)
  *          RB + LB        intake stop, and cancels a running shot
- * SHOOTER  X              flywheel on / off; off also stops a running shot
+ * SHOOTER  X              flywheel on / off
  *          options        AUTO / MANUAL shooting (starts in AUTO; switching cancels a running shot)
- *          AUTO    RT / A shoot (macro): flywheel on, waits once for speed, then intake + up-wheels
- *                         run nonstop until X (or Macros.SHOOT_TIMEOUT_MS)
+ *          AUTO    RT     shoot one   (macro)
+ *                  A      shoot four  (macro)
  *          MANUAL  RT     hold = feed: intake in + up-wheels on, only while the flywheel is on
  * </pre>
  *
@@ -83,7 +83,7 @@ public class Teleop extends OpMode {
         telemetry.addLine("DRIVE    sticks drive, LT hold = slow");
         telemetry.addLine("INTAKE   RB in, LB out, both = stop (+ cancel shot)");
         telemetry.addLine("SHOOTER  X flywheel on/off, options = AUTO/MANUAL");
-        telemetry.addLine("  AUTO    RT or A shoot, X stops it");
+        telemetry.addLine("  AUTO    RT shoot one, A shoot four");
         telemetry.addLine("  MANUAL  hold RT to feed (flywheel must be on)");
         telemetry.addLine("BUZZ     once = flywheel ready, three = intake jammed");
     }
@@ -146,11 +146,7 @@ public class Teleop extends OpMode {
     // ---- Shooter ----
 
     private void shooter() {
-        // A shot turns the flywheel on, so X during a shot always means off: it stops the shot too.
-        if (gamepad1.xWasPressed()) {
-            flywheelOn = !flywheelOn;
-            if (!flywheelOn) cancelShot();
-        }
+        if (gamepad1.xWasPressed()) flywheelOn = !flywheelOn;
 
         // Feel it instead of looking at the card: one buzz per spin-up when both wheels reach speed,
         // three blips when the intake gives up un-jamming.
@@ -178,16 +174,14 @@ public class Teleop extends OpMode {
             feeding = gamepad1.right_trigger > 0.5 && flywheelOn;
         } else {
             feeding = false;
-            if (rtPressed || aPressed) startShot();
+            if (rtPressed) startShot(robot.macros.shootOne());
+            if (aPressed) startShot(robot.macros.shootAll());
         }
     }
 
-    private void startShot() {
-        if (shot != null && Scheduler.isScheduled(shot)) return;   // already shooting: X stops it
-        // The flywheel stays on after the shot ends (cancelled with both bumpers, or the time limit),
-        // still holding its speed, until X.
-        flywheelOn = true;
-        shot = robot.macros.shoot();
+    private void startShot(Command command) {
+        if (shot != null && Scheduler.isScheduled(shot)) return;   // let the running shot finish
+        shot = command;
         Scheduler.schedule(shot);
     }
 
@@ -205,11 +199,12 @@ public class Teleop extends OpMode {
         telemetry.addData("Loop", "%.0f Hz   battery %.1f V", robot.getLoopHz(), robot.getBatteryVolts());
         telemetry.addData("SHOOTING", manualShooting
                 ? (feeding ? "MANUAL - FEEDING" : "MANUAL (hold RT to feed)")
-                : "AUTO (RT/A shoot, X stop)");
+                : "AUTO (RT one, A four)");
         telemetry.addData("Flywheel", robot.shooter.getStatusLine());
         telemetry.addData("Intake", feeding ? "IN (feeding)" : intakeMode.toString());
         if (!manualShooting) {
-            telemetry.addData("Shot", "%s [%s]", robot.macros.getStatus(), robot.macros.getShotState());
+            telemetry.addData("Shot", "%s [%s]  (%d pulses)", robot.macros.getStatus(), robot.macros.getShotState(),
+                    robot.macros.getShotsFired());
         }
 
         if (manualShooting && !flywheelOn && gamepad1.right_trigger > 0.5) {

@@ -32,17 +32,19 @@ import java.util.function.Supplier;
  * odometry alone; the Limelight is not used.
  *
  * <h2>Nothing counts pieces</h2>
- * There is no sensor in the intake or the tunnel, so a shot is <b>a length of time feeding</b>, not
- * "empty the robot": Teleop's {@link #shoot()} feeds until the driver stops it, autonomous's
- * {@link #shootAll()} for {@link Shoot#AUTO_FEED_MS}. Feeding an empty tunnel costs nothing.
+ * There is no sensor in the intake or the tunnel, so "shoot all" means <b>fire
+ * {@link #PIECES_PER_LOAD} pulses of the tunnel</b>, not "empty the robot". {@link #getShotsFired()}
+ * is a pulse count. A pulse on an empty tunnel costs nothing; a robot that refused to shoot because
+ * it could not count would be useless at an event.
  */
 public class Macros {
     /**
-     * Teleop's shot stops by itself after this if X never comes. A backstop for a jam: anti-jam is off
-     * while feeding, so a jammed ball would otherwise stall the intake until someone notices.
+     * How many tunnel pulses "shoot all" fires. Four, because BIOBUZZ G407 caps a robot at 4
+     * controlled scoring elements and the robot pre-loads exactly that many.
      */
-    public static long SHOOT_TIMEOUT_MS = 12000;
-    /** Bound on autonomous's timed shot: spin-up + {@link Shoot#AUTO_FEED_MS} + dwell fit well inside it. */
+    public static int PIECES_PER_LOAD = 4;
+
+    public static long SHOOT_ONE_TIMEOUT_MS = 4000;
     public static long SHOOT_ALL_TIMEOUT_MS = 12000;
 
     public static long AIM_TIMEOUT_MS = 2500;
@@ -85,7 +87,12 @@ public class Macros {
         return activeName;
     }
 
-    /** The step the last shooting macro is on (SPIN_UP, FEED, DWELL, DONE), or "-". */
+    /** Tunnel pulses the last shooting macro ran. Not a piece count; nothing can know that. */
+    public int getShotsFired() {
+        return lastShoot == null ? 0 : lastShoot.getShotsFired();
+    }
+
+    /** The step the last shooting macro is on (SPIN_UP, FEED, SETTLE, RECOVER, DWELL, DONE), or "-". */
     public String getShotState() {
         return lastShoot == null ? "-" : lastShoot.getStateName();
     }
@@ -110,17 +117,14 @@ public class Macros {
 
     // ---- Shooting ----
 
-    /**
-     * Teleop's shot: spin up once, then feed nonstop until the command is cancelled (X), or until
-     * {@link #SHOOT_TIMEOUT_MS} as a jam backstop. Cancelled = CANCELLED, backstop = TIMED_OUT.
-     */
-    public Command shoot() {
-        return shoot("shoot", Shoot.UNTIL_CANCELLED, SHOOT_TIMEOUT_MS);
+    /** One tunnel pulse into a spun-up flywheel. */
+    public Command shootOne() {
+        return shoot("shootOne", 1, SHOOT_ONE_TIMEOUT_MS);
     }
 
-    /** Autonomous's shot: spin up once, feed nonstop for {@link Shoot#AUTO_FEED_MS}, done. */
+    /** {@link #PIECES_PER_LOAD} pulses, one spin-up, the flywheel recovering between each. */
     public Command shootAll() {
-        return shoot("shootAll", Shoot.AUTO_FEED_MS, SHOOT_ALL_TIMEOUT_MS);
+        return shoot("shootAll", PIECES_PER_LOAD, SHOOT_ALL_TIMEOUT_MS);
     }
 
     /**
@@ -132,8 +136,8 @@ public class Macros {
      * <p>The wheels run at the Shooter's fixed speeds ({@code Shooter.TARGET_TICKS_PER_SEC} and
      * {@code ROLLER_TARGET_TICKS_PER_SEC}).
      */
-    private Command shoot(String name, long feedMs, long timeoutMs) {
-        final Shoot cycle = new Shoot(robot.intake, robot.shooter, feedMs);
+    private Command shoot(String name, int pieces, long timeoutMs) {
+        final Shoot cycle = new Shoot(robot.intake, robot.shooter, pieces);
         return reporting(name,
                 Waits.bounded(cycle.build(), timeoutMs),
                 () -> cycle.completed() ? Outcome.SUCCESS : Outcome.TIMED_OUT,
@@ -148,7 +152,7 @@ public class Macros {
      * kept on board scores nothing and a near miss might.
      */
     public Command aimAndShootAll(Pose target) {
-        final Shoot cycle = new Shoot(robot.intake, robot.shooter, Shoot.AUTO_FEED_MS);
+        final Shoot cycle = new Shoot(robot.intake, robot.shooter, PIECES_PER_LOAD);
         return reporting("aimShootAll",
                 sequential(
                         Waits.bounded(aimCore(target), AIM_TIMEOUT_MS),

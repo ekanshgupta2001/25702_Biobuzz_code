@@ -19,9 +19,7 @@ import java.util.List;
  *
  * <pre>
  *   START        shooter spins up
- *   at speed     (or Shoot.SPIN_UP_TIMEOUT_MS, 3 s) intake + up-wheels run nonstop for
- *                Shoot.AUTO_FEED_MS, so the four balls go through one after another
- *   then         feed off, wheels on a moment longer (Shoot.FINAL_DWELL_MS) so the last ball leaves
+ *   3 s          feed ball 1, wait for the wheels to recover, ball 2, ... ball 4
  *   then         shooter and intake off, drive FORWARD (intake first) at 70% for DRIVE_MS
  *   then         stop for DRIVE_PAUSE_MS, then drive BACK at 70% for DRIVE_BACK_MS
  *   then         stop, nothing moves again
@@ -31,10 +29,10 @@ import java.util.List;
  * shooter, the intake and the four drive motors, so it does not touch {@code Robot}, Pedro or
  * {@code pedro/Constants} and keeps working whatever is (or is not) tuned there.
  *
- * <p>It shoots the same way Teleop's shot macro does ({@link Shoot}'s timings): wait once for both
- * wheels to reach speed, then feed nonstop. The wheels recover between balls by themselves
- * ({@code Shooter.update()}). Every step has a time limit, so a slow wheel or a jam cannot stop the
- * robot from driving afterwards.
+ * <p>Each ball is fed the same way Teleop's "shoot 4" feeds it ({@link Shoot}'s timings): a
+ * {@link Shoot#FEED_PULSE_MS} pulse of the intake and the up-wheels, then a pause until both wheels
+ * are back at speed or {@link Shoot#RECOVER_TIMEOUT_MS} runs out. Every step has a time limit, so a
+ * slow wheel or a jam cannot stop the robot from driving afterwards.
  *
  * <p>The wheels run at the Shooter's fixed speeds, {@code Shooter.TARGET_TICKS_PER_SEC} and
  * {@code Shooter.ROLLER_TARGET_TICKS_PER_SEC}, the same as Teleop.
@@ -47,6 +45,10 @@ import java.util.List;
  */
 @Autonomous(name = "Auto HARDCODED", group = "Main", preselectTeleOp = "Teleop")
 public class HardcodedAuto extends OpMode {
+    /** Time from START to the first ball. The shooter spins up during it. */
+    public static long FIRST_SHOT_AT_MS = 3000;
+    /** Feed pulses. The robot pre-loads 4 (BIOBUZZ G407). */
+    public static int BALLS = 4;
     /**
      * Drive power after shooting, for both moves. Positive drives forward, intake first; flip the
      * sign if it goes the other way (the move back flips with it). 70% on 435 RPM motors covers
@@ -64,7 +66,7 @@ public class HardcodedAuto extends OpMode {
      */
     public static long DRIVE_BACK_MS = 800;
 
-    private enum State { SPIN_UP, FEED, DWELL, FORWARD, PAUSE, BACK, DONE }
+    private enum State { SPIN_UP, FEED, RECOVER, DWELL, FORWARD, PAUSE, BACK, DONE }
 
     /** False in Auto HARDCODED NO SHOOT: the robot only drives. */
     private final boolean shoot;
@@ -77,6 +79,7 @@ public class HardcodedAuto extends OpMode {
     private State state = State.DONE;
     private long startMs = 0;
     private long stateSinceMs = 0;
+    private int ballsFed = 0;
     /** The power the drive motors were last given, for the card. */
     private double drivePower = 0;
 
@@ -124,7 +127,7 @@ public class HardcodedAuto extends OpMode {
     public void init_loop() {
         clearBulkCache();
         telemetry.addLine(shoot
-                ? "HARDCODED AUTO: shoot, then drive forward and back"
+                ? "HARDCODED AUTO: shoot " + BALLS + ", then drive forward and back"
                 : "HARDCODED AUTO, NO SHOOTING: at START it drives forward and back");
         telemetry.addLine();
         if (shoot) telemetry.addLine("PLACE: shooter (rear) toward the target.");
@@ -133,8 +136,7 @@ public class HardcodedAuto extends OpMode {
         telemetry.addLine("  make sure that path is clear.");
         if (shoot) {
             telemetry.addLine();
-            telemetry.addData("Feed", "%.1f s nonstop once at speed (%.1f s max wait)",
-                    Shoot.AUTO_FEED_MS / 1000.0, Shoot.SPIN_UP_TIMEOUT_MS / 1000.0);
+            telemetry.addData("First ball at", "%.1f s", FIRST_SHOT_AT_MS / 1000.0);
             telemetry.addData("Speeds", "fly %.0f  roller %.0f t/s",
                     Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC);
             telemetry.addData("Shooter", shooter.getStatusLine());
@@ -148,6 +150,7 @@ public class HardcodedAuto extends OpMode {
     @Override
     public void start() {
         startMs = System.currentTimeMillis();
+        ballsFed = 0;
         if (shoot) {
             shooter.arm();   // holds Shooter.TARGET_TICKS_PER_SEC / ROLLER_TARGET_TICKS_PER_SEC
             enter(State.SPIN_UP, startMs);
@@ -170,13 +173,24 @@ public class HardcodedAuto extends OpMode {
         long inState = now - stateSinceMs;
         switch (state) {
             case SPIN_UP:
-                // Wait once for both wheels to be at speed. If they are slow, feed anyway at the
-                // time limit, because a ball kept on the robot scores nothing.
-                if (shooter.atTarget() || inState >= Shoot.SPIN_UP_TIMEOUT_MS) enter(State.FEED, now);
+                // A fixed wait: at FIRST_SHOT_AT_MS the first ball goes in even if the wheels are
+                // slow, because a ball kept on the robot scores nothing.
+                if (now - startMs >= FIRST_SHOT_AT_MS) enter(State.FEED, now);
                 break;
             case FEED:
-                // Nonstop: the wheels recover between balls by themselves (Shooter.update()).
-                if (inState >= Shoot.AUTO_FEED_MS) enter(State.DWELL, now);
+                if (inState >= Shoot.FEED_PULSE_MS) {
+                    ballsFed++;
+                    enter(ballsFed >= BALLS ? State.DWELL : State.RECOVER, now);
+                }
+                break;
+            case RECOVER:
+                // Let the dip start, then wait for both wheels to be back at speed, or give up and
+                // feed the next ball anyway.
+                if (inState >= Shoot.SETTLE_AFTER_PULSE_MS
+                        && (shooter.atTarget()
+                        || inState >= Shoot.SETTLE_AFTER_PULSE_MS + Shoot.RECOVER_TIMEOUT_MS)) {
+                    enter(State.FEED, now);
+                }
                 break;
             case DWELL:
                 // The wheels stay on a moment so the last ball leaves.
@@ -200,7 +214,10 @@ public class HardcodedAuto extends OpMode {
 
         telemetry.addData("Step", state);
         telemetry.addData("Time", "%.1f s", (now - startMs) / 1000.0);
-        if (shoot) telemetry.addData("Shooter", shooter.getStatusLine());
+        if (shoot) {
+            telemetry.addData("Balls fed", "%d / %d", ballsFed, BALLS);
+            telemetry.addData("Shooter", shooter.getStatusLine());
+        }
         telemetry.addData("Drive", "%.2f", drivePower);
     }
 
@@ -216,6 +233,7 @@ public class HardcodedAuto extends OpMode {
                 shooter.feederOn();
                 break;
             case SPIN_UP:
+            case RECOVER:
             case DWELL:
                 intake.stop();
                 shooter.feederOff();

@@ -7,27 +7,28 @@ import com.qualcomm.robotcore.hardware.VoltageSensor;
 import org.firstinspires.ftc.teamcode.commands.Macros;
 import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
 import org.firstinspires.ftc.teamcode.subsystems.Intake;
+import org.firstinspires.ftc.teamcode.subsystems.Limelight;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
+import org.firstinspires.ftc.teamcode.util.field.Alliance;
 import org.firstinspires.ftc.teamcode.util.time.MatchClock;
 
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * The whole robot: the drivetrain, the intake, the shooter, and the two loop halves.
+ * The whole robot: the drivetrain, the intake, the shooter, the Limelight, and the two loop halves.
  *
  * <p>Every subsystem is a {@code public final} field. There is no supplier wiring, no sensor policy
- * and no fail-soft layer, because there is nothing left to arbitrate: the robot has eight motors and a
- * Pinpoint, and a missing config name throws at init where it is easy to read.
- *
- * <p>The Limelight is not built here: match code does not use it. {@code Bench: Limelight} builds
- * its own, so the camera can be left out of the Robot Controller configuration.
+ * and no fail-soft layer, because there is nothing left to arbitrate: the robot has six motors, a
+ * Pinpoint and a Limelight, and a missing config name (including {@code limelight}) throws at init
+ * where it is easy to read.
  *
  * <h2>The loop is split in two halves, deliberately</h2>
  * The OpMode calls these on either side of the Ivy scheduler:
  * <ul>
- *   <li>{@link #readSensors()} — clear every hub's bulk cache, tick the match clock, sample the
- *       battery. Top of the loop, before commands run.</li>
+ *   <li>{@link #readSensors()} — clear every hub's bulk cache, read the Limelight and set the
+ *       flywheel speed from it, tick the match clock, sample the battery. Top of the loop, before
+ *       commands run.</li>
  *   <li>{@link #writeActuators()} — push every mechanism's intent to hardware, drivetrain last.
  *       Bottom of the loop, after commands run.</li>
  * </ul>
@@ -50,7 +51,14 @@ public class Robot {
     public final Drivetrain drivetrain;
     public final Intake intake;
     public final Shooter shooter;
+    public final Limelight limelight;
     public final Macros macros;
+
+    /**
+     * True: the flywheel speed comes from the tag distance ({@code Shooter.SPEED_TABLE}). False: the
+     * fixed {@code Shooter.TARGET_TICKS_PER_SEC}. Applied every loop in {@link #readSensors()}.
+     */
+    public boolean autoSpeed = true;
 
     private MatchClock matchClock;
 
@@ -83,8 +91,14 @@ public class Robot {
         drivetrain = new Drivetrain(hardwareMap);
         intake = new Intake(hardwareMap);
         shooter = new Shooter(hardwareMap);
+        limelight = new Limelight(hardwareMap);
 
         macros = new Macros(this);   // last: it takes this, so every field must already be set
+    }
+
+    /** Switches the Limelight to the alliance's tag pipeline. Once, when the alliance is known. */
+    public void setAlliance(Alliance alliance) {
+        limelight.setAlliance(alliance);
     }
 
     // ---- The two loop halves ----
@@ -96,6 +110,15 @@ public class Robot {
     public void readSensors() {
         for (LynxModule hub : hubs) {
             hub.clearBulkCache();
+        }
+
+        // The flywheel speed is set here, before commands run, so a shot sees this loop's distance.
+        limelight.update();
+        // Not while a shot macro runs: the speed it spun up to is kept, so a jittering distance cannot
+        // move the target under a wheel that is recovering between balls.
+        if (macros.getOutcome() != Macros.Outcome.RUNNING) {
+            if (autoSpeed) shooter.setSpeedFromDistance(limelight.getShotDistanceInches());
+            else shooter.useFixedSpeed();
         }
 
         long now = System.currentTimeMillis();

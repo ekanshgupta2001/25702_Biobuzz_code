@@ -81,16 +81,17 @@ public class Intake {
 
     public void in()    { setMode(Mode.IN); }
     public void out()   { setMode(Mode.OUT); }
-    /** Runs in like {@link #in()} but with anti-jam off: for feed pulses, when the shooter's up-wheels run too. */
+    /** Runs in like {@link #in()} but with anti-jam off: for feed pulses into the flywheel. */
     public void feed()  { setMode(Mode.FEED); }
     public void stop()  { setMode(Mode.OFF); }
 
     private void setMode(Mode next) {
         if (next != mode) {
-            // Any deliberate change abandons an unjam in progress. Re-entering IN keeps the attempt
-            // count, so mashing the button cannot bypass MAX_UNJAM_ATTEMPTS against a hard jam.
-            if (next == Mode.IN) jamDetector.resetTiming();
-            else jamDetector.reset();
+            // Any deliberate change abandons an unjam in progress. Only running it OUT clears the
+            // attempt count, so letting go of the trigger and pulling it again cannot bypass
+            // MAX_UNJAM_ATTEMPTS against a hard jam, and the JAMMED warning stays up until then.
+            if (next == Mode.OUT) jamDetector.reset();
+            else jamDetector.resetTiming();
         }
         mode = next;
     }

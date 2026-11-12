@@ -8,6 +8,7 @@ import com.pedropathing.ivy.behaviors.EndCondition;
 import com.pedropathing.math.Pose;
 import com.pedropathing.paths.Path;
 import com.pedropathing.revhub.drivetrains.Mecanum;
+import com.pedropathing.revhub.localizers.PinpointLocalizer;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
 import org.firstinspires.ftc.teamcode.pedro.Constants;
@@ -18,14 +19,16 @@ import java.util.function.Supplier;
 /**
  * The mecanum drivetrain: stick driving, pose, and Pedro paths.
  *
- * <h2>One motor layer</h2>
- * This class owns exactly one {@link Mecanum}, built from names and directions alone, and hands that
- * same instance to the {@link Follower} when the tuning configs exist. So:
+ * <h2>One motor layer, one localizer</h2>
+ * This class owns exactly one {@link Mecanum}, built from names and directions alone, and at most one
+ * {@link PinpointLocalizer}, and hands those same instances to the {@link Follower} when the tuning
+ * configs exist. So:
  * <ul>
  *   <li><b>Sticks always work, robot-centric by default.</b> With a follower they go through
  *       {@code follower.manual(...)} (field-centric only after {@link #toggleFieldCentric()}).
- *       Without one they go straight to {@code mecanum.drive(...)}, robot-centric, because there is
- *       no pose to rotate against.</li>
+ *       Without one they go straight to {@code mecanum.drive(...)}, robot-centric.</li>
+ *   <li><b>The pose needs only the localizer</b>: once {@code Constants.localizerConfig} is filled,
+ *       {@link #getPose()} reads the Pinpoint, with or without a follower.</li>
  *   <li><b>Paths and turns need the follower</b> and are inert until
  *       AutoTune has filled {@code Constants.localizerConfig} and {@code foresightConfig}.</li>
  * </ul>
@@ -53,10 +56,15 @@ public class Drivetrain {
 
     /** The motor layer. Never null: four names and four directions are all it needs. */
     private final Mecanum mecanum;
-    /** Null until the tuning configs are filled. Drives {@link #mecanum}, never its own copy. */
+    /** The Pinpoint. Null until {@code Constants.localizerConfig} is filled. */
+    private final PinpointLocalizer localizer;
+    /**
+     * Null until both tuning configs are filled. Drives {@link #mecanum} and reads {@link #localizer},
+     * never its own copies.
+     */
     private final Follower follower;
 
-    /** Robot-centric unless a bench toggles it; Teleop is robot-centric only (no odometry pods). */
+    /** Robot-centric unless {@link #toggleFieldCentric()} is called; field-centric needs the follower. */
     private boolean fieldCentric = false;
     /**
      * Field heading the driver calls "forward", radians. Field-centric sticks are rotated by
@@ -75,12 +83,18 @@ public class Drivetrain {
     public Drivetrain(HardwareMap hardwareMap) {
         this.builtAtMs = System.currentTimeMillis();
         this.mecanum = Constants.createMecanum(hardwareMap);
-        this.follower = Constants.create(hardwareMap, mecanum);
+        this.localizer = Constants.createLocalizer(hardwareMap);
+        this.follower = Constants.create(mecanum, localizer);   // the same localizer, not a second one
     }
 
-    /** True once AutoTune's configs exist, so field-centric, the pose and paths are live. */
+    /** True once both tuning configs exist, so field-centric, heading hold and paths are live. */
     public boolean hasFollower() {
         return follower != null;
+    }
+
+    /** True once {@code Constants.localizerConfig} exists, so {@link #getPose()} has a pose. */
+    public boolean hasLocalizer() {
+        return localizer != null;
     }
 
     /**
@@ -93,9 +107,9 @@ public class Drivetrain {
         else mecanum.stop();
     }
 
-    /** True once the localizer's IMU calibration window has passed (always true without a follower). */
+    /** True once the localizer's IMU calibration window has passed (always true without a localizer). */
     public boolean isLocalizerSettled() {
-        return follower == null || System.currentTimeMillis() - builtAtMs >= LOCALIZER_SETTLE_MS;
+        return localizer == null || System.currentTimeMillis() - builtAtMs >= LOCALIZER_SETTLE_MS;
     }
 
     /**
@@ -149,12 +163,16 @@ public class Drivetrain {
      * discarded in exchange for a heading that is right for the rest of the match.
      */
     public void setPose(Pose pose) {
-        if (follower != null && pose != null) {
-            follower.setPose(pose);
-            lastSetPose = pose;
-            reapplyWhenSettled = !isLocalizerSettled();
-            poseWrites++;
-        }
+        if (localizer == null || pose == null) return;
+        writePose(pose);
+        lastSetPose = pose;
+        reapplyWhenSettled = !isLocalizerSettled();
+    }
+
+    private void writePose(Pose pose) {
+        if (follower != null) follower.setPose(pose);
+        else localizer.setPose(pose);
+        poseWrites++;
     }
 
     /**
@@ -166,9 +184,11 @@ public class Drivetrain {
         return poseWrites;
     }
 
-    /** The pose estimate, or {@code null} before tuning (there is no localizer). */
+    /** The pose estimate, or {@code null} until {@code Constants.localizerConfig} is filled. */
     public Pose getPose() {
-        return follower == null ? null : follower.pose();
+        if (follower != null) return follower.pose();
+        if (localizer != null) return localizer.pose();
+        return null;
     }
 
     /** Whether the robot is within the given distance of a pose on each axis. False without a pose. */
@@ -217,19 +237,18 @@ public class Drivetrain {
     }
 
     /**
-     * The one {@code follower.update()} per loop. Without a follower there is nothing to tick:
-     * {@link #drive} wrote the motors directly.
+     * Ticks odometry once per loop: {@code follower.update()}, which ticks the localizer itself, or
+     * the localizer alone when there is no follower. Without a follower {@link #drive} has already
+     * written the motors directly.
      */
     public void update() {
-        if (follower == null) return;
+        if (localizer == null) return;   // no localizer means no follower either: nothing to tick
         if (reapplyWhenSettled && isLocalizerSettled()) {
             reapplyWhenSettled = false;
-            if (lastSetPose != null) {
-                follower.setPose(lastSetPose);
-                poseWrites++;
-            }
+            if (lastSetPose != null) writePose(lastSetPose);
         }
-        follower.update();
+        if (follower != null) follower.update();
+        else localizer.update();   // never both: that would tick the Pinpoint twice a loop
     }
 
     // ---- Ivy commands ----

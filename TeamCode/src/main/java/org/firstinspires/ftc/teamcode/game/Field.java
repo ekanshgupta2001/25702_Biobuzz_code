@@ -28,7 +28,7 @@ import org.firstinspires.ftc.teamcode.util.field.FieldConstants;
  * <p>Everything alliance-specific is authored for BLUE and converted on demand.
  *
  * <h2>Why so little of the field is described here</h2>
- * The shooter is bolted to the chassis and fires out the rear, so the drivetrain heading <em>is</em>
+ * The shooter is bolted to the chassis and fires out the front, so the drivetrain heading <em>is</em>
  * the aim. What the aim law needs from the field is therefore small: where the target CELL opening
  * sits, and which AprilTag IDs are stuck underneath it. The robot has no game-piece sensors and
  * counts nothing, does not visit the GARDEN, and does not reason about FLOWERS — so those numbers

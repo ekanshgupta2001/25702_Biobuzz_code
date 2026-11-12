@@ -27,9 +27,9 @@ import java.util.function.Supplier;
  * {@link #getStatus()}.
  *
  * <h2>Aiming</h2>
- * The flywheel is bolted to the chassis firing out the rear ({@link Shooter#HEADING_OFFSET_RAD}), so
- * <em>aiming is turning the robot's back to the CELL</em>. {@link #aimHeading} takes the bearing from
- * odometry alone; the Limelight is not used.
+ * The flywheel is bolted to the chassis firing out the front ({@link Shooter#HEADING_OFFSET_RAD} = 0),
+ * so <em>aiming is turning the robot's front to the CELL</em>. {@link #aimHeading} takes the bearing
+ * from odometry alone; the Limelight only sets the flywheel speed.
  *
  * <h2>Nothing counts pieces</h2>
  * There is no sensor in the intake or the tunnel, so "shoot all" means <b>fire
@@ -133,8 +133,8 @@ public class Macros {
      * hold it displaced (the operator's armed flywheel). Without that the wheel would be told to stop
      * for a loop or two at the start of every shot.
      *
-     * <p>The wheels run at the Shooter's fixed speeds ({@code Shooter.TARGET_TICKS_PER_SEC} and
-     * {@code ROLLER_TARGET_TICKS_PER_SEC}).
+     * <p>The flywheel runs at whatever target {@code Robot.readSensors()} set this loop: from the tag
+     * distance, or the fixed {@code Shooter.TARGET_TICKS_PER_SEC}.
      */
     private Command shoot(String name, int pieces, long timeoutMs) {
         final Shoot cycle = new Shoot(robot.intake, robot.shooter, pieces);
@@ -166,8 +166,8 @@ public class Macros {
 
     /**
      * The field heading the robot must hold so the shooter faces {@code target}: the odometry bearing
-     * to it, minus {@link Shooter#HEADING_OFFSET_RAD} so a rear-firing shooter turns its back to the
-     * target. NaN without a pose or a target.
+     * to it, minus {@link Shooter#HEADING_OFFSET_RAD} (0 for this front-firing shooter, so the robot's
+     * front points at the target). NaN without a pose or a target.
      */
     public double aimHeading(Pose target) {
         Pose pose = robot.drivetrain.getPose();

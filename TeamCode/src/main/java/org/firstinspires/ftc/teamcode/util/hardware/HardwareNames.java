@@ -3,13 +3,13 @@ package org.firstinspires.ftc.teamcode.util.hardware;
 /**
  * Every name this code expects to find in the Robot Controller configuration, and nothing else.
  *
- * <h2>Eight motors, one camera, one odometry computer</h2>
- * BIOBUZZ R503 allows at most 8 DC motors, so every port is used and there is no spare.
+ * <h2>Six motors, one camera, one odometry computer</h2>
+ * BIOBUZZ R503 allows at most 8 DC motors; this robot uses six.
  * <ul>
  *   <li>4 x drive, goBILDA 5203-2402-0014 (13.7:1, 435 RPM)</li>
  *   <li>1 x intake, goBILDA 5203-2402-0051 (50.9:1, 117 RPM) — drives the roller
- *       <b>and</b> the tunnel through the sprocket chain</li>
- *   <li>3 x shooter: the flywheel, the counter-roller, and the up-wheels that carry balls up to them</li>
+ *       <b>and</b> the tunnel through the sprocket chain, which also carry balls into the flywheel</li>
+ *   <li>1 x shooter flywheel</li>
  * </ul>
  *
  * <h2>A name here that is not in the configuration is a crash, on purpose</h2>
@@ -41,19 +41,16 @@ public final class HardwareNames {
 
     public static final String INTAKE_MOTOR = "i";
 
-    // ---- Shooter: flywheel, counter-roller, up-wheels ----
-    //
-    // If the flywheel and counter-roller turn out to be on each other's port, swap these two strings.
+    // ---- Shooter: one flywheel ----
 
-    /** The flywheel. Its own speed per distance; see {@code Shooter.getVelocity()}. */
+    /** The flywheel. The intake carries balls into it; there is no other shooter motor. */
     public static final String FLYWHEEL_MOTOR = "sl";
-    /** The counter-roller opposite the flywheel. Its own speed per distance, runs reversed. */
-    public static final String COUNTER_ROLLER_MOTOR = "sr";
-    /** The up-wheels that carry balls up into the shooter. Only ever on or off. */
-    public static final String FEEDER_MOTOR = "feeder";
 
     // ---- Vision ----
 
-    /** Limelight 3A, front-mounted, configured as an Ethernet device. AprilTag aiming only. */
+    /**
+     * Limelight 3A, front-mounted (the side the shot leaves), configured as an Ethernet device. Reads
+     * the HIVE tags for the shot distance.
+     */
     public static final String LIMELIGHT = "limelight";
 }

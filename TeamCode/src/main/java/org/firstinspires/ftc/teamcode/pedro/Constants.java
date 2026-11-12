@@ -18,22 +18,23 @@ import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
 /**
  * Pedro 3.0.0 configuration for the mecanum drivetrain.
  *
- * <h2>One Mecanum, built once, shared</h2>
- * {@link #createMecanum} resolves the four drive motors; {@link #create} wraps <em>that same
- * instance</em> in a {@link Follower}. This matters: {@code Mecanum}'s constructor calls
- * {@code hardwareMap.get(DcMotorEx.class, name)} itself and wraps each motor in its own
- * {@code CachedMotor}, so two {@code Mecanum} objects over the same four motors hold two independent
- * power caches and fight each other. Sharing one instance is what lets stick driving and path
- * following coexist in a single {@code Drivetrain} instead of the two parallel motor layers this
- * code used to carry.
+ * <h2>One Mecanum and one localizer, built once, shared</h2>
+ * {@link #createMecanum} resolves the four drive motors and {@link #createLocalizer} the Pinpoint;
+ * {@link #create} wraps <em>those same instances</em> in a {@link Follower}. This matters:
+ * {@code Mecanum}'s constructor calls {@code hardwareMap.get(DcMotorEx.class, name)} itself and wraps
+ * each motor in its own {@code CachedMotor}, so two {@code Mecanum} objects over the same four motors
+ * hold two independent power caches and fight each other. A second {@code PinpointLocalizer} would
+ * restart the Pinpoint's IMU calibration. Sharing one of each is what lets stick driving, the pose
+ * and path following coexist in a single {@code Drivetrain}.
  *
  * <h2>Filling the three configs</h2>
  * In the order AutoTune produces them, (docs/01 section A.7):
  * {@link #drivetrainConfig} needs only a direction check (Mecanum Tuner, or the SDK's TestHardware
  * utility); {@link #localizerConfig} is the Pinpoint Tuner's output; {@link #foresightConfig} is the
- * Foresight Tuner's. Until the last two exist {@link #create} returns {@code null} and the robot
- * drives robot-centric straight through the {@code Mecanum}, with no heading hold, no aim lock and
- * no paths. Everything else runs normally.
+ * Foresight Tuner's. With only {@link #localizerConfig} the pose works (read straight from the
+ * Pinpoint). Until {@link #foresightConfig} exists too, {@link #create} returns {@code null} and the
+ * robot drives robot-centric straight through the {@code Mecanum}, with no heading hold, no aim lock
+ * and no paths. Everything else runs normally.
  */
 public class Constants {
     /**
@@ -91,15 +92,22 @@ public class Constants {
     }
 
     /**
-     * The follower over an existing {@link Mecanum}, or {@code null} while either tuning config is
-     * missing. Constructor order is (localizer, drivetrain, algorithm) — the Quickstart's own comment
-     * has it wrong (docs/01 A.9 gotcha 1).
+     * The Pinpoint localizer on its own, or {@code null} until {@link #localizerConfig} is pasted in.
+     * Needs no Foresight tuning, so the pose works as soon as the pods are tuned. Build it once: the
+     * follower must be handed this same instance.
      */
-    public static Follower create(HardwareMap h, Mecanum mecanum) {
-        if (!isTuned()) return null;
-        return new Follower(
-                new PinpointLocalizer(h, localizerConfig),
-                mecanum,
-                new Foresight(foresightConfig));
+    public static PinpointLocalizer createLocalizer(HardwareMap h) {
+        if (localizerConfig == null) return null;
+        return new PinpointLocalizer(h, localizerConfig);
+    }
+
+    /**
+     * The follower over an existing {@link Mecanum} and localizer, or {@code null} without a localizer
+     * or {@link #foresightConfig}. Constructor order is (localizer, drivetrain, algorithm) — the
+     * Quickstart's own comment has it wrong (docs/01 A.9 gotcha 1).
+     */
+    public static Follower create(Mecanum mecanum, PinpointLocalizer localizer) {
+        if (localizer == null || foresightConfig == null) return null;
+        return new Follower(localizer, mecanum, new Foresight(foresightConfig));
     }
 }

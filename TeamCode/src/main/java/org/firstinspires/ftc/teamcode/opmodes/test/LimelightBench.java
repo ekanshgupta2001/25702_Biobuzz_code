@@ -10,6 +10,7 @@ import org.firstinspires.ftc.robotcore.external.navigation.Position;
 import org.firstinspires.ftc.teamcode.game.Field;
 import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
 import org.firstinspires.ftc.teamcode.subsystems.Limelight;
+import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.util.field.Alliance;
 
 import java.util.List;
@@ -20,6 +21,11 @@ import java.util.Locale;
  * along the floor, the angle (tx, + = right), and x / y from the robot (forward / left, inches).
  * Then the robot's field position worked back from the closest tag's CELL. Drives nothing.
  *
+ * <p>The "Shot distance" line at the top is the number Teleop's TAG speed uses: the straight-line
+ * camera-to-tag distance to the tag nearest the crosshair ({@code Limelight.getShotDistanceInches}),
+ * and the speed {@code Shooter.SPEED_TABLE} gives for it. It is not the per-tag distance below, which
+ * is from the robot centre and along the floor.
+ *
  * <h2>Pipelines: one per alliance</h2>
  * Each pipeline (set up in the Limelight web UI) finds only its alliance's eight tags, both CELLs:
  * BLUE = pipeline 0 (tags 38-45), RED = pipeline 1 (tags 30-37). Gamepad 1 dpad left = RED,
@@ -27,9 +33,10 @@ import java.util.Locale;
  * Auto make. The card shows the pipeline asked for and the one the camera says it is running. A tag
  * that is not the selected alliance's is marked, which means that pipeline's ID filter is wrong.
  *
- * <p>Needs the camera's position on the robot entered in the Limelight web UI, or every distance is
- * off by the mount offset. The field position also needs Pedro tuned (for the heading), uses the
- * CELL's placeholder position in {@code game/Field}, and is wrong once that HIVE tips. Test number only.
+ * <p>Needs the camera's position on the robot entered in the Limelight web UI, or every per-tag
+ * distance is off by the mount offset. The field position also needs the Pinpoint config (for the
+ * heading), uses the CELL's placeholder position in {@code game/Field}, and is wrong once that HIVE
+ * tips. Test number only.
  */
 @TeleOp(name = "Bench: Limelight", group = "Bench")
 public class LimelightBench extends OpMode {
@@ -57,6 +64,11 @@ public class LimelightBench extends OpMode {
         limelight.update();
         drivetrain.update();
         telemetry.addData("Limelight", limelight.getStatusLine());
+        double shotDistance = limelight.getShotDistanceInches();
+        telemetry.addData("Shot distance", Double.isNaN(shotDistance)
+                ? "no tag / is 3D on in the pipeline?"
+                : String.format(Locale.US, "%.1f in -> %.0f t/s from the table",
+                        shotDistance, Shooter.speedForDistance(shotDistance)));
 
         int[] range = allianceTagRange(alliance);
         telemetry.addLine("ALLIANCE: " + alliance + "   (dpad left = RED, right = BLUE)");
@@ -130,7 +142,7 @@ public class LimelightBench extends OpMode {
             return;
         }
         if (odometry == null) {
-            telemetry.addLine("Pose from tags: needs Pedro tuned (for the heading)");
+            telemetry.addLine("Pose from tags: needs the Pinpoint config (for the heading)");
             return;
         }
 

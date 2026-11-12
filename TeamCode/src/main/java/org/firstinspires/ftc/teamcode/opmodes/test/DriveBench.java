@@ -10,9 +10,11 @@ import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
  * Drives the robot with Pedro, the same way Teleop does, and shows the localization.
  *
  * <p>Gamepad 1: sticks drive, OPTIONS switches field / robot centric, Y zeroes the pose.
- * Field centric and the pose need Pedro tuned (Pinpoint + Foresight configs in {@code Constants});
- * before that it drives robot centric only. The pose starts at 0, 0, 0 where the robot sits at
- * init, so field-centric "forward" is the way it faced then (or when Y was last pressed).
+ * The pose needs only the Pinpoint config in {@code Constants} (run the Pinpoint Tuner). Field
+ * centric still needs the full Pedro tuning (Pinpoint + Foresight configs, so
+ * {@code drivetrain.hasFollower()} is true); before that OPTIONS does nothing and it drives robot
+ * centric. The pose starts at 0, 0, 0 where the robot sits at init, so field-centric "forward" is
+ * the way it faced then (or when Y was last pressed).
  */
 @TeleOp(name = "Bench: Drive", group = "Bench")
 public class DriveBench extends OpMode {
@@ -40,10 +42,12 @@ public class DriveBench extends OpMode {
         drivetrain.update();
 
         telemetry.addLine("OPTIONS = field/robot centric   Y = zero the pose");
-        telemetry.addData("Mode", drivetrain.isFieldCentric() ? "FIELD centric" : "ROBOT centric");
+        telemetry.addData("Mode", drivetrain.isFieldCentric() ? "FIELD centric"
+                : drivetrain.hasFollower() ? "ROBOT centric"
+                : "ROBOT centric (field centric needs Pedro fully tuned)");
         Pose pose = drivetrain.getPose();
         if (pose == null) {
-            telemetry.addLine("Pedro not tuned: no localization yet (run the Pinpoint Tuner)");
+            telemetry.addLine("No Pinpoint config yet: run the Pinpoint Tuner");
         } else {
             telemetry.addData("x", "%.2f in", pose.x());
             telemetry.addData("y", "%.2f in", pose.y());

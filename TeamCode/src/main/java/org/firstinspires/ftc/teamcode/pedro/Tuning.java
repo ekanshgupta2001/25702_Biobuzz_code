@@ -9,7 +9,6 @@ import com.pedropathing.tuning.autotune.Tuner;
 import org.firstinspires.ftc.teamcode.pedro.procedures.ForesightTuner;
 import org.firstinspires.ftc.teamcode.pedro.procedures.MecanumTuner;
 import org.firstinspires.ftc.teamcode.pedro.procedures.PinpointTuner;
-import org.firstinspires.ftc.teamcode.pedro.procedures.ShooterTuner;
 import org.firstinspires.ftc.teamcode.pedro.procedures.Tests;
 
 /**
@@ -23,11 +22,8 @@ import org.firstinspires.ftc.teamcode.pedro.procedures.Tests;
  * Tests/Odometry → Foresight Tuner → Tests/Hold, Line, Curve. Each tuner ends with a code block to
  * paste into {@link Constants}. The web UI is {@code http://192.168.43.1:10158} on the robot's Wi-Fi.
  *
- * <p>The Shooter Tuner is ours, not the Quickstart's: it times spin-ups of the flywheel (gamepad 1
- * dpad left), the counter-roller (dpad right) or both with a test shot (dpad up) for each wheel's
- * kS / kV / kP, and ends with a block to paste into {@code Shooter.java}. The main shooter tool is
- * now the {@code Shooter Tuner} OpMode on the Driver Station ({@code subsystems/ShooterTuner}), which
- * needs no web site and survives the R704 strip.
+ * <p>The shooter is not tuned here: use the {@code Shooter Tuner} OpMode on the Driver Station
+ * ({@code subsystems/ShooterTuner}), which needs no web site and survives the R704 strip.
  *
  * <p>BIOBUZZ R704: AutoTune's web servers are always bound while the library is on the classpath, so
  * before an event this file, {@code pedro/procedures/*} and the {@code tuning} dependency are removed
@@ -64,12 +60,6 @@ public class Tuning {
                 h -> new Mecanum(h, Constants.drivetrainConfig),
                 Constants.localizerConfig == null ? null : h -> new PinpointLocalizer(h, Constants.localizerConfig),
                 Constants.foresightConfig == null ? null : () -> new Foresight(Constants.foresightConfig));
-    }
-
-    /** Flywheel spin-up timing, for {@code Shooter.kS / kV / kP}. Needs no Pedro config. */
-    @Tuner
-    public static Procedure shooterTuner() {
-        return new ShooterTuner();
     }
 
     /** A listed tuner that, when run, says what to do instead of failing with a NullPointerException. */

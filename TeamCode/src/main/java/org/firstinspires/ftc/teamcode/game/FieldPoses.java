@@ -35,23 +35,23 @@ public final class FieldPoses {
     public static double WALL_CLEARANCE_INCHES = 2.0;
 
     /**
-     * Start against the far wall at the D6/E6 seam with the shooter (the rear) toward the HIVE:
-     * heading 90, front to the wall, rear toward -Y. This is the wall blue's starting up-CELL
+     * Start against the far wall at the D6/E6 seam with the shooter (the front) toward the HIVE:
+     * heading 270, rear to the wall, front toward -Y. This is the wall blue's starting up-CELL
      * points toward, so the first shots need no move — which is the whole reason this is the start.
-     * Red's twin is the audience wall at B1/C1, heading 270.
+     * Red's twin is the audience wall at B1/C1, heading 90.
      */
     public static Pose BLUE_START_FACING_HIVE =
             new Pose(4 * Field.TILE_INCHES, Field.FIELD_SIZE_INCHES - ROBOT_HALF_LENGTH_INCHES,
-                    Math.toRadians(90));
+                    Math.toRadians(270));
 
     /**
      * A shooting position in front of the blue far-side CELL (the one that starts up), with the
-     * shooter toward it (heading 90: the rear faces -Y). There is no launch zone and no velocity
+     * shooter toward it (heading 270: the front faces -Y). There is no launch zone and no velocity
      * cap, so this is a range and line-of-sight choice.
      */
     public static Pose BLUE_SHOOTING_SPOT =
             new Pose(Field.HIVE_CENTER.x() + Field.HIVE_LATERAL_OFFSET_INCHES, 5 * Field.TILE_INCHES,
-                    Math.toRadians(90));
+                    Math.toRadians(270));
 
     /**
      * PARK: robot centre just inside the blue LOADING ZONE on F2, front toward the wall so a

@@ -79,6 +79,9 @@ public class JamDetector {
      * @return {@code true} if the caller should drive the un-jam (reverse) velocity this loop
      */
     public boolean update(long nowMs, boolean eligible, double amps) {
+        // Checked first, so the last allowed reversal runs its full time before giving up.
+        if (eligible && isUnjamming(nowMs)) return true;
+
         if (!eligible || attempts >= maxAttempts) {
             // Not eligible: forget any partial stall so a brief spike before the mode changed does
             // not carry over and trip on the first eligible loop. The attempt count deliberately
@@ -86,8 +89,6 @@ public class JamDetector {
             stalling = false;
             return false;
         }
-
-        if (isUnjamming(nowMs)) return true;
 
         if (amps > stallCurrentAmps) {
             healthy = false;

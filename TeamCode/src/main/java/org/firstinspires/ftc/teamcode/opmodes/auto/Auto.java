@@ -22,15 +22,16 @@ import org.firstinspires.ftc.teamcode.util.time.MatchClock;
  * <ul>
  *   <li><b>Tuned</b> — aim at the CELL by odometry, shoot, then drive a path to park in the
  *       LOADING ZONE. 20 (TIP) + 3 (LEAVE) + 5 (PARK) are all on the table.</li>
- *   <li><b>Not tuned</b> — shoot from where the robot was placed (rear toward the CELL), then back
- *       off the wall on a timer. Worth 20 + 3 and needs nothing measured. This is what runs at the
- *       first event if AutoTune has not happened yet.</li>
+ *   <li><b>Not tuned</b> — shoot from where the robot was placed (front toward the CELL), then
+ *       drive {@link #LEAVE_POWER} on a timer. Worth 20 + 3 and needs nothing measured. This is what
+ *       runs at the first event if AutoTune has not happened yet.</li>
  * </ul>
  * There is no alliance selector and no lock: {@code BlueAuto} and {@code RedAuto} carry the side in
- * the OpMode name, so there is no way to start the wrong route. The side is also left in
- * {@code PoseStorage} so Teleop's dpad alliance pick starts on it.
+ * the OpMode name, so there is no way to start the wrong route. The side sets the Limelight pipeline
+ * and is left in {@code PoseStorage} so Teleop's dpad alliance pick starts on it.
  *
- * <p>Both routines shoot at the Shooter's fixed speeds. The Limelight is not used.
+ * <p>Both routines shoot at the speed {@code Robot.readSensors()} sets: from the HIVE tag distance
+ * while the Limelight sees one, else the fixed {@code Shooter.TARGET_TICKS_PER_SEC}.
  *
  * <h2>The first TIP only needs three POLLEN</h2>
  * The up-CELL starts with 3 NECTAR and the robot pre-loads 4 POLLEN, and a HIVE tips on 3 POLLEN + 3
@@ -43,11 +44,11 @@ public abstract class Auto extends MatchOpMode {
     /** Pause after shooting, so the robot is still before it drives. */
     public static long SETTLE_MS = 250;
     /**
-     * Backwards off the wall. Negative is away from the wall, given the robot starts with its
-     * rear-firing shooter pointed at the HIVE. Set these on the practice field: the robot must clearly
+     * Forward off the wall, toward the HIVE: the robot starts with its back on the wall and its front
+     * (shooter + camera) toward the HIVE. Set these on the practice field: the robot must clearly
      * stop touching the wall and must never reach the HIVE structure.
      */
-    public static double LEAVE_POWER = -0.4;
+    public static double LEAVE_POWER = 0.4;
     public static long LEAVE_MS = 700;
 
     private final Alliance side;
@@ -64,6 +65,7 @@ public abstract class Auto extends MatchOpMode {
     @Override
     protected void onInit() {
         Scheduler.schedule(robot.intake.defaultIdleCommand(), robot.shooter.defaultIdleCommand());
+        robot.setAlliance(side);          // the camera reads this side's HIVE tags
         PoseStorage.saveAlliance(side);   // Teleop's alliance pick starts on this side
     }
 
@@ -71,10 +73,10 @@ public abstract class Auto extends MatchOpMode {
     protected void onInitLoop() {
         telemetry.addLine(side + " autonomous: shoot the pre-loads, then leave");
         telemetry.addLine();
-        telemetry.addLine("PLACE: touching your wall, REAR (shooter) toward the up-facing CELL.");
+        telemetry.addLine("PLACE: touching your wall, FRONT (shooter + camera) toward the up-facing CELL.");
         telemetry.addData("Route", robot.drivetrain.hasFollower()
                 ? "tuned: aim, shoot, path to park"
-                : "NOT TUNED: shoot in place, then back off the wall on a timer");
+                : "NOT TUNED: shoot in place, then drive off on a timer");
         telemetry.addData("Flywheel", robot.shooter.getStatusLine());
     }
 

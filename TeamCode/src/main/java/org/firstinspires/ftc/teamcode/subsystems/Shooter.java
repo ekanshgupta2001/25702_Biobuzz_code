@@ -79,13 +79,19 @@ public class Shooter {
      * interpolated; past either end they are the end row's speeds.
      *
      * <p>EMPTY UNTIL MEASURED: with no rows every distance gives the fixed speeds, so TAG and FIXED
-     * shoot the same. To fill a row: Teleop in FIXED speed, park at a distance facing the CELL, trim
-     * the speeds with the dpad (up/down flywheel, left/right counter-roller) until the shots land, then
-     * copy the tag distance and both speeds from the card's Speed line into a row, e.g.
-     * {@code {48, 1450, 2000},}. Four or so distances across the range you shoot from. Every row must
-     * have all three numbers: a short row stops the OpMode at init with a message.
+     * shoot the same. To fill it: {@code Shooter Tuner}, Test = TABLE. At each spot it shows the
+     * camera distance, you change both speeds until the shots land, Y saves the row, and the bottom of
+     * its screen is this whole array, sorted, ready to type in here. Four or so distances across the
+     * range you shoot from. (Teleop's FIXED speed works too: its Speed line reads as a row.)
+     *
+     * <p>Every row needs all three numbers, and the rows must get farther each time: a short row or
+     * one out of order stops the OpMode at init with a message.
      */
     public static double[][] SPEED_TABLE = {
+            // {inches to the tag, flywheel t/s, counter-roller t/s},  nearest first.
+            // Example: a spot 48 in from the tag that shoots well at the fixed speeds above
+            // (TARGET_TICKS_PER_SEC 1500, ROLLER_TARGET_TICKS_PER_SEC 2100) is this row:
+            // {48, 1500, 2100},
     };
 
     /**
@@ -157,8 +163,9 @@ public class Shooter {
     }
 
     /**
-     * A short row would only fail the first time a tag is seen, mid-match. Checked here instead, so it
-     * stops the OpMode at init and says which row.
+     * A short row would only fail the first time a tag is seen, mid-match, and rows out of order would
+     * silently give the wrong speeds. Checked here instead, so it stops the OpMode at init and says
+     * which row.
      */
     private static void checkSpeedTable() {
         double[][] table = SPEED_TABLE;
@@ -167,6 +174,10 @@ public class Shooter {
             if (table[i] == null || table[i].length < 3) {
                 throw new IllegalStateException("Shooter.SPEED_TABLE row " + (i + 1)
                         + " needs 3 numbers: {inches, flywheel, roller}");
+            }
+            if (i > 0 && table[i][0] <= table[i - 1][0]) {
+                throw new IllegalStateException("Shooter.SPEED_TABLE row " + (i + 1) + " (" + table[i][0]
+                        + " in) must be farther than row " + i + " (" + table[i - 1][0] + " in): nearest first");
             }
         }
     }

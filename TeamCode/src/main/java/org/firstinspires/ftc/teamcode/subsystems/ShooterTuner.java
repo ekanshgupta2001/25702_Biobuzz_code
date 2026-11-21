@@ -1,14 +1,21 @@
 package org.firstinspires.ftc.teamcode.subsystems;
 
+import com.pedropathing.ivy.Command;
+import com.pedropathing.ivy.Scheduler;
 import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.Gamepad;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
+import com.qualcomm.robotcore.util.RobotLog;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.robotcore.internal.system.AppUtil;
+import org.firstinspires.ftc.teamcode.commands.Macros;
 import org.firstinspires.ftc.teamcode.commands.Shoot;
+import org.firstinspires.ftc.teamcode.commands.Waits;
+import org.firstinspires.ftc.teamcode.util.field.Alliance;
+import org.firstinspires.ftc.teamcode.util.field.PoseStorage;
 
 import java.io.BufferedWriter;
 import java.io.File;
@@ -17,6 +24,7 @@ import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.MathContext;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.function.DoubleConsumer;
@@ -32,6 +40,12 @@ import java.util.function.DoubleSupplier;
  *   LB / RB          smaller / bigger step  X  run the Test picked in the menu
  *                                           Y  apply the kS / kV the last FF FIT found
  *                                           B  STOP everything
+ *
+ * Gamepad 1 while TABLE runs (like Teleop's FIXED speed)
+ *   dpad up/down     flywheel target +- step      A     shoot four, exactly like Teleop's A
+ *   dpad right/left  counter-roller +- step       Y     save this spot as a SPEED_TABLE row
+ *   LB / RB          smaller / bigger step        back  delete this spot's row
+ *   LT (hold)        intake out, to clear a jam   X     end TABLE        B  STOP
  * </pre>
  *
  * Tuning order, one wheel at a time (the Wheels line), then both:
@@ -46,11 +60,27 @@ import java.util.function.DoubleSupplier;
  *       time: each dip and how long it took to recover is listed.</li>
  *   <li>Type the two lines at the bottom into {@code Shooter.java}. Values set here only last until
  *       the Robot Controller app restarts.</li>
+ *   <li><b>Test = TABLE, X</b> (gains tuned first, Alliance line = the CELL you face). Push the robot
+ *       to a spot facing the CELL, load balls, A to shoot, dpad the two speeds until the shots land
+ *       every time, then Y. The camera distance and both speeds become a row. Do four or so spots
+ *       across the range you shoot from. The bottom of the screen is the whole
+ *       {@code SPEED_TABLE}, nearest first, ready to type into {@code Shooter.java}.</li>
  * </ol>
  *
+ * <h2>TABLE</h2>
+ * The distance is {@code Limelight.getShotDistanceInches()}, the same number Teleop's TAG speed reads,
+ * averaged over half a second and rounded to the inch. A works like Teleop's A: the match's own
+ * {@link Shoot} cycle (spin up, then one intake + feeder pulse per ball, the wheels recovering in
+ * between), so the speeds you save are the speeds the match shoots with. Y on a spot within
+ * {@link #SAME_SPOT_INCHES} of a saved row replaces it. Saved rows go into
+ * {@code Shooter.SPEED_TABLE} straight away, so Teleop's TAG speed uses them until the Robot
+ * Controller app restarts: type them into {@code Shooter.java} to keep them. The rows already in
+ * {@code Shooter.java} are on the list from the start.
+ *
  * The menu is locked while a test runs (STEP and FF FIT wait for the wheels to stop first). While B is
- * held no other button counts. Every test writes a CSV to /sdcard/FIRST/data (over USB:
- * {@code adb pull /sdcard/FIRST/data}). Builds only the {@link Shooter} (the feeder stays off): no intake.
+ * held no other button counts. Every test but TABLE writes a CSV to /sdcard/FIRST/data (over USB:
+ * {@code adb pull /sdcard/FIRST/data}). Builds the {@link Shooter}, the {@link Intake} and the
+ * {@link Limelight}; only TABLE runs the intake and the feeder.
  */
 @TeleOp(name = "Shooter Tuner", group = "Tuning")
 public class ShooterTuner extends OpMode {
@@ -80,17 +110,29 @@ public class ShooterTuner extends OpMode {
     private static final double VOLTAGE_PERIOD_MS = 250;   // a voltage read is its own bus transaction
     private static final double SLOW_LOOP_MS = 25;
 
+    /** TABLE's dpad steps, ticks/sec; LB / RB pick one. 25 is Teleop's FIXED step. */
+    private static final double[] TABLE_STEPS = {10, 25, 50, 100};
+    /** A row this close to the spot being saved is the same spot: Y replaces it, back deletes it. */
+    private static final double SAME_SPOT_INCHES = 3;
+    /** No tag for this long and the distance average is thrown away, so Y can't save an old spot. */
+    private static final double TAG_LOST_MS = 500;
+
     private enum Test {
-        STEP("STEP"), FF_FIT("FF FIT"), SHOT("SHOT (hand)");
+        STEP("STEP"), FF_FIT("FF FIT"), SHOT("SHOT (hand)"), TABLE("TABLE (tag)");
         final String label;
         Test(String label) { this.label = label; }
     }
 
     private enum Wheels { BOTH, FLYWHEEL, ROLLER }
 
-    private enum Mode { IDLE, HOLD, WAIT_FOR_REST, STEP, FF_FIT, SHOT }
+    private enum Mode { IDLE, HOLD, WAIT_FOR_REST, STEP, FF_FIT, SHOT, TABLE }
+
+    /** The menu's choice lines (Test, Wheels, Alliance) come before the number rows. */
+    private static final int CHOICE_LINES = 3;
 
     private Shooter shooter;
+    private Intake intake;
+    private Limelight limelight;
     private List<LynxModule> hubs;
     private VoltageSensor battery;
     private double volts;
@@ -103,9 +145,10 @@ public class ShooterTuner extends OpMode {
     private final Gamepad cur = new Gamepad();
     private final Gamepad prev = new Gamepad();
 
-    // The menu: two choice lines, then the number rows.
+    // The menu: three choice lines, then the number rows.
     private Test test = Test.FF_FIT;
     private Wheels wheels = Wheels.FLYWHEEL;
+    private Alliance alliance;
     private double runTimeSec = 3.0;
     private final List<Row> rows = new ArrayList<>();
     private int cursor = 0;
@@ -131,9 +174,30 @@ public class ShooterTuner extends OpMode {
     private Dip dip;
     private final List<Dip> dips = new ArrayList<>();
 
+    // TABLE
+    private double tagInches = Double.NaN;            // this loop's camera distance, NaN = no tag
+    private final Window tagWindow = new Window();   // its half-second average and jitter
+    private double lastTagMs = -1;
+    /** {inches, flywheel, roller} rows, nearest first. Every change is copied into Shooter.SPEED_TABLE. */
+    private final List<double[]> tableRows = new ArrayList<>();
+    private int tableStep = 1;   // TABLE_STEPS[1] = 25
+    private Command volley;      // the shot A started; null when none
+    private Shoot volleyCycle;   // its Shoot, for the state and the pulse count
+
     @Override
     public void init() {
+        Scheduler.reset();   // the scheduler is static and survives OpMode restarts
         shooter = new Shooter(hardwareMap);
+        intake = new Intake(hardwareMap);
+        limelight = new Limelight(hardwareMap);
+        // Starts on the side Teleop last picked; the Alliance line changes it.
+        alliance = PoseStorage.getAlliance(Alliance.BLUE);
+        limelight.setAlliance(alliance);
+        // The rows already in Shooter.java (or saved earlier since the app started) are the starting list.
+        if (Shooter.SPEED_TABLE != null) {
+            for (double[] row : Shooter.SPEED_TABLE) tableRows.add(row.clone());
+        }
+        sortRows();
         // MANUAL: one bulk read per loop, cleared at the top of loop(), so every velocity read in a loop
         // (here and inside Shooter.update()) is the same snapshot, and costs one bus transaction.
         hubs = hardwareMap.getAll(LynxModule.class);
@@ -164,8 +228,12 @@ public class ShooterTuner extends OpMode {
         handleMenu();
         telemetry.addLine("SHOOTER TUNER   press START to begin");
         telemetry.addLine("You can change values now.");
+        if (test == Test.TABLE) {
+            readTag();
+            addTag();
+        }
         addSettings();
-        addPasteLines();
+        addPasteBlock();
     }
 
     @Override
@@ -175,13 +243,16 @@ public class ShooterTuner extends OpMode {
 
     @Override
     public void loop() {
-        // 1. One snapshot of the encoders, the clock and the battery.
+        // 1. One snapshot of the encoders, the clock and the battery, and the camera when TABLE wants it.
         double dtMs = beginLoop();
+        if (test == Test.TABLE) readTag();
 
         // 2. Buttons. While B is held nothing else counts, so a thumb that also catches A or X
-        //    cannot spin the wheels straight back up.
+        //    cannot spin the wheels straight back up. TABLE has its own buttons.
         if (cur.b) {
             if (pressed(cur.b, prev.b)) stopAll("Stopped (B).");
+        } else if (mode == Mode.TABLE) {
+            handleTableButtons();
         } else {
             handleMenu();
             if (pressed(cur.a, prev.a)) toggleHold();
@@ -196,14 +267,18 @@ public class ShooterTuner extends OpMode {
             case STEP:          runStep(dtMs); break;
             case FF_FIT:        runFit(); break;
             case SHOT:          runShot(); break;
+            case TABLE:         runTable(); break;
             default:            setTargets(false, false); break;
         }
+        // TABLE's shot is the only thing ever scheduled. Runs after the targets are set, like Teleop.
+        Scheduler.execute();
 
         // 4. Log this loop's speed with the power that was on while it was measured (last loop's).
         if (log != null) log.row(nowMs - modeStartMs, dtMs, volts, fw, rl);
 
         // 5. Write. FF FIT writes raw power itself and update() would overwrite it.
         if (mode != Mode.FF_FIT) shooter.update();
+        intake.update();   // off except in TABLE; writes only on change
         fw.power = shooter.getFlywheelPower();
         rl.power = shooter.getRollerPower();
         fw.measure(nowMs);
@@ -215,6 +290,8 @@ public class ShooterTuner extends OpMode {
     @Override
     public void stop() {
         // The SDK zeroes the motors itself; an iterative OpMode may not write them here.
+        Scheduler.reset();
+        if (limelight != null) limelight.stop();
         closeLog();
     }
 
@@ -266,7 +343,7 @@ public class ShooterTuner extends OpMode {
     // ------------------------------------------------------------------ buttons
 
     private void handleMenu() {
-        int lines = 2 + rows.size();
+        int lines = CHOICE_LINES + rows.size();
         if (pressed(cur.dpad_up, prev.dpad_up)) cursor = (cursor + lines - 1) % lines;
         if (pressed(cur.dpad_down, prev.dpad_down)) cursor = (cursor + 1) % lines;
         if (testRunning()) return;   // B still stops it
@@ -278,13 +355,16 @@ public class ShooterTuner extends OpMode {
                 test = Test.values()[(test.ordinal() + change + Test.values().length) % Test.values().length];
             } else if (cursor == 1) {
                 wheels = Wheels.values()[(wheels.ordinal() + change + Wheels.values().length) % Wheels.values().length];
+            } else if (cursor == 2) {
+                alliance = alliance.opposite();
+                limelight.setAlliance(alliance);   // a network call to the camera: only on a change
             } else {
-                rows.get(cursor - 2).nudge(change);
+                rows.get(cursor - CHOICE_LINES).nudge(change);
             }
         }
-        if (cursor >= 2) {
-            if (pressed(cur.right_bumper, prev.right_bumper)) rows.get(cursor - 2).changeStep(1);
-            if (pressed(cur.left_bumper, prev.left_bumper)) rows.get(cursor - 2).changeStep(-1);
+        if (cursor >= CHOICE_LINES) {
+            if (pressed(cur.right_bumper, prev.right_bumper)) rows.get(cursor - CHOICE_LINES).changeStep(1);
+            if (pressed(cur.left_bumper, prev.left_bumper)) rows.get(cursor - CHOICE_LINES).changeStep(-1);
         }
     }
 
@@ -309,6 +389,10 @@ public class ShooterTuner extends OpMode {
         note = "";
         if (test == Test.SHOT) {
             startShot();
+            return;
+        }
+        if (test == Test.TABLE) {
+            startTable();
             return;
         }
         if (test == Test.STEP && ((flywheelSelected() && Shooter.TARGET_TICKS_PER_SEC <= 0)
@@ -336,8 +420,10 @@ public class ShooterTuner extends OpMode {
         else note = why;
     }
 
-    /** The end of every test and of HOLD: wheels off (they coast), CSV closed, back to IDLE. */
+    /** The end of every test, of HOLD and of TABLE: shot cancelled, intake and wheels off (they coast), CSV closed, back to IDLE. */
     private void endMode() {
+        cancelVolley();
+        intake.stop();
         shooter.disarm();
         fw.target = 0;
         rl.target = 0;
@@ -545,6 +631,140 @@ public class ShooterTuner extends OpMode {
         endMode();
     }
 
+    // ------------------------------------------------------------------ TABLE (speed per tag distance)
+
+    private void startTable() {
+        if (Shooter.TARGET_TICKS_PER_SEC <= 0 || Shooter.ROLLER_TARGET_TICKS_PER_SEC <= 0) {
+            note = "TABLE needs both targets above 0.";
+            return;
+        }
+        mode = Mode.TABLE;   // from IDLE or straight from HOLD; the wheels keep their targets
+        modeStartMs = nowMs;
+        note = "";
+        setTargets(true, true);
+    }
+
+    /** TABLE's buttons, in place of the menu's: the dpad changes the two speeds, like Teleop's FIXED. */
+    private void handleTableButtons() {
+        if (pressed(cur.x, prev.x)) {
+            endMode();
+            note = "TABLE ended (X). The rows are kept.";
+            return;
+        }
+        double step = TABLE_STEPS[tableStep];
+        if (pressed(cur.dpad_up, prev.dpad_up)) Shooter.TARGET_TICKS_PER_SEC += step;
+        if (pressed(cur.dpad_down, prev.dpad_down)) {
+            Shooter.TARGET_TICKS_PER_SEC = Math.max(0, Shooter.TARGET_TICKS_PER_SEC - step);
+        }
+        if (pressed(cur.dpad_right, prev.dpad_right)) Shooter.ROLLER_TARGET_TICKS_PER_SEC += step;
+        if (pressed(cur.dpad_left, prev.dpad_left)) {
+            Shooter.ROLLER_TARGET_TICKS_PER_SEC = Math.max(0, Shooter.ROLLER_TARGET_TICKS_PER_SEC - step);
+        }
+        if (pressed(cur.right_bumper, prev.right_bumper)) tableStep = Math.min(TABLE_STEPS.length - 1, tableStep + 1);
+        if (pressed(cur.left_bumper, prev.left_bumper)) tableStep = Math.max(0, tableStep - 1);
+        if (pressed(cur.a, prev.a)) startVolley();
+        if (pressed(cur.y, prev.y)) saveRow();
+        if (pressed(cur.back, prev.back)) deleteRow();
+    }
+
+    /** Both wheels hold the targets. Between shots LT runs the intake out; during one, the shot owns it. */
+    private void runTable() {
+        setTargets(true, true);
+        if (volleyRunning()) return;
+        if (cur.left_trigger > 0.5) intake.out();
+        else intake.stop();
+    }
+
+    /** Teleop's A: the same Shoot cycle, the same ball count, the same time limit. */
+    private void startVolley() {
+        if (volleyRunning()) return;   // let the running one finish
+        volleyCycle = new Shoot(intake, shooter, Macros.PIECES_PER_LOAD);
+        volley = Waits.bounded(volleyCycle.build(), Macros.SHOOT_ALL_TIMEOUT_MS);
+        Scheduler.schedule(volley);
+    }
+
+    private boolean volleyRunning() {
+        return volley != null && Scheduler.isScheduled(volley);
+    }
+
+    /** Ends the shot (its end stops the intake and the feeder). Nothing if none is running. */
+    private void cancelVolley() {
+        if (volleyRunning()) Scheduler.cancel(volley);
+        volley = null;
+    }
+
+    /** This loop's camera distance, and its half-second average for the row. */
+    private void readTag() {
+        limelight.update();
+        tagInches = limelight.getShotDistanceInches();
+        if (!Double.isNaN(tagInches)) {
+            tagWindow.add(nowMs, tagInches);
+            lastTagMs = nowMs;
+        } else if (lastTagMs < 0 || nowMs - lastTagMs > TAG_LOST_MS) {
+            tagWindow.clear();
+        }
+    }
+
+    /** The distance a row saved now would get, rounded to the inch; NaN until there is a recent average. */
+    private double spotInches() {
+        boolean recent = lastTagMs >= 0 && nowMs - lastTagMs <= TAG_LOST_MS;
+        return recent && !Double.isNaN(tagWindow.avg) ? Math.round(tagWindow.avg) : Double.NaN;
+    }
+
+    /** Y: this spot and the two targets become a row. A row at the same spot is replaced. */
+    private void saveRow() {
+        double inches = spotInches();
+        if (Double.isNaN(inches)) {
+            note = "Y: no tag distance yet. Face the CELL and wait for the TAG line.";
+            return;
+        }
+        double[] row = {inches, Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC};
+        String replaced = "";
+        for (int i = tableRows.size() - 1; i >= 0; i--) {
+            if (Math.abs(tableRows.get(i)[0] - inches) < SAME_SPOT_INCHES) {
+                replaced = "  (replaced " + rowText(tableRows.get(i)) + ")";
+                tableRows.remove(i);
+            }
+        }
+        tableRows.add(row);
+        sortRows();
+        publishTable();
+        note = "Saved " + rowText(row) + replaced;
+        RobotLog.ii("ShooterTuner", "SPEED_TABLE row %s%s", rowText(row), replaced);
+    }
+
+    /** back: deletes the row saved at this spot, to undo a Y. */
+    private void deleteRow() {
+        double inches = spotInches();
+        if (Double.isNaN(inches)) {
+            note = "back: no tag distance, so no spot to delete.";
+            return;
+        }
+        for (int i = 0; i < tableRows.size(); i++) {
+            if (Math.abs(tableRows.get(i)[0] - inches) < SAME_SPOT_INCHES) {
+                note = "Deleted " + rowText(tableRows.remove(i));
+                publishTable();
+                RobotLog.ii("ShooterTuner", "SPEED_TABLE %s", note);
+                return;
+            }
+        }
+        note = String.format(Locale.US, "back: no row within %.0f in of %.0f in.", SAME_SPOT_INCHES, inches);
+    }
+
+    private void sortRows() {
+        Collections.sort(tableRows, (a, b) -> Double.compare(a[0], b[0]));
+    }
+
+    /** The live table: Teleop's TAG speed uses these rows until the Robot Controller app restarts. */
+    private void publishTable() {
+        Shooter.SPEED_TABLE = tableRows.toArray(new double[0][]);
+    }
+
+    /** "{52, 1500, 2100}", the way a row is typed into Shooter.java. */
+    private static String rowText(double[] row) {
+        return "{" + plain(row[0]) + ", " + plain(row[1]) + ", " + plain(row[2]) + "}";
+    }
+
     // ------------------------------------------------------------------ CSV
 
     private void openLog(String tag) {
@@ -575,8 +795,17 @@ public class ShooterTuner extends OpMode {
         addWarnings();
         addLive(fw);
         addLive(rl);
+        if (test == Test.TABLE) addTag();
         telemetry.addLine(status());
-        if (testRunning() && !note.isEmpty()) telemetry.addLine(note);
+        if ((testRunning() || mode == Mode.TABLE) && !note.isEmpty()) telemetry.addLine(note);
+        if (mode == Mode.TABLE) {
+            // The menu is not in use while TABLE runs, so its lines give way to the table.
+            addPasteBlock();
+            telemetry.addLine("dpad up/dn FW  right/left RL  LB/RB step");
+            telemetry.addLine("A shoot 4   Y save row   back delete row");
+            telemetry.addLine("LT hold = intake out   X end   B STOP");
+            return;
+        }
         addSettings();
         if (!result.isEmpty()) {
             telemetry.addLine("-- result -------------------------------");
@@ -584,8 +813,18 @@ public class ShooterTuner extends OpMode {
         }
         String next = nextStep();
         if (!next.isEmpty()) telemetry.addLine(next);
-        addPasteLines();
+        addPasteBlock();
         telemetry.addLine("A hold  X run test  Y apply fit  B STOP");
+    }
+
+    /** TABLE's camera lines: the distance (now, averaged, jitter) and what the Limelight reports. */
+    private void addTag() {
+        telemetry.addLine(Double.isNaN(tagInches)
+                ? "TAG  none: face the CELL"
+                : String.format(Locale.US, "TAG  %.1f in now  avg %s  jitter %s", tagInches,
+                        dash("%.1f", tagWindow.avg), dash("%.1f", tagWindow.ripple)));
+        telemetry.addLine(String.format(Locale.US, "     Limelight %s  (%s pipeline %d)",
+                limelight.getStatusLine(), alliance, Limelight.pipelineFor(alliance)));
     }
 
     private void addWarnings() {
@@ -642,6 +881,13 @@ public class ShooterTuner extends OpMode {
                 return shotReady
                         ? String.format(Locale.US, "SHOT: READY, drop ball %d of %d in (X = end)", dips.size() + 1, MAX_SHOTS)
                         : "SHOT: spinning up, wait for READY";
+            case TABLE:
+                if (volleyRunning()) {
+                    return String.format(Locale.US, "TABLE: shooting [%s] pulse %d of %d", volleyCycle.getStateName(),
+                            volleyCycle.getShotsFired(), Macros.PIECES_PER_LOAD);
+                }
+                return String.format(Locale.US, "TABLE: A = shoot %d. Step %.0f t/s",
+                        Macros.PIECES_PER_LOAD, TABLE_STEPS[tableStep]);
             default:
                 return note.isEmpty() ? "IDLE" : note;
         }
@@ -652,9 +898,10 @@ public class ShooterTuner extends OpMode {
                 : "-- settings (dpad, LB/RB = step) -------");
         telemetry.addLine(menuLine(0, "Test", test.label));
         telemetry.addLine(menuLine(1, "Wheels", wheels.name()));
+        telemetry.addLine(menuLine(2, "Alliance", alliance + " (the CELL TABLE faces)"));
         for (int i = 0; i < rows.size(); i++) {
             Row row = rows.get(i);
-            telemetry.addLine(menuLine(i + 2, row.label, String.format(Locale.US, "%-10s +-%s",
+            telemetry.addLine(menuLine(i + CHOICE_LINES, row.label, String.format(Locale.US, "%-10s +-%s",
                     plain(row.get.getAsDouble()), plain(row.step()))));
         }
         telemetry.addLine("  FF power at target: FW " + feedforwardCheck(Shooter.kS, Shooter.kV, Shooter.TARGET_TICKS_PER_SEC)
@@ -678,9 +925,33 @@ public class ShooterTuner extends OpMode {
         if ((fwOn && Shooter.kV == 0) || (rlOn && Shooter.ROLLER_kV == 0)) {
             return "Next: Test = FF FIT, X. It finds kS and kV.";
         }
+        if (test == Test.TABLE) return "Next: face the CELL, X starts TABLE (both wheels).";
         if (mode == Mode.HOLD) return "Next: raise kP until reach stops improving.";
         if ((fwOn && Shooter.kP == 0) || (rlOn && Shooter.ROLLER_kP == 0)) return "Next: A (HOLD) and raise kP.";
         return "Next: STEP, then SHOT, then copy the lines below.";
+    }
+
+    /** The bottom of the screen: the speed table with Test = TABLE, the gains otherwise. */
+    private void addPasteBlock() {
+        if (test == Test.TABLE) addTableLines();
+        else addPasteLines();
+    }
+
+    /** This spot as a row, then the whole SPEED_TABLE as it should be typed into Shooter.java. */
+    private void addTableLines() {
+        double inches = spotInches();
+        telemetry.addLine("-- this spot (Y saves it) ---------------");
+        telemetry.addLine(Double.isNaN(inches)
+                ? String.format(Locale.US, "{--, %s, %s}  no tag yet: can't save",
+                        plain(Shooter.TARGET_TICKS_PER_SEC), plain(Shooter.ROLLER_TARGET_TICKS_PER_SEC))
+                : rowText(new double[] {inches, Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC}) + ",");
+        telemetry.addLine(String.format(Locale.US, "-- Shooter.java: replace SPEED_TABLE (%d row%s)",
+                tableRows.size(), tableRows.size() == 1 ? "" : "s"));
+        telemetry.addLine("public static double[][] SPEED_TABLE = {");
+        if (tableRows.isEmpty()) telemetry.addLine("    // no rows yet: Y saves this spot");
+        for (double[] row : tableRows) telemetry.addLine("    " + rowText(row) + ",");
+        telemetry.addLine("};");
+        if (!tableRows.isEmpty()) telemetry.addLine("(Teleop TAG uses these now; type them in to keep)");
     }
 
     private void addPasteLines() {

@@ -30,8 +30,9 @@ import org.firstinspires.ftc.teamcode.util.time.MatchClock;
  * the OpMode name, so there is no way to start the wrong route. The side sets the Limelight pipeline
  * and is left in {@code PoseStorage} so Teleop's dpad alliance pick starts on it.
  *
- * <p>Both routines shoot at the speed {@code Robot.readSensors()} sets: from the HIVE tag distance
- * while the Limelight sees one, else the fixed {@code Shooter.TARGET_TICKS_PER_SEC}.
+ * <p>Both routines shoot at the speeds {@code Robot.readSensors()} sets: from the HIVE tag distance
+ * while the Limelight sees one, else the fixed {@code Shooter.TARGET_TICKS_PER_SEC} /
+ * {@code ROLLER_TARGET_TICKS_PER_SEC}.
  *
  * <h2>The first TIP only needs three POLLEN</h2>
  * The up-CELL starts with 3 NECTAR and the robot pre-loads 4 POLLEN, and a HIVE tips on 3 POLLEN + 3
@@ -77,7 +78,7 @@ public abstract class Auto extends MatchOpMode {
         telemetry.addData("Route", robot.drivetrain.hasFollower()
                 ? "tuned: aim, shoot, path to park"
                 : "NOT TUNED: shoot in place, then drive off on a timer");
-        telemetry.addData("Flywheel", robot.shooter.getStatusLine());
+        telemetry.addData("Shooter", robot.shooter.getStatusLine());
     }
 
     @Override
@@ -127,7 +128,7 @@ public abstract class Auto extends MatchOpMode {
         telemetry.addData("Loop", "%.0f Hz", robot.getLoopHz());
         telemetry.addData("Time", clock == null ? "-" : clock.getStatus());
         telemetry.addData("Macro", "%s [%s]", robot.macros.getStatus(), robot.macros.getShotState());
-        telemetry.addData("Flywheel", robot.shooter.getStatusLine());
+        telemetry.addData("Shooter", robot.shooter.getStatusLine());
         Pose pose = robot.drivetrain.getPose();
         telemetry.addData("Pose", pose == null ? "none (not tuned)"
                 : String.format("%.1f, %.1f @ %.0f deg", pose.x(), pose.y(),

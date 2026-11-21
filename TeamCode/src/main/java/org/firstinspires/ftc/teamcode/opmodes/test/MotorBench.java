@@ -9,6 +9,7 @@ import com.qualcomm.robotcore.hardware.DcMotorSimple;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.teamcode.pedro.Constants;
+import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
 
 import java.util.ArrayList;
@@ -17,9 +18,9 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * Spins each of the six motors (4 drive, intake, flywheel), one at a time, at {@link #POWER}, to
- * check the wiring: each name in {@link HardwareNames} is plugged into the motor it claims to be,
- * turns the way the code expects, and has its own encoder cable.
+ * Spins each of the eight motors (4 drive, intake, flywheel, counter-roller, feeder), one at a time,
+ * at {@link #POWER}, to check the wiring: each name in {@link HardwareNames} is plugged into the motor
+ * it claims to be, turns the way the code expects, and has its own encoder cable.
  *
  * <pre>
  * Gamepad 1, after START. WHEELS OFF THE FLOOR.
@@ -55,7 +56,7 @@ public class MotorBench extends OpMode {
 
     @Override
     public void init() {
-        // MANUAL: one bulk read per loop for all six encoders, cleared at the top of each loop.
+        // MANUAL: one bulk read per loop for all eight encoders, cleared at the top of each loop.
         hubs = hardwareMap.getAll(LynxModule.class);
         for (LynxModule hub : hubs) hub.setBulkCachingMode(LynxModule.BulkCachingMode.MANUAL);
 
@@ -72,6 +73,12 @@ public class MotorBench extends OpMode {
                 DcMotorSimple.Direction.FORWARD, "Intake.java");
         add(HardwareNames.FLYWHEEL_MOTOR, "flywheel: ball OUT the front",
                 DcMotorSimple.Direction.FORWARD, "Shooter.java");
+        add(HardwareNames.COUNTER_ROLLER_MOTOR, "counter-roller: ball OUT too",
+                Shooter.ROLLER_REVERSED ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD,
+                "Shooter.ROLLER_REVERSED");
+        add(HardwareNames.FEEDER_MOTOR, "feeder: carry balls UP into the wheels",
+                Shooter.FEEDER_REVERSED ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD,
+                "Shooter.FEEDER_REVERSED");
 
         telemetry.setDisplayFormat(Telemetry.DisplayFormat.MONOSPACE);
         telemetry.setMsTransmissionInterval(100);

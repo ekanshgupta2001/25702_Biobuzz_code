@@ -67,8 +67,9 @@ public class LimelightBench extends OpMode {
         double shotDistance = limelight.getShotDistanceInches();
         telemetry.addData("Shot distance", Double.isNaN(shotDistance)
                 ? "no tag / is 3D on in the pipeline?"
-                : String.format(Locale.US, "%.1f in -> %.0f t/s from the table",
-                        shotDistance, Shooter.speedForDistance(shotDistance)));
+                : String.format(Locale.US, "%.1f in -> fly %.0f / roller %.0f t/s from the table",
+                        shotDistance, Shooter.speedForDistance(shotDistance),
+                        Shooter.rollerSpeedForDistance(shotDistance)));
 
         int[] range = allianceTagRange(alliance);
         telemetry.addLine("ALLIANCE: " + alliance + "   (dpad left = RED, right = BLUE)");

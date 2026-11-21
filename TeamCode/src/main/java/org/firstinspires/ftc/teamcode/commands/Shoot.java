@@ -7,8 +7,8 @@ import org.firstinspires.ftc.teamcode.subsystems.Intake;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 
 /**
- * The shooting cycle: spin up, then pulse the tunnel once per piece, waiting for the flywheel to
- * recover in between.
+ * The shooting cycle: spin up, then pulse the tunnel and the feeder once per piece, waiting for the
+ * wheels to recover in between.
  *
  * <h2>Why this is one hand-written command and not an Ivy group tree</h2>
  * Ivy's {@code Sequential} hands off one child per {@code execute()} and never executes the child it
@@ -19,18 +19,19 @@ import org.firstinspires.ftc.teamcode.subsystems.Shooter;
  * same loop the flywheel comes back. It also sidesteps the {@code Repeat.end()} NPE
  * (docs/01 B.5 trap 8) for free.
  *
- * <h2>Feeding is running the intake</h2>
- * One motor drives the roller and the tunnel, which carry the piece all the way into the flywheel,
- * and there is no gate and no sensor anywhere in the path. A piece reaches the flywheel because the
- * intake ran long enough to carry it there, so a "shot" is a {@link #FEED_PULSE_MS} pulse of the
- * intake. That makes {@link #getShotsFired()} honestly a count of pulses, not of pieces — nothing on
- * this robot can know the difference, and the telemetry says so.
+ * <h2>Feeding is running the intake and the feeder</h2>
+ * One motor drives the roller and the tunnel, the shooter's feeder carries the piece the rest of the
+ * way, and there is no gate and no sensor anywhere in the path. A piece reaches the wheels because
+ * both ran long enough to carry it there, so a "shot" is a {@link #FEED_PULSE_MS} pulse of the intake
+ * and the feeder together. That makes {@link #getShotsFired()} honestly a count of pulses, not of
+ * pieces — nothing on this robot can know the difference, and the telemetry says so.
  *
  * <h2>What it requires</h2>
- * The intake only. The flywheel is held by {@code Shooter.armedCommand()}, passed to
+ * The intake only. The wheels are held by {@code Shooter.armedCommand()}, passed to
  * {@code Macros.reporting} as an alongside child, so an armed wheel is never told to stop when a
  * shot starts, and the drivetrain is left alone so the driver keeps translating and aiming through
- * a shot.
+ * a shot. The feeder is switched through that same shooter, which nothing else touches while the
+ * shot holds it.
  */
 public class Shoot {
     /**
@@ -40,7 +41,7 @@ public class Shoot {
     public static long FEED_PULSE_MS = 400;
     /** Quiet time after a pulse before the recovery check, so the dip has actually started. */
     public static long SETTLE_AFTER_PULSE_MS = 80;
-    /** A flywheel that has not recovered by then gets the next piece anyway. */
+    /** Wheels that have not recovered by then get the next piece anyway. */
     public static long RECOVER_TIMEOUT_MS = 900;
     /** Spin-up deadline. Past this the cycle gives up rather than holding the intake all match. */
     public static long SPIN_UP_TIMEOUT_MS = 3000;
@@ -88,6 +89,7 @@ public class Shoot {
                 .setDone(() -> state == State.DONE)
                 .setEnd(ec -> {
                     intake.stop();
+                    shooter.feederOff();
                     state = State.DONE;
                 })
                 .requiring(intake);
@@ -108,10 +110,16 @@ public class Shoot {
     private void enter(State next) {
         state = next;
         stateSinceMs = System.currentTimeMillis();
-        RobotLog.ii("Shoot", "-> %s  fly %.0f/%.0f", next, shooter.getVelocity(), shooter.getTarget());
+        RobotLog.ii("Shoot", "-> %s  fly %.0f/%.0f  roller %.0f/%.0f", next,
+                shooter.getVelocity(), shooter.getTarget(), shooter.getRollerVelocity(), shooter.getRollerTarget());
         // The action for a state is applied on entry, so a transition costs no loop.
-        if (next == State.FEED) intake.feed();
-        else intake.stop();
+        if (next == State.FEED) {
+            intake.feed();
+            shooter.feederOn();
+        } else {
+            intake.stop();
+            shooter.feederOff();
+        }
     }
 
     private long elapsed() {

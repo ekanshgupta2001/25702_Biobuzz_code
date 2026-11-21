@@ -26,28 +26,29 @@ import java.util.Locale;
  *          LB (hold)      slow mode
  * INTAKE   RT (hold)      intake in
  *          LT (hold)      intake out          (neither, or both = off)
- * SHOOTER  X              flywheel on / off
+ * SHOOTER  X              wheels on / off (flywheel + counter-roller)
  *          options        AUTO / MANUAL shooting (starts in AUTO; switching cancels a running shot)
  *          AUTO    RB     shoot one   (macro)
  *                  A      shoot four  (macro)
  *          B              cancel a running shot
- *          MANUAL  RB     hold = feed (intake FEED), only while the flywheel is on
+ *          MANUAL  RB     hold = feed (intake FEED + feeder), only while the wheels are on
  * SPEED    Y              TAG (Limelight distance, starts here) / FIXED
- *          dpad up/down   FIXED only: fixed speed +/- 25 t/s
+ *          dpad up/down   FIXED only: flywheel speed +/- 25 t/s
+ *          dpad l/r       FIXED only: counter-roller speed -/+ 25 t/s
  * </pre>
  *
  * MANUAL is the fallback for when the shot macro misbehaves: the driver spins up with X, watches
  * for READY on the card, and holds RB to feed balls in by hand.
  *
  * <p>Building the speed table: Y to FIXED, park facing the CELL, dpad until the shots land, then copy
- * the tag distance and the speed from the Speed line into {@code Shooter.SPEED_TABLE}. The dpad edits
- * {@code Shooter.TARGET_TICKS_PER_SEC}, a static: it lasts until the Robot Controller app restarts, so
- * it also changes the speed Auto HARDCODED shoots at.
+ * the tag distance and both speeds from the Speed line into {@code Shooter.SPEED_TABLE}. The dpad
+ * edits {@code Shooter.TARGET_TICKS_PER_SEC} and {@code ROLLER_TARGET_TICKS_PER_SEC}, statics: they
+ * last until the Robot Controller app restarts, so they also change the speeds Auto HARDCODED shoots at.
  *
- * <p>The controller buzzes once when the flywheel first reaches speed after X, and three times when
- * the intake gives up un-jamming, so the driver does not have to look at the card.
+ * <p>The controller buzzes once when both wheels first reach speed after X, and three times when the
+ * intake gives up un-jamming, so the driver does not have to look at the card.
  *
- * <p>Every loop: read sensors (this also sets the flywheel speed from the tag), then one section per
+ * <p>Every loop: read sensors (this also sets the wheel speeds from the tag), then one section per
  * mechanism ({@link #drive()}, {@link #intake()}, {@link #shooter()}), then the shot macros
  * ({@code Scheduler.execute()}), then write the motors. The sections only set fields; the intake's
  * and shooter's default commands apply those fields every loop.
@@ -67,7 +68,7 @@ public class Teleop extends OpMode {
     private boolean flywheelOn = false;
     /** False = AUTO (RB / A run the shot macros). True = MANUAL (hold RB to feed). */
     private boolean manualShooting = false;
-    /** MANUAL only: RB held with the flywheel on. Runs the intake as FEED. */
+    /** MANUAL only: RB held with the wheels on. Runs the intake as FEED and the feeder. */
     private boolean feeding = false;
     /** The controller has already buzzed for this spin-up / for this jam, so each buzzes only once. */
     private boolean readyBuzzed = false;
@@ -88,7 +89,7 @@ public class Teleop extends OpMode {
         // it runs and hands them back when it ends.
         Scheduler.schedule(
                 robot.intake.operatorControlCommand(() -> feeding ? Intake.Mode.FEED : intakeFromTriggers),
-                robot.shooter.armedControlCommand(() -> flywheelOn));
+                robot.shooter.armedControlCommand(() -> flywheelOn, () -> feeding));
     }
 
     @Override
@@ -108,16 +109,16 @@ public class Teleop extends OpMode {
         telemetry.addLine("dpad left = RED, right = BLUE");
         telemetry.addLine();
         telemetry.addLine("ONE GAMEPAD (gamepad 1). Drive is robot centric.");
-        telemetry.addLine(String.format(Locale.US, "Speed starts on TAG; fixed speed %.0f t/s",
-                Shooter.TARGET_TICKS_PER_SEC));
+        telemetry.addLine(String.format(Locale.US, "Speed starts on TAG; fixed fly %.0f / roller %.0f t/s",
+                Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC));
         telemetry.addLine();
         telemetry.addLine("DRIVE    sticks drive, LB hold = slow");
         telemetry.addLine("INTAKE   hold RT = in, hold LT = out");
-        telemetry.addLine("SHOOTER  X flywheel on/off, options = AUTO/MANUAL");
+        telemetry.addLine("SHOOTER  X wheels on/off, options = AUTO/MANUAL");
         telemetry.addLine("  AUTO    RB shoot one, A shoot four, B cancel");
-        telemetry.addLine("  MANUAL  hold RB to feed (flywheel must be on)");
-        telemetry.addLine("SPEED    Y = TAG/FIXED, FIXED: dpad up/down +/-25");
-        telemetry.addLine("BUZZ     once = flywheel ready, three = intake jammed");
+        telemetry.addLine("  MANUAL  hold RB to feed (wheels must be on)");
+        telemetry.addLine("SPEED    Y = TAG/FIXED, FIXED: dpad up/down fly, left/right roller +/-25");
+        telemetry.addLine("BUZZ     once = wheels ready, three = intake jammed");
     }
 
     @Override
@@ -180,6 +181,8 @@ public class Teleop extends OpMode {
         boolean bPressed = gamepad1.bWasPressed();
         boolean upPressed = gamepad1.dpadUpWasPressed();
         boolean downPressed = gamepad1.dpadDownWasPressed();
+        boolean leftPressed = gamepad1.dpadLeftWasPressed();
+        boolean rightPressed = gamepad1.dpadRightWasPressed();
 
         if (xPressed) flywheelOn = !flywheelOn;
 
@@ -189,13 +192,19 @@ public class Teleop extends OpMode {
             RobotLog.ii("Teleop", "speed -> %s", robot.autoSpeed ? "TAG" : "FIXED");
         }
         if (!robot.autoSpeed) {
+            // Up/down: flywheel. Left/right: counter-roller.
             if (upPressed) Shooter.TARGET_TICKS_PER_SEC += SPEED_STEP_TICKS_PER_SEC;
             if (downPressed) {
                 Shooter.TARGET_TICKS_PER_SEC = Math.max(0, Shooter.TARGET_TICKS_PER_SEC - SPEED_STEP_TICKS_PER_SEC);
             }
+            if (rightPressed) Shooter.ROLLER_TARGET_TICKS_PER_SEC += SPEED_STEP_TICKS_PER_SEC;
+            if (leftPressed) {
+                Shooter.ROLLER_TARGET_TICKS_PER_SEC =
+                        Math.max(0, Shooter.ROLLER_TARGET_TICKS_PER_SEC - SPEED_STEP_TICKS_PER_SEC);
+            }
         }
 
-        // Feel it instead of looking at the card: one buzz per spin-up when the flywheel reaches
+        // Feel it instead of looking at the card: one buzz per spin-up when both wheels reach
         // speed, three blips when the intake gives up un-jamming.
         if (!flywheelOn) readyBuzzed = false;
         else if (!readyBuzzed && robot.shooter.atTarget()) {
@@ -246,7 +255,7 @@ public class Teleop extends OpMode {
                 ? (feeding ? "MANUAL - FEEDING" : "MANUAL (hold RB to feed)")
                 : "AUTO (RB one, A four, B cancel)");
         telemetry.addData("Speed", speedLine());
-        telemetry.addData("Flywheel", robot.shooter.getStatusLine());
+        telemetry.addData("Shooter", robot.shooter.getStatusLine());
         telemetry.addData("Intake", robot.intake.getMode());
         if (!manualShooting) {
             telemetry.addData("Shot", "%s [%s]  (%d pulses)", robot.macros.getStatus(), robot.macros.getShotState(),
@@ -259,24 +268,30 @@ public class Teleop extends OpMode {
                         Math.toDegrees(pose.heading())));
 
         if (manualShooting && !flywheelOn && gamepad1.right_bumper) {
-            telemetry.addLine("!! flywheel is off: press X first");
+            telemetry.addLine("!! wheels are off: press X first");
         }
         if (robot.intake.hasGivenUpUnjamming()) telemetry.addLine("!! INTAKE JAMMED - run it out (LT)");
     }
 
-    /** Where the flywheel speed comes from. In FIXED the tag distance is shown too: a speed table row. */
+    /**
+     * Where the wheel speeds come from, as "flywheel / roller". In FIXED the tag distance is shown
+     * too, so the line reads as a speed table row: {distance, flywheel, roller}.
+     */
     private String speedLine() {
         double distance = robot.limelight.getShotDistanceInches();
         boolean tagInView = !Double.isNaN(distance);
         if (!robot.autoSpeed) {
-            String line = String.format(Locale.US, "FIXED %.0f t/s (dpad up/down)", Shooter.TARGET_TICKS_PER_SEC);
+            String line = String.format(Locale.US, "FIXED fly %.0f / roller %.0f t/s (dpad)",
+                    Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC);
             return tagInView ? line + String.format(Locale.US, "   tag %.0f in", distance) : line;
         }
         if (tagInView) {
-            return String.format(Locale.US, "TAG  %.0f in -> %.0f t/s", distance, robot.shooter.getTarget());
+            return String.format(Locale.US, "TAG  %.0f in -> %.0f / %.0f t/s", distance,
+                    robot.shooter.getTarget(), robot.shooter.getRollerTarget());
         }
-        // The shooter keeps the last tag speed for a moment (Shooter.TAG_HOLD_MS), then goes to fixed.
-        return String.format(Locale.US, "TAG  no tag: %s %.0f t/s",
-                robot.shooter.isSpeedFromTag() ? "holding" : "fixed", robot.shooter.getTarget());
+        // The shooter keeps the last tag speeds for a moment (Shooter.TAG_HOLD_MS), then goes to fixed.
+        return String.format(Locale.US, "TAG  no tag: %s %.0f / %.0f t/s",
+                robot.shooter.isSpeedFromTag() ? "holding" : "fixed",
+                robot.shooter.getTarget(), robot.shooter.getRollerTarget());
     }
 }

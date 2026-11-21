@@ -19,15 +19,15 @@ import java.util.List;
  * The whole robot: the drivetrain, the intake, the shooter, the Limelight, and the two loop halves.
  *
  * <p>Every subsystem is a {@code public final} field. There is no supplier wiring, no sensor policy
- * and no fail-soft layer, because there is nothing left to arbitrate: the robot has six motors, a
+ * and no fail-soft layer, because there is nothing left to arbitrate: the robot has eight motors, a
  * Pinpoint and a Limelight, and a missing config name (including {@code limelight}) throws at init
  * where it is easy to read.
  *
  * <h2>The loop is split in two halves, deliberately</h2>
  * The OpMode calls these on either side of the Ivy scheduler:
  * <ul>
- *   <li>{@link #readSensors()} — clear every hub's bulk cache, read the Limelight and set the
- *       flywheel speed from it, tick the match clock, sample the battery. Top of the loop, before
+ *   <li>{@link #readSensors()} — clear every hub's bulk cache, read the Limelight and set both
+ *       wheel speeds from it, tick the match clock, sample the battery. Top of the loop, before
  *       commands run.</li>
  *   <li>{@link #writeActuators()} — push every mechanism's intent to hardware, drivetrain last.
  *       Bottom of the loop, after commands run.</li>
@@ -55,8 +55,9 @@ public class Robot {
     public final Macros macros;
 
     /**
-     * True: the flywheel speed comes from the tag distance ({@code Shooter.SPEED_TABLE}). False: the
-     * fixed {@code Shooter.TARGET_TICKS_PER_SEC}. Applied every loop in {@link #readSensors()}.
+     * True: both wheel speeds come from the tag distance ({@code Shooter.SPEED_TABLE}). False: the
+     * fixed {@code Shooter.TARGET_TICKS_PER_SEC} / {@code ROLLER_TARGET_TICKS_PER_SEC}. Applied every
+     * loop in {@link #readSensors()}.
      */
     public boolean autoSpeed = true;
 
@@ -112,10 +113,10 @@ public class Robot {
             hub.clearBulkCache();
         }
 
-        // The flywheel speed is set here, before commands run, so a shot sees this loop's distance.
+        // The wheel speeds are set here, before commands run, so a shot sees this loop's distance.
         limelight.update();
-        // Not while a shot macro runs: the speed it spun up to is kept, so a jittering distance cannot
-        // move the target under a wheel that is recovering between balls.
+        // Not while a shot macro runs: the speeds it spun up to are kept, so a jittering distance
+        // cannot move the targets under wheels that are recovering between balls.
         if (macros.getOutcome() != Macros.Outcome.RUNNING) {
             if (autoSpeed) shooter.setSpeedFromDistance(limelight.getShotDistanceInches());
             else shooter.useFixedSpeed();

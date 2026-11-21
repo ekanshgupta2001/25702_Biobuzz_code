@@ -29,7 +29,7 @@ import java.util.function.Supplier;
  * <h2>Aiming</h2>
  * The flywheel is bolted to the chassis firing out the front ({@link Shooter#HEADING_OFFSET_RAD} = 0),
  * so <em>aiming is turning the robot's front to the CELL</em>. {@link #aimHeading} takes the bearing
- * from odometry alone; the Limelight only sets the flywheel speed.
+ * from odometry alone; the Limelight only sets the wheel speeds.
  *
  * <h2>Nothing counts pieces</h2>
  * There is no sensor in the intake or the tunnel, so "shoot all" means <b>fire
@@ -133,8 +133,8 @@ public class Macros {
      * hold it displaced (the operator's armed flywheel). Without that the wheel would be told to stop
      * for a loop or two at the start of every shot.
      *
-     * <p>The flywheel runs at whatever target {@code Robot.readSensors()} set this loop: from the tag
-     * distance, or the fixed {@code Shooter.TARGET_TICKS_PER_SEC}.
+     * <p>The wheels run at whatever targets {@code Robot.readSensors()} set this loop: from the tag
+     * distance, or the fixed {@code Shooter.TARGET_TICKS_PER_SEC} / {@code ROLLER_TARGET_TICKS_PER_SEC}.
      */
     private Command shoot(String name, int pieces, long timeoutMs) {
         final Shoot cycle = new Shoot(robot.intake, robot.shooter, pieces);

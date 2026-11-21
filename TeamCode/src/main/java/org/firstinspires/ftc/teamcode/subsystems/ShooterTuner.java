@@ -23,18 +23,18 @@ import java.util.function.DoubleConsumer;
 import java.util.function.DoubleSupplier;
 
 /**
- * Shooter Tuner: a tuning dashboard for the shooter flywheel on the Driver Station. Keep hands clear.
+ * Shooter Tuner: a tuning dashboard for both shooter wheels on the Driver Station. Keep hands clear.
  *
  * <pre>
  * Gamepad 1
- *   dpad up/down     pick a line            A  HOLD on/off: the wheel holds the target and
+ *   dpad up/down     pick a line            A  HOLD on/off: the wheels hold their targets and
  *   dpad left/right  change it                 every change you make applies at once
  *   LB / RB          smaller / bigger step  X  run the Test picked in the menu
  *                                           Y  apply the kS / kV the last FF FIT found
  *                                           B  STOP everything
  * </pre>
  *
- * Tuning order:
+ * Tuning order, one wheel at a time (the Wheels line), then both:
  * <ol>
  *   <li><b>Test = FF FIT, X.</b> Runs the wheel at five fixed powers and fits kS and kV to what it
  *       does. <b>Y</b> puts them in.</li>
@@ -42,15 +42,15 @@ import java.util.function.DoubleSupplier;
  *       getting shorter without the ripple growing. Bump the target +-50 to time it again.</li>
  *   <li><b>Test = STEP, X.</b> From rest: time to reach, time to settle, overshoot, settled error,
  *       and what to change.</li>
- *   <li><b>Test = SHOT, X.</b> Once it says READY, drop balls in by hand, one at a time: each dip
- *       and how long it took to recover is listed.</li>
- *   <li>Type the line at the bottom into {@code Shooter.java}. Values set here only last until the
- *       Robot Controller app restarts.</li>
+ *   <li><b>Test = SHOT, X.</b> Both wheels. Once it says READY, drop balls in by hand, one at a
+ *       time: each dip and how long it took to recover is listed.</li>
+ *   <li>Type the two lines at the bottom into {@code Shooter.java}. Values set here only last until
+ *       the Robot Controller app restarts.</li>
  * </ol>
  *
- * The menu is locked while a test runs (STEP and FF FIT wait for the wheel to stop first). While B is
+ * The menu is locked while a test runs (STEP and FF FIT wait for the wheels to stop first). While B is
  * held no other button counts. Every test writes a CSV to /sdcard/FIRST/data (over USB:
- * {@code adb pull /sdcard/FIRST/data}). Builds only the {@link Shooter}, nothing else.
+ * {@code adb pull /sdcard/FIRST/data}). Builds only the {@link Shooter} (the feeder stays off): no intake.
  */
 @TeleOp(name = "Shooter Tuner", group = "Tuning")
 public class ShooterTuner extends OpMode {
@@ -71,9 +71,9 @@ public class ShooterTuner extends OpMode {
 
     private static final int MAX_SHOTS = 4;
     private static final double SHOT_IDLE_TIMEOUT_MS = 15000;
-    /** In tolerance this long before SHOT calls it READY. */
+    /** Both wheels in tolerance this long before SHOT calls them READY. */
     private static final double READY_DWELL_MS = 150;
-    /** A dip lasts at least this long: an in-band reading just after the ball hits is ripple, not recovery. */
+    /** A dip lasts at least this long, so a wheel the ball reaches a moment later is not missed. */
     private static final double MIN_DIP_MS = 100;
     private static final double DIP_TIMEOUT_MS = 2000;
 
@@ -85,6 +85,8 @@ public class ShooterTuner extends OpMode {
         final String label;
         Test(String label) { this.label = label; }
     }
+
+    private enum Wheels { BOTH, FLYWHEEL, ROLLER }
 
     private enum Mode { IDLE, HOLD, WAIT_FOR_REST, STEP, FF_FIT, SHOT }
 
@@ -101,23 +103,25 @@ public class ShooterTuner extends OpMode {
     private final Gamepad cur = new Gamepad();
     private final Gamepad prev = new Gamepad();
 
-    // The menu: the Test line, then the number rows.
+    // The menu: two choice lines, then the number rows.
     private Test test = Test.FF_FIT;
+    private Wheels wheels = Wheels.FLYWHEEL;
     private double runTimeSec = 3.0;
     private final List<Row> rows = new ArrayList<>();
     private int cursor = 0;
 
     private Mode mode = Mode.IDLE;
-    private Test pendingTest = Test.STEP;   // what WAIT_FOR_REST starts once the wheel has stopped
+    private Test pendingTest = Test.STEP;   // what WAIT_FOR_REST starts once the wheels have stopped
     private double modeStartMs;
     private String note = "";
     private final List<String> result = new ArrayList<>();
     private CsvLog log;
 
-    private final Wheel wheel = new Wheel();
+    private final Wheel fw = new Wheel("FW");
+    private final Wheel rl = new Wheel("RL");
 
-    private StepStats step;
-    private FitStats fit;
+    private StepStats fwStep, rlStep;
+    private FitStats fwFit, rlFit;
     private int fitIndex;
     private double fitStepStartMs;
     private boolean shotReady;
@@ -140,11 +144,16 @@ public class ShooterTuner extends OpMode {
         telemetry.setDisplayFormat(Telemetry.DisplayFormat.MONOSPACE);
         telemetry.setMsTransmissionInterval(100);
 
-        rows.add(new Row("Target", () -> Shooter.TARGET_TICKS_PER_SEC,
+        rows.add(new Row("FW target", () -> Shooter.TARGET_TICKS_PER_SEC,
                 v -> Shooter.TARGET_TICKS_PER_SEC = v, 1, 10, 50, 100, 250));
-        rows.add(new Row("kS", () -> Shooter.kS, v -> Shooter.kS = v, 1, 0.0001, 0.001, 0.01, 0.1));
-        rows.add(new Row("kV", () -> Shooter.kV, v -> Shooter.kV = v, 1, 0.000001, 0.00001, 0.0001));
-        rows.add(new Row("kP", () -> Shooter.kP, v -> Shooter.kP = v, 1, 0.0001, 0.001, 0.01, 0.1));
+        rows.add(new Row("FW kS", () -> Shooter.kS, v -> Shooter.kS = v, 1, 0.0001, 0.001, 0.01, 0.1));
+        rows.add(new Row("FW kV", () -> Shooter.kV, v -> Shooter.kV = v, 1, 0.000001, 0.00001, 0.0001));
+        rows.add(new Row("FW kP", () -> Shooter.kP, v -> Shooter.kP = v, 1, 0.0001, 0.001, 0.01, 0.1));
+        rows.add(new Row("RL target", () -> Shooter.ROLLER_TARGET_TICKS_PER_SEC,
+                v -> Shooter.ROLLER_TARGET_TICKS_PER_SEC = v, 1, 10, 50, 100, 250));
+        rows.add(new Row("RL kS", () -> Shooter.ROLLER_kS, v -> Shooter.ROLLER_kS = v, 1, 0.0001, 0.001, 0.01, 0.1));
+        rows.add(new Row("RL kV", () -> Shooter.ROLLER_kV, v -> Shooter.ROLLER_kV = v, 1, 0.000001, 0.00001, 0.0001));
+        rows.add(new Row("RL kP", () -> Shooter.ROLLER_kP, v -> Shooter.ROLLER_kP = v, 1, 0.0001, 0.001, 0.01, 0.1));
         rows.add(new Row("Run time s", () -> runTimeSec, v -> runTimeSec = Math.max(0.5, v), 0, 0.5, 1));
     }
 
@@ -156,7 +165,7 @@ public class ShooterTuner extends OpMode {
         telemetry.addLine("SHOOTER TUNER   press START to begin");
         telemetry.addLine("You can change values now.");
         addSettings();
-        addPasteLine();
+        addPasteLines();
     }
 
     @Override
@@ -166,11 +175,11 @@ public class ShooterTuner extends OpMode {
 
     @Override
     public void loop() {
-        // 1. One snapshot of the encoder, the clock and the battery.
+        // 1. One snapshot of the encoders, the clock and the battery.
         double dtMs = beginLoop();
 
         // 2. Buttons. While B is held nothing else counts, so a thumb that also catches A or X
-        //    cannot spin the wheel straight back up.
+        //    cannot spin the wheels straight back up.
         if (cur.b) {
             if (pressed(cur.b, prev.b)) stopAll("Stopped (B).");
         } else {
@@ -180,23 +189,25 @@ public class ShooterTuner extends OpMode {
             if (pressed(cur.y, prev.y)) applyFit();
         }
 
-        // 3. The mode decides the target (or the raw power) and moves its test along.
+        // 3. The mode decides the targets (or the raw power) and moves its test along.
         switch (mode) {
-            case HOLD:          spin(true); break;
+            case HOLD:          setTargets(flywheelSelected(), rollerSelected()); break;
             case WAIT_FOR_REST: runWaitForRest(); break;
             case STEP:          runStep(dtMs); break;
             case FF_FIT:        runFit(); break;
             case SHOT:          runShot(); break;
-            default:            spin(false); break;
+            default:            setTargets(false, false); break;
         }
 
         // 4. Log this loop's speed with the power that was on while it was measured (last loop's).
-        if (log != null) log.row(nowMs - modeStartMs, dtMs, volts, wheel);
+        if (log != null) log.row(nowMs - modeStartMs, dtMs, volts, fw, rl);
 
         // 5. Write. FF FIT writes raw power itself and update() would overwrite it.
         if (mode != Mode.FF_FIT) shooter.update();
-        wheel.power = shooter.getPower();
-        wheel.measure(nowMs);
+        fw.power = shooter.getFlywheelPower();
+        rl.power = shooter.getRollerPower();
+        fw.measure(nowMs);
+        rl.measure(nowMs);
 
         addScreen();
     }
@@ -209,7 +220,7 @@ public class ShooterTuner extends OpMode {
 
     // ------------------------------------------------------------------ every loop
 
-    /** Clears the bulk cache, ticks the clock, samples the battery and the wheel. Returns the loop time. */
+    /** Clears the bulk cache, ticks the clock, samples the battery and both wheels. Returns the loop time. */
     private double beginLoop() {
         for (LynxModule hub : hubs) hub.clearBulkCache();
         nowMs = (System.nanoTime() - startNs) / 1e6;
@@ -218,7 +229,8 @@ public class ShooterTuner extends OpMode {
             volts = battery.getVoltage();
             lastVoltageMs = nowMs;
         }
-        wheel.velocity = shooter.getVelocity();
+        fw.velocity = shooter.getVelocity();
+        rl.velocity = shooter.getRollerVelocity();
         prev.copy(cur);
         cur.copy(gamepad1);
         return dtMs;
@@ -228,11 +240,21 @@ public class ShooterTuner extends OpMode {
         return now && !before;
     }
 
-    /** On: closed loop at the menu target. Off: target 0 and disarmed, so the wheel coasts. */
-    private void spin(boolean on) {
-        wheel.target = on ? Shooter.TARGET_TICKS_PER_SEC : 0;
-        shooter.setTarget(wheel.target);
-        if (on) shooter.arm();
+    private boolean flywheelSelected() {
+        return wheels != Wheels.ROLLER;
+    }
+
+    private boolean rollerSelected() {
+        return wheels != Wheels.FLYWHEEL;
+    }
+
+    /** Closed loop at the targets in the menu; a wheel that is off gets target 0, which Shooter treats as off. */
+    private void setTargets(boolean flywheelOn, boolean rollerOn) {
+        fw.target = flywheelOn ? Shooter.TARGET_TICKS_PER_SEC : 0;
+        rl.target = rollerOn ? Shooter.ROLLER_TARGET_TICKS_PER_SEC : 0;
+        shooter.setTarget(fw.target);
+        shooter.setRollerTarget(rl.target);
+        if (flywheelOn || rollerOn) shooter.arm();
         else shooter.disarm();
     }
 
@@ -244,7 +266,7 @@ public class ShooterTuner extends OpMode {
     // ------------------------------------------------------------------ buttons
 
     private void handleMenu() {
-        int lines = 1 + rows.size();
+        int lines = 2 + rows.size();
         if (pressed(cur.dpad_up, prev.dpad_up)) cursor = (cursor + lines - 1) % lines;
         if (pressed(cur.dpad_down, prev.dpad_down)) cursor = (cursor + 1) % lines;
         if (testRunning()) return;   // B still stops it
@@ -254,13 +276,15 @@ public class ShooterTuner extends OpMode {
         if (change != 0) {
             if (cursor == 0) {
                 test = Test.values()[(test.ordinal() + change + Test.values().length) % Test.values().length];
+            } else if (cursor == 1) {
+                wheels = Wheels.values()[(wheels.ordinal() + change + Wheels.values().length) % Wheels.values().length];
             } else {
-                rows.get(cursor - 1).nudge(change);
+                rows.get(cursor - 2).nudge(change);
             }
         }
-        if (cursor >= 1) {
-            if (pressed(cur.right_bumper, prev.right_bumper)) rows.get(cursor - 1).changeStep(1);
-            if (pressed(cur.left_bumper, prev.left_bumper)) rows.get(cursor - 1).changeStep(-1);
+        if (cursor >= 2) {
+            if (pressed(cur.right_bumper, prev.right_bumper)) rows.get(cursor - 2).changeStep(1);
+            if (pressed(cur.left_bumper, prev.left_bumper)) rows.get(cursor - 2).changeStep(-1);
         }
     }
 
@@ -287,14 +311,15 @@ public class ShooterTuner extends OpMode {
             startShot();
             return;
         }
-        if (test == Test.STEP && Shooter.TARGET_TICKS_PER_SEC <= 0) {
-            note = "STEP needs a target above 0.";
+        if (test == Test.STEP && ((flywheelSelected() && Shooter.TARGET_TICKS_PER_SEC <= 0)
+                || (rollerSelected() && Shooter.ROLLER_TARGET_TICKS_PER_SEC <= 0))) {
+            note = "STEP needs the chosen wheels' targets above 0.";
             return;
         }
         // STEP and FF FIT both start from rest: a wheel still coasting would skew the timing or the fit.
         result.clear();
         pendingTest = test;
-        spin(false);
+        setTargets(false, false);
         mode = Mode.WAIT_FOR_REST;
         modeStartMs = nowMs;
     }
@@ -311,10 +336,11 @@ public class ShooterTuner extends OpMode {
         else note = why;
     }
 
-    /** The end of every test and of HOLD: wheel off (it coasts), CSV closed, back to IDLE. */
+    /** The end of every test and of HOLD: wheels off (they coast), CSV closed, back to IDLE. */
     private void endMode() {
         shooter.disarm();
-        wheel.target = 0;
+        fw.target = 0;
+        rl.target = 0;
         mode = Mode.IDLE;
         note = "";
         closeLog();
@@ -325,43 +351,59 @@ public class ShooterTuner extends OpMode {
             note = "Y works once the test is over.";
             return;
         }
-        if (fit == null || !fit.ok()) {
-            note = "No fit to apply: run Test = FF FIT first.";
-            return;
+        StringBuilder applied = new StringBuilder();
+        if (fwFit != null && fwFit.ok()) {
+            Shooter.kS = fwFit.kS;
+            Shooter.kV = fwFit.kV;
+            applied.append(String.format(Locale.US, "FW kS %s kV %s  ", plain(fwFit.kS), plain(fwFit.kV)));
         }
-        Shooter.kS = fit.kS;
-        Shooter.kV = fit.kV;
-        note = String.format(Locale.US, "Applied kS %s kV %s", plain(fit.kS), plain(fit.kV));
+        if (rlFit != null && rlFit.ok()) {
+            Shooter.ROLLER_kS = rlFit.kS;
+            Shooter.ROLLER_kV = rlFit.kV;
+            applied.append(String.format(Locale.US, "RL kS %s kV %s", plain(rlFit.kS), plain(rlFit.kV)));
+        }
+        note = applied.length() == 0 ? "No fit to apply: run Test = FF FIT first." : "Applied " + applied;
     }
 
     // ------------------------------------------------------------------ STEP
 
     /** A floating wheel coasts for a while; STEP and FF FIT start from rest, not from a roll. */
     private void runWaitForRest() {
-        spin(false);
-        if (Math.abs(wheel.velocity) > AT_REST_TICKS_PER_SEC && nowMs - modeStartMs < MAX_WAIT_FOR_REST_MS) return;
+        setTargets(false, false);
+        boolean fwMoving = flywheelSelected() && Math.abs(fw.velocity) > AT_REST_TICKS_PER_SEC;
+        boolean rlMoving = rollerSelected() && Math.abs(rl.velocity) > AT_REST_TICKS_PER_SEC;
+        if ((fwMoving || rlMoving) && nowMs - modeStartMs < MAX_WAIT_FOR_REST_MS) return;
 
         if (pendingTest == Test.FF_FIT) {
             startFit();
             runFit();   // power on in this same loop
             return;
         }
-        step = new StepStats(Shooter.TARGET_TICKS_PER_SEC, Shooter.kS, wheel.velocity);
+        fwStep = flywheelSelected() ? new StepStats("FW", Shooter.TARGET_TICKS_PER_SEC, Shooter.kS, Shooter.kV, fw.velocity) : null;
+        rlStep = rollerSelected() ? new StepStats("RL", Shooter.ROLLER_TARGET_TICKS_PER_SEC, Shooter.ROLLER_kS, Shooter.ROLLER_kV, rl.velocity) : null;
         mode = Mode.STEP;
         modeStartMs = nowMs;
         openLog("step");
-        spin(true);
+        setTargets(flywheelSelected(), rollerSelected());
     }
 
     private void runStep(double dtMs) {
-        spin(true);
+        setTargets(flywheelSelected(), rollerSelected());
         double t = nowMs - modeStartMs;
         double runMs = runTimeSec * 1000;
-        // wheel.power is what was sent last loop, which is the power behind this loop's velocity.
-        step.add(t, dtMs, wheel.velocity, wheel.power, t > runMs - SETTLED_WINDOW_MS);
+        boolean settling = t > runMs - SETTLED_WINDOW_MS;
+        // fw.power is what was sent last loop, which is the power behind this loop's velocity.
+        if (fwStep != null) fwStep.add(t, dtMs, fw.velocity, fw.power, settling);
+        if (rlStep != null) rlStep.add(t, dtMs, rl.velocity, rl.power, settling);
         if (t < runMs) return;
 
-        result.addAll(step.summary());
+        if (fwStep != null) result.addAll(fwStep.summary());
+        if (rlStep != null) result.addAll(rlStep.summary());
+        if (fwStep != null && rlStep != null) {
+            double both = Math.max(fwStep.reachMs, rlStep.reachMs);
+            result.add(fwStep.reachMs < 0 || rlStep.reachMs < 0 ? "Both never at target."
+                    : String.format(Locale.US, "Both at target by %.0f ms.", both));
+        }
         addLogPath();
         endMode();
     }
@@ -369,29 +411,36 @@ public class ShooterTuner extends OpMode {
     // ------------------------------------------------------------------ FF FIT
 
     private void startFit() {
-        fit = new FitStats(Shooter.TARGET_TICKS_PER_SEC);
+        fwFit = flywheelSelected() ? new FitStats("FW", Shooter.TARGET_TICKS_PER_SEC) : null;
+        rlFit = rollerSelected() ? new FitStats("RL", Shooter.ROLLER_TARGET_TICKS_PER_SEC) : null;
         fitIndex = 0;
         fitStepStartMs = nowMs;
         mode = Mode.FF_FIT;
         modeStartMs = nowMs;
-        wheel.target = 0;
+        fw.target = 0;
+        rl.target = 0;
         openLog("fit");
     }
 
     private void runFit() {
-        shooter.setRawPower(FIT_POWERS[fitIndex]);
+        double power = FIT_POWERS[fitIndex];
+        shooter.setRawPower(fwFit != null ? power : 0, rlFit != null ? power : 0);
         double t = nowMs - fitStepStartMs;
-        // Average only the end of each step, once it has levelled off.
-        if (t >= FIT_STEP_MS - SETTLED_WINDOW_MS) fit.sample(wheel.velocity);
+        if (t >= FIT_STEP_MS - SETTLED_WINDOW_MS) {   // average only the end of each step, once it has levelled off
+            if (fwFit != null) fwFit.sample(fw.velocity);
+            if (rlFit != null) rlFit.sample(rl.velocity);
+        }
         if (t < FIT_STEP_MS) return;
 
-        fit.endStep(fitIndex);
+        if (fwFit != null) fwFit.endStep(fitIndex);
+        if (rlFit != null) rlFit.endStep(fitIndex);
         fitIndex++;
         fitStepStartMs = nowMs;
         if (fitIndex < FIT_POWERS.length) return;
 
-        result.addAll(fit.finish(volts));
-        if (fit.ok()) result.add("Y = apply kS and kV.");
+        if (fwFit != null) result.addAll(fwFit.finish(volts));
+        if (rlFit != null) result.addAll(rlFit.finish(volts));
+        if ((fwFit != null && fwFit.ok()) || (rlFit != null && rlFit.ok())) result.add("Y = apply kS and kV.");
         addLogPath();
         endMode();
     }
@@ -399,8 +448,8 @@ public class ShooterTuner extends OpMode {
     // ------------------------------------------------------------------ SHOT (hand feed)
 
     private void startShot() {
-        if (Shooter.TARGET_TICKS_PER_SEC <= 0) {
-            note = "SHOT needs a target above 0.";
+        if (Shooter.TARGET_TICKS_PER_SEC <= 0 || Shooter.ROLLER_TARGET_TICKS_PER_SEC <= 0) {
+            note = "SHOT needs both targets above 0.";
             return;
         }
         result.clear();
@@ -413,20 +462,21 @@ public class ShooterTuner extends OpMode {
         mode = Mode.SHOT;
         modeStartMs = nowMs;
         openLog("shot");
-        spin(true);
+        setTargets(true, true);
     }
 
     private void runShot() {
-        spin(true);
+        setTargets(true, true);   // a shot needs both wheels, whatever the Wheels line says
         if (dip == null) {
             if (!shotReady) {
-                // READY once the wheel has stayed in tolerance for a moment, not on one lucky sample.
-                readySinceMs = wheel.inBand() ? (readySinceMs < 0 ? nowMs : readySinceMs) : -1;
+                // READY once both wheels have stayed in tolerance for a moment, not on one lucky sample.
+                boolean bothIn = fw.inBand() && rl.inBand();
+                readySinceMs = bothIn ? (readySinceMs < 0 ? nowMs : readySinceMs) : -1;
                 if (readySinceMs >= 0 && nowMs - readySinceMs >= READY_DWELL_MS) {
                     shotReady = true;
                     shotIdleSinceMs = nowMs;
                 }
-            } else if (wheel.isLow()) {
+            } else if (fw.isLow() || rl.isLow()) {
                 // Low two loops running is a ball; one stray sample is ripple.
                 if (lowSinceMs < 0) lowSinceMs = nowMs;
                 else dip = new Dip(lowSinceMs);
@@ -443,14 +493,15 @@ public class ShooterTuner extends OpMode {
         }
 
         double t = nowMs - dip.startMs;
-        dip.add(wheel);
-        // Back = in tolerance again, which is what Shoot waits for before the next ball.
-        boolean back = t >= MIN_DIP_MS && wheel.inBand();
+        dip.fw.add(t, fw);
+        dip.rl.add(t, rl);
+        // Back = both wheels in tolerance in the same loop, which is what Shoot waits for before the next ball.
+        boolean back = t >= MIN_DIP_MS && fw.inBand() && rl.inBand();
         if (!back && t < DIP_TIMEOUT_MS) return;
 
         dip.recoveryMs = back ? t : -1;
         dips.add(dip);
-        result.add(dip.line(dips.size(), Shooter.TARGET_TICKS_PER_SEC));
+        result.add(dip.line(dips.size(), Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC));
         dip = null;
         shotReady = false;   // READY has to be earned again before the next ball counts
         readySinceMs = -1;
@@ -463,7 +514,7 @@ public class ShooterTuner extends OpMode {
         if (dip != null) {   // ended while a ball was still going through: keep what was seen
             dip.cutShort = true;
             dips.add(dip);
-            result.add(dip.line(dips.size(), Shooter.TARGET_TICKS_PER_SEC));
+            result.add(dip.line(dips.size(), Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC));
             dip = null;
         }
         if (!why.isEmpty()) result.add(why);
@@ -477,12 +528,12 @@ public class ShooterTuner extends OpMode {
             complete++;
             if (d.recoveryMs < 0) notBack = true;
             else worst = Math.max(worst, d.recoveryMs);
-            saturated |= d.saturated;
+            saturated |= d.fw.saturated || d.rl.saturated;
         }
         if (complete == 0) {
-            result.add("No complete dips. Drop the ball into the wheel once it says READY.");
+            result.add("No complete dips. Drop the ball into the wheels once it says READY.");
         } else if (notBack) {
-            result.add("-> Not back in 2 s: the wheel can't hold this target. Lower it or check FF FIT.");
+            result.add("-> Not back in 2 s: the wheels can't hold this target. Lower it or check FF FIT.");
         } else if (worst > Shoot.RECOVER_TIMEOUT_MS) {
             result.add(String.format(Locale.US, "-> Slowest %.0f ms > match wait %d ms. %s", worst,
                     Shoot.RECOVER_TIMEOUT_MS, saturated ? "It hit full power: lower the target." : "Raise kP."));
@@ -499,9 +550,11 @@ public class ShooterTuner extends OpMode {
     private void openLog(String tag) {
         closeLog();
         log = CsvLog.open(tag, String.format(Locale.US,
-                "# kS=%s kV=%s kP=%s target=%.0f tolerance=%.0f battery=%.2fV",
+                "# kS=%s kV=%s kP=%s ROLLER_kS=%s ROLLER_kV=%s ROLLER_kP=%s fw_target=%.0f rl_target=%.0f tolerance=%.0f battery=%.2fV",
                 plain(Shooter.kS), plain(Shooter.kV), plain(Shooter.kP),
-                Shooter.TARGET_TICKS_PER_SEC, Shooter.TOLERANCE_TICKS_PER_SEC, volts));
+                plain(Shooter.ROLLER_kS), plain(Shooter.ROLLER_kV), plain(Shooter.ROLLER_kP),
+                Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC,
+                Shooter.TOLERANCE_TICKS_PER_SEC, volts));
     }
 
     private void addLogPath() {
@@ -520,7 +573,8 @@ public class ShooterTuner extends OpMode {
                 mode == Mode.WAIT_FOR_REST ? pendingTest.label : mode.name().replace('_', ' '),
                 volts, loopTimer.avgMs, loopTimer.maxMs));
         addWarnings();
-        addLive();
+        addLive(fw);
+        addLive(rl);
         telemetry.addLine(status());
         if (testRunning() && !note.isEmpty()) telemetry.addLine(note);
         addSettings();
@@ -530,7 +584,7 @@ public class ShooterTuner extends OpMode {
         }
         String next = nextStep();
         if (!next.isEmpty()) telemetry.addLine(next);
-        addPasteLine();
+        addPasteLines();
         telemetry.addLine("A hold  X run test  Y apply fit  B STOP");
     }
 
@@ -538,25 +592,34 @@ public class ShooterTuner extends OpMode {
         if (loopTimer.avgMs > SLOW_LOOP_MS) {
             telemetry.addLine(String.format(Locale.US, "!! loop %.0f ms: the control is lagging", loopTimer.avgMs));
         }
-        if (wheel.noEncoder) {
-            telemetry.addLine("!! wheel powered but reads 0: encoder cable unplugged or in the wrong port");
+        addWheelWarnings(fw, rl, "sl", "sr");
+        addWheelWarnings(rl, fw, "sr", "sl");
+    }
+
+    private void addWheelWarnings(Wheel w, Wheel other, String port, String otherPort) {
+        if (w.noEncoder) {
+            boolean swapped = other.power == 0 && Math.abs(other.velocity) > 100;
+            telemetry.addLine(swapped
+                    ? String.format(Locale.US, "!! %s powered, reads 0; %s reads %.0f unpowered: encoder cables swapped (%s/%s)?",
+                            w.name, other.name, other.velocity, port, otherPort)
+                    : String.format(Locale.US, "!! %s powered but reads 0: encoder cable unplugged or in the wrong port", w.name));
         }
-        if (wheel.backwards) {
-            telemetry.addLine("!! wheel turns backwards: motor or encoder direction reversed");
+        if (w.backwards) {
+            telemetry.addLine(String.format(Locale.US, "!! %s turns backwards: motor or encoder direction reversed", w.name));
         }
     }
 
-    private void addLive() {
-        if (wheel.target > 0) {
-            telemetry.addLine(String.format(Locale.US, "speed %5.0f / %-5.0f err %+5.0f  %s",
-                    wheel.velocity, wheel.target, wheel.target - wheel.velocity, wheel.inBand() ? "READY" : ""));
+    private void addLive(Wheel w) {
+        if (w.target > 0) {
+            telemetry.addLine(String.format(Locale.US, "%s %5.0f / %-5.0f err %+5.0f  %s",
+                    w.name, w.velocity, w.target, w.target - w.velocity, w.inBand() ? "READY" : ""));
             telemetry.addLine(String.format(Locale.US, "   pwr %s  avg %s  rip %s  reach %s",
-                    powerText(wheel.power), dash("%+.0f", wheel.window.avg), dash("%.0f", wheel.window.ripple),
-                    wheel.reachMs < 0 ? "--" : String.format(Locale.US, "%.0fms", wheel.reachMs)));
+                    powerText(w.power), dash("%+.0f", w.window.avg), dash("%.0f", w.window.ripple),
+                    w.reachMs < 0 ? "--" : String.format(Locale.US, "%.0fms", w.reachMs)));
         } else {
-            telemetry.addLine(String.format(Locale.US, "speed %5.0f t/s   %s", wheel.velocity,
-                    wheel.power == 0 ? "off" : "raw power"));
-            telemetry.addLine("   pwr " + powerText(wheel.power));
+            telemetry.addLine(String.format(Locale.US, "%s %5.0f t/s   %s", w.name, w.velocity,
+                    w.power == 0 ? "off" : "raw power"));
+            telemetry.addLine("   pwr " + powerText(w.power));
         }
     }
 
@@ -566,7 +629,7 @@ public class ShooterTuner extends OpMode {
             case HOLD:
                 return "HOLD: change values live. " + note;
             case WAIT_FOR_REST:
-                return String.format(Locale.US, "%s: waiting for the wheel to stop (%.1f s)", pendingTest.label, t);
+                return String.format(Locale.US, "%s: waiting for the wheels to stop (%.1f s)", pendingTest.label, t);
             case STEP:
                 return String.format(Locale.US, "STEP: %.1f / %.1f s", t, runTimeSec);
             case FF_FIT:
@@ -588,12 +651,14 @@ public class ShooterTuner extends OpMode {
         telemetry.addLine(testRunning() ? "-- settings (locked while testing) ------"
                 : "-- settings (dpad, LB/RB = step) -------");
         telemetry.addLine(menuLine(0, "Test", test.label));
+        telemetry.addLine(menuLine(1, "Wheels", wheels.name()));
         for (int i = 0; i < rows.size(); i++) {
             Row row = rows.get(i);
-            telemetry.addLine(menuLine(i + 1, row.label, String.format(Locale.US, "%-10s +-%s",
+            telemetry.addLine(menuLine(i + 2, row.label, String.format(Locale.US, "%-10s +-%s",
                     plain(row.get.getAsDouble()), plain(row.step()))));
         }
-        telemetry.addLine("  FF power at target: " + feedforwardCheck());
+        telemetry.addLine("  FF power at target: FW " + feedforwardCheck(Shooter.kS, Shooter.kV, Shooter.TARGET_TICKS_PER_SEC)
+                + "  RL " + feedforwardCheck(Shooter.ROLLER_kS, Shooter.ROLLER_kV, Shooter.ROLLER_TARGET_TICKS_PER_SEC));
     }
 
     private String menuLine(int index, String label, String value) {
@@ -601,24 +666,29 @@ public class ShooterTuner extends OpMode {
     }
 
     /** What kV and kS alone would send at the target. At 1 or more the wheel can't get there. */
-    private static String feedforwardCheck() {
-        if (Shooter.kV == 0) return "kV=0!";
-        double ff = Shooter.kS + Shooter.kV * Shooter.TARGET_TICKS_PER_SEC;
+    private static String feedforwardCheck(double kS, double kV, double target) {
+        if (kV == 0) return "kV=0!";
+        double ff = kS + kV * target;
         return String.format(Locale.US, "%.2f%s", ff, ff >= 1 ? " >1!" : "");
     }
 
     private String nextStep() {
         if (mode != Mode.IDLE && mode != Mode.HOLD) return "";
-        if (Shooter.kV == 0) return "Next: Test = FF FIT, X. It finds kS and kV.";
+        boolean fwOn = flywheelSelected(), rlOn = rollerSelected();
+        if ((fwOn && Shooter.kV == 0) || (rlOn && Shooter.ROLLER_kV == 0)) {
+            return "Next: Test = FF FIT, X. It finds kS and kV.";
+        }
         if (mode == Mode.HOLD) return "Next: raise kP until reach stops improving.";
-        if (Shooter.kP == 0) return "Next: A (HOLD) and raise kP.";
-        return "Next: STEP, then SHOT, then copy the line below.";
+        if ((fwOn && Shooter.kP == 0) || (rlOn && Shooter.ROLLER_kP == 0)) return "Next: A (HOLD) and raise kP.";
+        return "Next: STEP, then SHOT, then copy the lines below.";
     }
 
-    private void addPasteLine() {
-        telemetry.addLine("-- Shooter.java -------------------------");
-        telemetry.addLine(String.format(Locale.US, "public static double kS = %s, kV = %s, kP = %s;",
+    private void addPasteLines() {
+        telemetry.addLine("-- Shooter.java (public static double) --");
+        telemetry.addLine(String.format(Locale.US, "kS = %s, kV = %s, kP = %s;",
                 plain(Shooter.kS), plain(Shooter.kV), plain(Shooter.kP)));
+        telemetry.addLine(String.format(Locale.US, "ROLLER_kS = %s, ROLLER_kV = %s, ROLLER_kP = %s;",
+                plain(Shooter.ROLLER_kS), plain(Shooter.ROLLER_kV), plain(Shooter.ROLLER_kP)));
     }
 
     // ------------------------------------------------------------------ formatting
@@ -676,8 +746,9 @@ public class ShooterTuner extends OpMode {
         }
     }
 
-    /** The flywheel, every loop: what it is doing, the live average/ripple, the reach timer and the wiring checks. */
+    /** One wheel, every loop: what it is doing, the live average/ripple, the reach timer and the wiring checks. */
     private static final class Wheel {
+        final String name;
         double target;     // closed-loop target this loop; 0 = off (or raw power in FF FIT)
         double velocity;   // ticks/sec, from this loop's bulk read
         double power;      // last power sent; can be above 1
@@ -688,6 +759,10 @@ public class ShooterTuner extends OpMode {
         private double lastTarget = Double.NaN;
         private double reachFromMs;
         private double noEncoderSinceMs = -1, backwardsSinceMs = -1;
+
+        Wheel(String name) {
+            this.name = name;
+        }
 
         boolean inBand() {
             return target > 0 && Math.abs(target - velocity) < Shooter.TOLERANCE_TICKS_PER_SEC;
@@ -757,10 +832,11 @@ public class ShooterTuner extends OpMode {
         }
     }
 
-    /** The numbers over a STEP run, from rest. */
+    /** One wheel's numbers over a STEP run, from rest. */
     private static final class StepStats {
+        final String name;
         final double target;
-        final double kS;
+        final double kS, kV;
         final double startVelocity;
         double reachMs = -1;
 
@@ -772,9 +848,11 @@ public class ShooterTuner extends OpMode {
         private int n;
         private double eSum, eeSum, pSum, vSum, tSum, ttSum, tvSum;
 
-        StepStats(double target, double kS, double startVelocity) {
+        StepStats(String name, double target, double kS, double kV, double startVelocity) {
+            this.name = name;
             this.target = target;
             this.kS = kS;
+            this.kV = kV;
             this.startVelocity = startVelocity;
         }
 
@@ -807,7 +885,7 @@ public class ShooterTuner extends OpMode {
             List<String> lines = new ArrayList<>();
             String fromRest = Math.abs(startVelocity) > AT_REST_TICKS_PER_SEC
                     ? String.format(Locale.US, " (started at %.0f, not rest)", startVelocity) : "";
-            lines.add(String.format(Locale.US, "STEP to %.0f%s", target, fromRest));
+            lines.add(String.format(Locale.US, "%s STEP to %.0f%s", name, target, fromRest));
             lines.add(String.format(Locale.US, "   reach %s  settle %s",
                     reachMs < 0 ? "never" : String.format(Locale.US, "%.0fms", reachMs),
                     reachMs >= 0 && inBandAtEnd ? String.format(Locale.US, "%.0fms", lastOutOfBandMs) : "never"));
@@ -851,8 +929,9 @@ public class ShooterTuner extends OpMode {
         }
     }
 
-    /** FF FIT: average speed at each power, then power = kS + kV * speed by least squares. */
+    /** One wheel's FF FIT: average speed at each power, then power = kS + kV * speed by least squares. */
     private static final class FitStats {
+        final String name;
         final double target;
         final double[] speeds = new double[FIT_POWERS.length];
         double kS = Double.NaN, kV = Double.NaN;
@@ -860,7 +939,8 @@ public class ShooterTuner extends OpMode {
         private double sum;
         private int n;
 
-        FitStats(double target) {
+        FitStats(String name, double target) {
+            this.name = name;
             this.target = target;
         }
 
@@ -886,7 +966,7 @@ public class ShooterTuner extends OpMode {
             double fullSpeed = speeds[speeds.length - 1];
 
             if (fullSpeed < -FIT_MIN_TICKS_PER_SEC) {
-                lines.add("FIT: turns backwards. Motor or encoder direction reversed.");
+                lines.add(name + " FIT: turns backwards. Motor or encoder direction reversed.");
                 lines.add(table.toString());
                 return lines;
             }
@@ -905,7 +985,7 @@ public class ShooterTuner extends OpMode {
             double denominator = m * svv - sv * sv;
             double slope = m >= 2 && denominator > 0 ? (m * svp - sv * sp) / denominator : 0;
             if (slope <= 0) {
-                lines.add("FIT: the wheel barely turned. Check the motor, its power cable and encoder cable.");
+                lines.add(name + " FIT: the wheel barely turned. Check the motor, its power cable and encoder cable.");
                 lines.add(table.toString());
                 return lines;
             }
@@ -921,7 +1001,7 @@ public class ShooterTuner extends OpMode {
 
             kV = threeFigures(slope);
             kS = threeFigures(Math.max(0, intercept));
-            lines.add(String.format(Locale.US, "FIT  kS %s  kV %s  R2 %.3f", plain(kS), plain(kV), r2));
+            lines.add(String.format(Locale.US, "%s FIT  kS %s  kV %s  R2 %.3f", name, plain(kS), plain(kV), r2));
             lines.add("   pwr  .2 .4 .6 .8 1.0");
             lines.add(table.toString());
             lines.add(String.format(Locale.US, "   full power %.0f t/s @ %.2fV", fullSpeed, volts));
@@ -930,38 +1010,49 @@ public class ShooterTuner extends OpMode {
                 lines.add(String.format(Locale.US, "   target %.0f = %.0f%% of that%s", target, percent,
                         percent > 90 ? "  !! no room to recover" : ""));
             }
-            if (r2 < 0.95) lines.add("   !! poor fit: the wheel rubbing or a belt slipping?");
+            if (r2 < 0.95) lines.add("   !! poor fit: a wheel rubbing or a belt slipping?");
             if (m < speeds.length) lines.add(String.format(Locale.US, "   (%d low step(s) left out: wheel didn't turn)", speeds.length - m));
             return lines;
         }
     }
 
     /**
-     * One ball through the wheel, timed from the moment it dropped below its band until it is back in
-     * tolerance (-1 if not within {@link #DIP_TIMEOUT_MS}).
+     * One ball through the wheels, timed from the moment the first wheel dropped below its band, until
+     * both are back in tolerance in the same loop (-1 if not within {@link #DIP_TIMEOUT_MS}).
      */
     private static final class Dip {
         final double startMs;
+        final WheelDip fw = new WheelDip(), rl = new WheelDip();
         double recoveryMs = -1;
-        boolean cutShort, saturated;
-        private double lowest = Double.MAX_VALUE;
+        boolean cutShort;
 
         Dip(double startMs) {
             this.startMs = startMs;
         }
 
-        /** How far the wheel dropped, and whether it was flat out at any point. */
-        void add(Wheel w) {
-            lowest = Math.min(lowest, w.velocity);
-            if (Math.abs(w.power) >= SATURATED) saturated = true;
-        }
-
-        /** "#1 back 240ms  dip -180 SAT". */
-        String line(int number, double target) {
+        String line(int number, double fwTarget, double rlTarget) {
             String back = cutShort ? "cut short" : recoveryMs < 0 ? "NOT back in 2 s"
                     : String.format(Locale.US, "back %.0fms", recoveryMs);
-            return String.format(Locale.US, "#%d %s  dip -%.0f%s", number, back,
-                    Math.max(0, target - lowest), saturated ? " SAT" : "");
+            return String.format(Locale.US, "#%d %s  FW %s  RL %s", number, back, fw.text(fwTarget), rl.text(rlTarget));
+        }
+    }
+
+    /** How far one wheel dropped during a dip, and whether it was flat out at any point. */
+    private static final class WheelDip {
+        double lowest = Double.MAX_VALUE;
+        boolean saturated;
+        private boolean left;
+
+        void add(double tMs, Wheel w) {
+            lowest = Math.min(lowest, w.velocity);
+            if (Math.abs(w.power) >= SATURATED) saturated = true;
+            if (!w.inBand()) left = true;
+        }
+
+        /** "-180 SAT", or "-30 ok" for a wheel that stayed in tolerance. */
+        String text(double target) {
+            String drop = String.format(Locale.US, "-%.0f", Math.max(0, target - lowest));
+            return drop + (!left ? " ok" : saturated ? " SAT" : "");
         }
     }
 
@@ -1000,7 +1091,7 @@ public class ShooterTuner extends OpMode {
             path = file.getAbsolutePath();
             out = new BufferedWriter(new FileWriter(file));
             out.write(header + "\n");
-            out.write("t_ms,loop_ms,battery_v,target,vel,power\n");
+            out.write("t_ms,loop_ms,battery_v,fw_target,fw_vel,fw_power,rl_target,rl_vel,rl_power\n");
         }
 
         static CsvLog open(String tag, String header) {
@@ -1014,10 +1105,10 @@ public class ShooterTuner extends OpMode {
             }
         }
 
-        void row(double tMs, double loopMs, double volts, Wheel w) {
+        void row(double tMs, double loopMs, double volts, Wheel fw, Wheel rl) {
             try {
-                out.write(String.format(Locale.US, "%.1f,%.1f,%.2f,%.0f,%.1f,%.3f\n",
-                        tMs, loopMs, volts, w.target, w.velocity, w.power));
+                out.write(String.format(Locale.US, "%.1f,%.1f,%.2f,%.0f,%.1f,%.3f,%.0f,%.1f,%.3f\n",
+                        tMs, loopMs, volts, fw.target, fw.velocity, fw.power, rl.target, rl.velocity, rl.power));
             } catch (IOException ignored) {
                 // a missed row is not worth stopping a test for
             }

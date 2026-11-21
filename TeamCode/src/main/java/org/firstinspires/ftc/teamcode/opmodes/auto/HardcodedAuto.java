@@ -18,9 +18,9 @@ import java.util.List;
  * The autonomous for when Pedro is not tuned: timers only, no paths and no odometry.
  *
  * <pre>
- *   START        flywheel spins up (the robot's FRONT faces the target)
- *   3 s          feed ball 1, wait for the flywheel to recover, ball 2, ... ball 4
- *   then         flywheel and intake off, drive AWAY (backwards) at 70% for DRIVE_MS
+ *   START        wheels spin up (the robot's FRONT faces the target)
+ *   3 s          feed ball 1, wait for the wheels to recover, ball 2, ... ball 4
+ *   then         shooter and intake off, drive AWAY (backwards) at 70% for DRIVE_MS
  *   then         stop for DRIVE_PAUSE_MS, then RETURN (forwards) at 70% for DRIVE_BACK_MS
  *   then         stop, nothing moves again
  * </pre>
@@ -30,13 +30,14 @@ import java.util.List;
  * Limelight or {@code pedro/Constants} and keeps working whatever is (or is not) tuned there.
  *
  * <p>Each ball is fed the same way Teleop's "shoot 4" feeds it ({@link Shoot}'s timings): a
- * {@link Shoot#FEED_PULSE_MS} pulse of the intake (it carries the ball into the flywheel), then a
- * pause until the flywheel is back at speed or {@link Shoot#RECOVER_TIMEOUT_MS} runs out. Every step
- * has a time limit, so a slow wheel or a jam cannot stop the robot from driving afterwards.
+ * {@link Shoot#FEED_PULSE_MS} pulse of the intake and the feeder together (they carry the ball into
+ * the wheels), then a pause until both wheels are back at speed or {@link Shoot#RECOVER_TIMEOUT_MS}
+ * runs out. Every step has a time limit, so a slow wheel or a jam cannot stop the robot from driving
+ * afterwards.
  *
- * <p>The flywheel runs at the fixed speed, {@code Shooter.TARGET_TICKS_PER_SEC}: there is no camera
- * here, so no tag speed. Teleop's FIXED dpad changes that number until the app restarts; the card
- * shows the speed this run will use.
+ * <p>The wheels run at the fixed speeds, {@code Shooter.TARGET_TICKS_PER_SEC} and
+ * {@code Shooter.ROLLER_TARGET_TICKS_PER_SEC}: there is no camera here, so no tag speed. Teleop's FIXED
+ * dpad changes those numbers until the app restarts; the card shows the speeds this run will use.
  *
  * <p>"Auto HARDCODED NO SHOOT" ({@link HardcodedNoShootAuto}) is this auto without the shooting: it
  * starts the drive at START. Both use the same DRIVE_ constants, so tuning one tunes both.
@@ -138,12 +139,13 @@ public class HardcodedAuto extends OpMode {
         if (shoot) {
             telemetry.addLine();
             telemetry.addData("First ball at", "%.1f s", FIRST_SHOT_AT_MS / 1000.0);
-            // Teleop's FIXED dpad changes this until the app restarts, so check it here.
-            telemetry.addData("Speed", "%.0f t/s (fixed)", shooter.getTarget());
+            // Teleop's FIXED dpad changes these until the app restarts, so check them here.
+            telemetry.addData("Speeds", "fly %.0f  roller %.0f t/s (fixed)",
+                    shooter.getTarget(), shooter.getRollerTarget());
             telemetry.addData("Shooter", shooter.getStatusLine());
-            if (Shooter.kV == 0) {
-                telemetry.addLine("!! Shooter gains not tuned (kV = 0): the flywheel will barely turn.");
-                telemetry.addLine("!! Run Shooter Tuner and type its line into Shooter.java first.");
+            if (Shooter.kV == 0 || Shooter.ROLLER_kV == 0) {
+                telemetry.addLine("!! Shooter gains not tuned (kV = 0): the wheels will barely turn.");
+                telemetry.addLine("!! Run Shooter Tuner and type its lines into Shooter.java first.");
             }
         }
     }
@@ -153,7 +155,7 @@ public class HardcodedAuto extends OpMode {
         startMs = System.currentTimeMillis();
         ballsFed = 0;
         if (shoot) {
-            shooter.arm();   // holds Shooter.TARGET_TICKS_PER_SEC, read when the Shooter was built
+            shooter.arm();   // holds the fixed speeds, read when the Shooter was built
             enter(State.SPIN_UP, startMs);
         } else {
             enter(State.AWAY, startMs);
@@ -174,7 +176,7 @@ public class HardcodedAuto extends OpMode {
         long inState = now - stateSinceMs;
         switch (state) {
             case SPIN_UP:
-                // A fixed wait: at FIRST_SHOT_AT_MS the first ball goes in even if the flywheel is
+                // A fixed wait: at FIRST_SHOT_AT_MS the first ball goes in even if the wheels are
                 // slow, because a ball kept on the robot scores nothing.
                 if (now - startMs >= FIRST_SHOT_AT_MS) enter(State.FEED, now);
                 break;
@@ -185,7 +187,7 @@ public class HardcodedAuto extends OpMode {
                 }
                 break;
             case RECOVER:
-                // Let the dip start, then wait for the flywheel to be back at speed, or give up and
+                // Let the dip start, then wait for both wheels to be back at speed, or give up and
                 // feed the next ball anyway.
                 if (inState >= Shoot.SETTLE_AFTER_PULSE_MS
                         && (shooter.atTarget()
@@ -194,7 +196,7 @@ public class HardcodedAuto extends OpMode {
                 }
                 break;
             case DWELL:
-                // The flywheel stays on a moment so the last ball leaves.
+                // The wheels stay on a moment so the last ball leaves.
                 if (inState >= Shoot.FINAL_DWELL_MS) enter(State.AWAY, now);
                 break;
             case AWAY:
@@ -230,16 +232,18 @@ public class HardcodedAuto extends OpMode {
         stateSinceMs = now;
         switch (next) {
             case FEED:
-                intake.feed();   // the intake alone carries the ball into the flywheel
+                intake.feed();   // the intake and the feeder carry the ball into the wheels
+                shooter.feederOn();
                 break;
             case SPIN_UP:
             case RECOVER:
             case DWELL:
                 intake.stop();
+                shooter.feederOff();
                 break;
             case AWAY:
                 intake.stop();
-                shooter.disarm();
+                shooter.disarm();   // the wheels and the feeder
                 setDrive(-DRIVE_POWER);   // backwards: the front faced the target
                 break;
             case PAUSE:

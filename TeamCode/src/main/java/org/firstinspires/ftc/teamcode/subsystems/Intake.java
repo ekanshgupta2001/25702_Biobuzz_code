@@ -20,9 +20,10 @@ import java.util.function.Supplier;
  * drives both through the sprocket chain, so they are one subsystem with one mode: whatever the
  * roller is doing, the tunnel is doing.
  *
- * <p><b>Feeding the shooter is running this forward.</b> There is no gate and no sensor anywhere in
- * the path, so a piece reaches the flywheel because the tunnel ran long enough to carry it there.
- * That is why {@code commands/Shoot} owns this subsystem for the length of a shot and pulses it.
+ * <p><b>Feeding the shooter is running this forward</b>, together with the shooter's feeder. There is
+ * no gate and no sensor anywhere in the path, so a piece reaches the wheels because the tunnel and the
+ * feeder ran long enough to carry it there. That is why {@code commands/Shoot} owns this subsystem for
+ * the length of a shot and pulses it.
  *
  * <p><b>Power, not velocity.</b> A 50.9:1 roller has no use for a closed velocity loop; the SDK's
  * velocity PID would only add a tuning surface and a bus transaction. Commands set a {@link Mode};
@@ -81,7 +82,7 @@ public class Intake {
 
     public void in()    { setMode(Mode.IN); }
     public void out()   { setMode(Mode.OUT); }
-    /** Runs in like {@link #in()} but with anti-jam off: for feed pulses into the flywheel. */
+    /** Runs in like {@link #in()} but with anti-jam off: for feed pulses, when the shooter's feeder runs too. */
     public void feed()  { setMode(Mode.FEED); }
     public void stop()  { setMode(Mode.OFF); }
 

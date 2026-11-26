@@ -189,6 +189,7 @@ public class Robot {
             if (v > 0 && v < lowest) lowest = v;
         }
         batteryVolts = lowest == Double.MAX_VALUE ? 0 : lowest;
+        shooter.setBatteryVolts(batteryVolts);   // only used when Shooter.TUNED_AT_VOLTS is set
     }
 
     // ---- Shared cancel and shutdown paths ----

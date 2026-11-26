@@ -45,6 +45,19 @@ import java.util.function.BooleanSupplier;
  * and bearing drag. Both wheels' gains (the counter-roller's are {@code ROLLER_*}) are tuned with the
  * {@code Shooter Tuner} OpMode on the Driver Station.
  *
+ * <h2>Two kP values per wheel: small near the target, big away from it</h2>
+ * Within {@link #BIG_BAND_TICKS_PER_SEC} of its target a wheel uses its small kP ({@link #kP},
+ * {@link #ROLLER_kP}), the one that holds the speed steady. Farther away than that (spinning up, or
+ * just after a ball took speed out of it) it uses its big kP ({@link #BIG_kP},
+ * {@link #ROLLER_BIG_kP}) to get back sooner. A motor cannot be given more than full power, so once
+ * the small kP already asks for full power the big one changes nothing: the Shooter Tuner's VOLLEY
+ * test shows when that is the case.
+ *
+ * <h2>Battery voltage (off unless {@link #TUNED_AT_VOLTS} is set)</h2>
+ * The same power turns a wheel slower on a tired battery, so the wheels settle below their targets.
+ * With {@link #TUNED_AT_VOLTS} set to the voltage the gains were tuned at, the feedforward is scaled
+ * by tuned volts / volts now. At 0 nothing is scaled.
+ *
  * <h2>Arming, not spinning up</h2>
  * The wheels are either holding their targets or off; there is no idle speed. {@link #armedCommand()}
  * owns the resource for as long as a shot needs and {@link #defaultIdleCommand()} disarms whenever
@@ -62,6 +75,22 @@ public class Shooter {
      * the counter-roller was rebuilt: a starting point only, re-tune them.
      */
     public static double ROLLER_kS = 0.045, ROLLER_kV = 0.00037, ROLLER_kP = 0.0011;
+
+    /**
+     * The big kP of each wheel, used while it is {@link #BIG_BAND_TICKS_PER_SEC} or more away from its
+     * target. Starting point: 1.15 x the small kP. Raise them with the Shooter Tuner's VOLLEY test.
+     */
+    public static double BIG_kP = 0.00575, ROLLER_BIG_kP = 0.001265;
+    /** Closer to the target than this, a wheel uses its small kP; at this or farther, its big kP. */
+    public static double BIG_BAND_TICKS_PER_SEC = 150;
+
+    /**
+     * The battery voltage the gains were tuned at (the Shooter Tuner's top line shows it). 0 = off:
+     * the power is not changed for the battery. Above 0, the kV and kS part of each wheel's power is
+     * multiplied by this / the voltage now, limited to {@link #MIN_VOLTS_SCALE}..{@link #MAX_VOLTS_SCALE}.
+     */
+    public static double TUNED_AT_VOLTS = 0;
+    public static double MIN_VOLTS_SCALE = 0.8, MAX_VOLTS_SCALE = 1.3;
 
     /**
      * The fixed speeds: used when auto speed is off, and the fallback when no tag has been seen for
@@ -135,6 +164,8 @@ public class Shooter {
     private double lastFeederPower = Double.NaN;
     /** When a tag last gave a distance; -1 = never, or forgotten by {@link #useFixedSpeed()}. */
     private long lastTagMs = -1;
+    /** The last battery reading handed in; 0 = none yet, so no voltage scaling. */
+    private double batteryVolts = 0;
 
     public Shooter(HardwareMap hardwareMap) {
         this(hardwareMap, HardwareNames.FLYWHEEL_MOTOR, HardwareNames.COUNTER_ROLLER_MOTOR,
@@ -332,14 +363,53 @@ public class Shooter {
                 && Math.abs(rollerTarget - getRollerVelocity()) < TOLERANCE_TICKS_PER_SEC;
     }
 
+    /** True while the flywheel is far enough from its target to be on its big kP. */
+    public boolean isBigLoop() {
+        return isBig(target, getVelocity());
+    }
+
+    /** True while the counter-roller is far enough from its target to be on its big kP. */
+    public boolean isRollerBigLoop() {
+        return isBig(rollerTarget, getRollerVelocity());
+    }
+
+    private static boolean isBig(double target, double velocity) {
+        return target > 0 && Math.abs(target - velocity) >= BIG_BAND_TICKS_PER_SEC;
+    }
+
+    /**
+     * The battery voltage now, for {@link #TUNED_AT_VOLTS}. Whoever owns the shooter hands it in a
+     * few times a second; 0 or never called = no scaling.
+     */
+    public void setBatteryVolts(double volts) {
+        batteryVolts = volts;
+    }
+
+    /** What the kV and kS part of the power is multiplied by for the battery; 1 = unchanged. */
+    public double getVoltsScale() {
+        if (TUNED_AT_VOLTS <= 0 || batteryVolts <= 0) return 1;
+        return Math.max(MIN_VOLTS_SCALE, Math.min(MAX_VOLTS_SCALE, TUNED_AT_VOLTS / batteryVolts));
+    }
+
+    /**
+     * One wheel's power. A target of 0 is off (the Shooter Tuner uses this to spin one wheel alone).
+     * Never below zero: a wheel above its target coasts down (FLOAT), it is not driven backwards.
+     */
+    private static double wheelPower(double target, double velocity, double kS, double kV,
+                                     double smallKP, double bigKP, double voltsScale) {
+        if (target <= 0) return 0;
+        double error = target - velocity;
+        double kP = isBig(target, velocity) ? bigKP : smallKP;
+        return Math.max(0, (kV * target + kS) * voltsScale + kP * error);
+    }
+
     /** Writes hardware. Called once per loop from {@code Robot.writeActuators()}, after commands run. */
     public void update() {
         if (armed) {
-            // A wheel with a target of 0 is off. The Shooter Tuner uses this to spin one wheel alone.
-            // Never below zero: a wheel above its target coasts down (FLOAT), it is not driven backwards.
-            writeWheels(target <= 0 ? 0 : Math.max(0, kV * target + kP * (target - getVelocity()) + kS),
-                    rollerTarget <= 0 ? 0
-                            : Math.max(0, ROLLER_kV * rollerTarget + ROLLER_kP * (rollerTarget - getRollerVelocity()) + ROLLER_kS));
+            double voltsScale = getVoltsScale();
+            writeWheels(wheelPower(target, getVelocity(), kS, kV, kP, BIG_kP, voltsScale),
+                    wheelPower(rollerTarget, getRollerVelocity(), ROLLER_kS, ROLLER_kV,
+                            ROLLER_kP, ROLLER_BIG_kP, voltsScale));
         } else {
             writeWheels(0, 0);
         }
@@ -372,7 +442,8 @@ public class Shooter {
     public String getStatusLine() {
         return String.format(Locale.US, "%s fly %.0f/%.0f  roller %.0f/%.0f t/s %s  (%s)%s",
                 armed ? "ARMED" : "off", getVelocity(), target, getRollerVelocity(), rollerTarget,
-                atTarget() ? "READY" : "...", isSpeedFromTag() ? "tag" : "fixed",
+                atTarget() ? "READY" : armed && (isBigLoop() || isRollerBigLoop()) ? "... big kP" : "...",
+                isSpeedFromTag() ? "tag" : "fixed",
                 feederOn ? "  feeder ON" : "");
     }
 

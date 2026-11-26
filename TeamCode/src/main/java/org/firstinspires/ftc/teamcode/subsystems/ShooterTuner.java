@@ -58,14 +58,27 @@ import java.util.function.DoubleSupplier;
  *       and what to change.</li>
  *   <li><b>Test = SHOT, X.</b> Both wheels. Once it says READY, drop balls in by hand, one at a
  *       time: each dip and how long it took to recover is listed.</li>
- *   <li>Type the two lines at the bottom into {@code Shooter.java}. Values set here only last until
- *       the Robot Controller app restarts.</li>
+ *   <li><b>Test = VOLLEY, X</b> (4 balls loaded). Fires all four the way the match does and lists,
+ *       per ball, how far each wheel dropped and how long the wait for the next ball was, then the
+ *       total. Change ONE value (a big kP, Feed ms, Settle ms...), reload, X again: the last runs
+ *       stay listed so you can compare.</li>
+ *   <li>Type the lines at the bottom into {@code Shooter.java} (and {@code Shoot.java} for the two
+ *       timings). Values set here only last until the Robot Controller app restarts.</li>
  *   <li><b>Test = TABLE, X</b> (gains tuned first, Alliance line = the CELL you face). Push the robot
  *       to a spot facing the CELL, load balls, A to shoot, dpad the two speeds until the shots land
  *       every time, then Y. The camera distance and both speeds become a row. Do four or so spots
  *       across the range you shoot from. The bottom of the screen is the whole
  *       {@code SPEED_TABLE}, nearest first, ready to type into {@code Shooter.java}.</li>
  * </ol>
+ *
+ * <h2>VOLLEY</h2>
+ * Each wheel has two kP values: the small one within {@code Shooter.BIG_BAND_TICKS_PER_SEC} of its
+ * target, the big one farther away (spin-up, and right after a ball). VOLLEY is where the big ones are
+ * raised. A motor cannot go past full power, so the result says how much of each wheel's recovery was
+ * already at full power: when that is most of it, a bigger kP changes nothing and the time has to come
+ * from Feed ms, Settle ms, Tolerance or a lower target. The extra lines (Big band, Feed ms, Settle ms,
+ * Tolerance, Tuned at V) are in the menu only while Test = VOLLEY. Tuned at V: 0 = off; one press to
+ * the right sets it to the battery voltage now (do that right after tuning), a press left = off.
  *
  * <h2>TABLE</h2>
  * The distance is {@code Limelight.getShotDistanceInches()}, the same number Teleop's TAG speed reads,
@@ -112,20 +125,23 @@ public class ShooterTuner extends OpMode {
 
     /** TABLE's dpad steps, ticks/sec; LB / RB pick one. 25 is Teleop's FIXED step. */
     private static final double[] TABLE_STEPS = {10, 25, 50, 100};
+    /** VOLLEY keeps this many earlier runs on screen to compare against. */
+    private static final int VOLLEY_HISTORY = 5;
+
     /** A row this close to the spot being saved is the same spot: Y replaces it, back deletes it. */
     private static final double SAME_SPOT_INCHES = 3;
     /** No tag for this long and the distance average is thrown away, so Y can't save an old spot. */
     private static final double TAG_LOST_MS = 500;
 
     private enum Test {
-        STEP("STEP"), FF_FIT("FF FIT"), SHOT("SHOT (hand)"), TABLE("TABLE (tag)");
+        STEP("STEP"), FF_FIT("FF FIT"), SHOT("SHOT (hand)"), VOLLEY("VOLLEY (4 balls)"), TABLE("TABLE (tag)");
         final String label;
         Test(String label) { this.label = label; }
     }
 
     private enum Wheels { BOTH, FLYWHEEL, ROLLER }
 
-    private enum Mode { IDLE, HOLD, WAIT_FOR_REST, STEP, FF_FIT, SHOT, TABLE }
+    private enum Mode { IDLE, HOLD, WAIT_FOR_REST, STEP, FF_FIT, SHOT, VOLLEY, TABLE }
 
     /** The menu's choice lines (Test, Wheels, Alliance) come before the number rows. */
     private static final int CHOICE_LINES = 3;
@@ -174,6 +190,11 @@ public class ShooterTuner extends OpMode {
     private Dip dip;
     private final List<Dip> dips = new ArrayList<>();
 
+    // VOLLEY
+    private VolleyStats volleyStats;
+    private final List<String> volleyHistory = new ArrayList<>();
+    private int volleyRuns = 0;
+
     // TABLE
     private double tagInches = Double.NaN;            // this loop's camera distance, NaN = no tag
     private final Window tagWindow = new Window();   // its half-second average and jitter
@@ -213,12 +234,24 @@ public class ShooterTuner extends OpMode {
         rows.add(new Row("FW kS", () -> Shooter.kS, v -> Shooter.kS = v, 1, 0.0001, 0.001, 0.01, 0.1));
         rows.add(new Row("FW kV", () -> Shooter.kV, v -> Shooter.kV = v, 1, 0.000001, 0.00001, 0.0001));
         rows.add(new Row("FW kP", () -> Shooter.kP, v -> Shooter.kP = v, 1, 0.0001, 0.001, 0.01, 0.1));
+        rows.add(new Row("FW big kP", () -> Shooter.BIG_kP, v -> Shooter.BIG_kP = v, 1, 0.00001, 0.0001, 0.001, 0.01));
         rows.add(new Row("RL target", () -> Shooter.ROLLER_TARGET_TICKS_PER_SEC,
                 v -> Shooter.ROLLER_TARGET_TICKS_PER_SEC = v, 1, 10, 50, 100, 250));
         rows.add(new Row("RL kS", () -> Shooter.ROLLER_kS, v -> Shooter.ROLLER_kS = v, 1, 0.0001, 0.001, 0.01, 0.1));
         rows.add(new Row("RL kV", () -> Shooter.ROLLER_kV, v -> Shooter.ROLLER_kV = v, 1, 0.000001, 0.00001, 0.0001));
         rows.add(new Row("RL kP", () -> Shooter.ROLLER_kP, v -> Shooter.ROLLER_kP = v, 1, 0.0001, 0.001, 0.01, 0.1));
+        rows.add(new Row("RL big kP", () -> Shooter.ROLLER_BIG_kP, v -> Shooter.ROLLER_BIG_kP = v, 1, 0.00001, 0.0001, 0.001, 0.01));
         rows.add(new Row("Run time s", () -> runTimeSec, v -> runTimeSec = Math.max(0.5, v), 0, 0.5, 1));
+        // Only in the menu while Test = VOLLEY.
+        rows.add(new Row("Big band", () -> Shooter.BIG_BAND_TICKS_PER_SEC,
+                v -> Shooter.BIG_BAND_TICKS_PER_SEC = v, 1, 10, 25, 50).volleyOnly());
+        rows.add(new Row("Feed ms", () -> Shoot.FEED_PULSE_MS,
+                v -> Shoot.FEED_PULSE_MS = Math.max(50, Math.round(v)), 1, 10, 25, 50, 100).volleyOnly());
+        rows.add(new Row("Settle ms", () -> Shoot.SETTLE_AFTER_PULSE_MS,
+                v -> Shoot.SETTLE_AFTER_PULSE_MS = Math.round(v), 0, 10, 20, 50).volleyOnly());
+        rows.add(new Row("Tolerance", () -> Shooter.TOLERANCE_TICKS_PER_SEC,
+                v -> Shooter.TOLERANCE_TICKS_PER_SEC = Math.max(5, v), 1, 5, 10, 25).volleyOnly());
+        rows.add(new Row("Tuned at V", () -> Shooter.TUNED_AT_VOLTS, this::setTunedAtVolts, 0, 0.1, 0.5).volleyOnly());
     }
 
     /** Before start: the menu works, nothing moves. */
@@ -267,10 +300,11 @@ public class ShooterTuner extends OpMode {
             case STEP:          runStep(dtMs); break;
             case FF_FIT:        runFit(); break;
             case SHOT:          runShot(); break;
+            case VOLLEY:        runVolley(); break;
             case TABLE:         runTable(); break;
             default:            setTargets(false, false); break;
         }
-        // TABLE's shot is the only thing ever scheduled. Runs after the targets are set, like Teleop.
+        // The shot of TABLE or VOLLEY is the only thing ever scheduled. Runs after the targets are set, like Teleop.
         Scheduler.execute();
 
         // 4. Log this loop's speed with the power that was on while it was measured (last loop's).
@@ -305,6 +339,7 @@ public class ShooterTuner extends OpMode {
         if (nowMs - lastVoltageMs >= VOLTAGE_PERIOD_MS) {
             volts = battery.getVoltage();
             lastVoltageMs = nowMs;
+            shooter.setBatteryVolts(volts);   // only used when Shooter.TUNED_AT_VOLTS is set
         }
         fw.velocity = shooter.getVelocity();
         rl.velocity = shooter.getRollerVelocity();
@@ -337,13 +372,36 @@ public class ShooterTuner extends OpMode {
 
     /** Any test, SHOT included. The menu is locked so the numbers being measured stay put. */
     private boolean testRunning() {
-        return mode == Mode.WAIT_FOR_REST || mode == Mode.STEP || mode == Mode.FF_FIT || mode == Mode.SHOT;
+        return mode == Mode.WAIT_FOR_REST || mode == Mode.STEP || mode == Mode.FF_FIT || mode == Mode.SHOT
+                || mode == Mode.VOLLEY;
+    }
+
+    /** The number rows in the menu now: VOLLEY's own rows only while Test = VOLLEY. */
+    private List<Row> visibleRows() {
+        if (test == Test.VOLLEY) return rows;
+        List<Row> shown = new ArrayList<>();
+        for (Row row : rows) {
+            if (!row.volleyOnly) shown.add(row);
+        }
+        return shown;
+    }
+
+    /**
+     * The "Tuned at V" row. From off, a press right sets it to the battery now (the voltage the gains
+     * were just tuned at) and more presses raise it; any press left turns it off (0).
+     */
+    private void setTunedAtVolts(double asked) {
+        if (asked < Shooter.TUNED_AT_VOLTS) Shooter.TUNED_AT_VOLTS = 0;
+        else if (Shooter.TUNED_AT_VOLTS <= 0 && asked > 0) Shooter.TUNED_AT_VOLTS = Math.round(volts * 10) / 10.0;
+        else Shooter.TUNED_AT_VOLTS = asked;
     }
 
     // ------------------------------------------------------------------ buttons
 
     private void handleMenu() {
+        List<Row> rows = visibleRows();
         int lines = CHOICE_LINES + rows.size();
+        cursor = Math.min(cursor, lines - 1);
         if (pressed(cur.dpad_up, prev.dpad_up)) cursor = (cursor + lines - 1) % lines;
         if (pressed(cur.dpad_down, prev.dpad_down)) cursor = (cursor + 1) % lines;
         if (testRunning()) return;   // B still stops it
@@ -385,10 +443,18 @@ public class ShooterTuner extends OpMode {
             finishShot("Ended (X).");
             return;
         }
+        if (mode == Mode.VOLLEY) {
+            finishVolley("Ended (X).");
+            return;
+        }
         if (testRunning()) return;
         note = "";
         if (test == Test.SHOT) {
             startShot();
+            return;
+        }
+        if (test == Test.VOLLEY) {
+            startVolleyTest();
             return;
         }
         if (test == Test.TABLE) {
@@ -412,6 +478,10 @@ public class ShooterTuner extends OpMode {
     private void stopAll(String why) {
         if (mode == Mode.SHOT) {
             finishShot(why);
+            return;
+        }
+        if (mode == Mode.VOLLEY) {
+            finishVolley(why);
             return;
         }
         boolean wasTest = testRunning();
@@ -631,6 +701,48 @@ public class ShooterTuner extends OpMode {
         endMode();
     }
 
+    // ------------------------------------------------------------------ VOLLEY (the match's four-ball shot)
+
+    /** X with Test = VOLLEY: from IDLE the run includes the spin-up, from HOLD the wheels are already there. */
+    private void startVolleyTest() {
+        if (Shooter.TARGET_TICKS_PER_SEC <= 0 || Shooter.ROLLER_TARGET_TICKS_PER_SEC <= 0) {
+            note = "VOLLEY needs both targets above 0.";
+            return;
+        }
+        result.clear();
+        volleyStats = new VolleyStats(nowMs);
+        mode = Mode.VOLLEY;
+        modeStartMs = nowMs;
+        openLog("volley");
+        setTargets(true, true);   // armed with both targets before the shot starts
+        startVolley();            // Teleop's A: the same Shoot cycle
+    }
+
+    private void runVolley() {
+        setTargets(true, true);
+        volleyStats.add(nowMs, volleyCycle.getStateName(), fw, rl);
+        if (!volleyRunning()) finishVolley("");
+    }
+
+    private void finishVolley(String why) {
+        int pulses = volleyCycle == null ? 0 : volleyCycle.getShotsFired();
+        boolean complete = pulses >= Macros.PIECES_PER_LOAD;
+        result.addAll(volleyStats.summary(Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC));
+        if (!why.isEmpty()) result.add(why);
+        if (!complete) {
+            result.add(String.format(Locale.US, "Stopped after %d of %d pulses.", pulses, Macros.PIECES_PER_LOAD));
+        } else {
+            result.add("-> " + volleyStats.advice());
+            volleyRuns++;
+            volleyHistory.add(String.format(Locale.US, "#%d %.2fs  big kP %s/%s feed %d settle %d tol %s",
+                    volleyRuns, volleyStats.totalMs() / 1000, plain(Shooter.BIG_kP), plain(Shooter.ROLLER_BIG_kP),
+                    Shoot.FEED_PULSE_MS, Shoot.SETTLE_AFTER_PULSE_MS, plain(Shooter.TOLERANCE_TICKS_PER_SEC)));
+            if (volleyHistory.size() > VOLLEY_HISTORY) volleyHistory.remove(0);
+        }
+        addLogPath();
+        endMode();
+    }
+
     // ------------------------------------------------------------------ TABLE (speed per tag distance)
 
     private void startTable() {
@@ -770,11 +882,14 @@ public class ShooterTuner extends OpMode {
     private void openLog(String tag) {
         closeLog();
         log = CsvLog.open(tag, String.format(Locale.US,
-                "# kS=%s kV=%s kP=%s ROLLER_kS=%s ROLLER_kV=%s ROLLER_kP=%s fw_target=%.0f rl_target=%.0f tolerance=%.0f battery=%.2fV",
-                plain(Shooter.kS), plain(Shooter.kV), plain(Shooter.kP),
-                plain(Shooter.ROLLER_kS), plain(Shooter.ROLLER_kV), plain(Shooter.ROLLER_kP),
+                "# kS=%s kV=%s kP=%s BIG_kP=%s ROLLER_kS=%s ROLLER_kV=%s ROLLER_kP=%s ROLLER_BIG_kP=%s big_band=%.0f"
+                        + " fw_target=%.0f rl_target=%.0f tolerance=%.0f feed_ms=%d settle_ms=%d tuned_at=%.1fV battery=%.2fV",
+                plain(Shooter.kS), plain(Shooter.kV), plain(Shooter.kP), plain(Shooter.BIG_kP),
+                plain(Shooter.ROLLER_kS), plain(Shooter.ROLLER_kV), plain(Shooter.ROLLER_kP), plain(Shooter.ROLLER_BIG_kP),
+                Shooter.BIG_BAND_TICKS_PER_SEC,
                 Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC,
-                Shooter.TOLERANCE_TICKS_PER_SEC, volts));
+                Shooter.TOLERANCE_TICKS_PER_SEC, Shoot.FEED_PULSE_MS, Shoot.SETTLE_AFTER_PULSE_MS,
+                Shooter.TUNED_AT_VOLTS, volts));
     }
 
     private void addLogPath() {
@@ -810,6 +925,10 @@ public class ShooterTuner extends OpMode {
         if (!result.isEmpty()) {
             telemetry.addLine("-- result -------------------------------");
             for (String line : result) telemetry.addLine(line);
+        }
+        if (test == Test.VOLLEY && !volleyHistory.isEmpty()) {
+            telemetry.addLine("-- runs (total, then what was set) ------");
+            for (String line : volleyHistory) telemetry.addLine(line);
         }
         String next = nextStep();
         if (!next.isEmpty()) telemetry.addLine(next);
@@ -851,7 +970,8 @@ public class ShooterTuner extends OpMode {
     private void addLive(Wheel w) {
         if (w.target > 0) {
             telemetry.addLine(String.format(Locale.US, "%s %5.0f / %-5.0f err %+5.0f  %s",
-                    w.name, w.velocity, w.target, w.target - w.velocity, w.inBand() ? "READY" : ""));
+                    w.name, w.velocity, w.target, w.target - w.velocity,
+                    w.inBand() ? "READY" : w.onBigKP() ? "big kP" : "small kP"));
             telemetry.addLine(String.format(Locale.US, "   pwr %s  avg %s  rip %s  reach %s",
                     powerText(w.power), dash("%+.0f", w.window.avg), dash("%.0f", w.window.ripple),
                     w.reachMs < 0 ? "--" : String.format(Locale.US, "%.0fms", w.reachMs)));
@@ -881,6 +1001,9 @@ public class ShooterTuner extends OpMode {
                 return shotReady
                         ? String.format(Locale.US, "SHOT: READY, drop ball %d of %d in (X = end)", dips.size() + 1, MAX_SHOTS)
                         : "SHOT: spinning up, wait for READY";
+            case VOLLEY:
+                return String.format(Locale.US, "VOLLEY: [%s] pulse %d of %d (X = end)", volleyCycle.getStateName(),
+                        volleyCycle.getShotsFired(), Macros.PIECES_PER_LOAD);
             case TABLE:
                 if (volleyRunning()) {
                     return String.format(Locale.US, "TABLE: shooting [%s] pulse %d of %d", volleyCycle.getStateName(),
@@ -899,10 +1022,16 @@ public class ShooterTuner extends OpMode {
         telemetry.addLine(menuLine(0, "Test", test.label));
         telemetry.addLine(menuLine(1, "Wheels", wheels.name()));
         telemetry.addLine(menuLine(2, "Alliance", alliance + " (the CELL TABLE faces)"));
+        List<Row> rows = visibleRows();
         for (int i = 0; i < rows.size(); i++) {
             Row row = rows.get(i);
             telemetry.addLine(menuLine(i + CHOICE_LINES, row.label, String.format(Locale.US, "%-10s +-%s",
                     plain(row.get.getAsDouble()), plain(row.step()))));
+        }
+        if (test == Test.VOLLEY) {
+            telemetry.addLine(Shooter.TUNED_AT_VOLTS > 0
+                    ? String.format(Locale.US, "  Tuned at V: power x%.2f for the battery now", shooter.getVoltsScale())
+                    : "  Tuned at V 0 = off; right = the battery now, left = off");
         }
         telemetry.addLine("  FF power at target: FW " + feedforwardCheck(Shooter.kS, Shooter.kV, Shooter.TARGET_TICKS_PER_SEC)
                 + "  RL " + feedforwardCheck(Shooter.ROLLER_kS, Shooter.ROLLER_kV, Shooter.ROLLER_TARGET_TICKS_PER_SEC));
@@ -926,9 +1055,10 @@ public class ShooterTuner extends OpMode {
             return "Next: Test = FF FIT, X. It finds kS and kV.";
         }
         if (test == Test.TABLE) return "Next: face the CELL, X starts TABLE (both wheels).";
+        if (test == Test.VOLLEY) return "Next: load 4 balls, X. Change ONE value, X again.";
         if (mode == Mode.HOLD) return "Next: raise kP until reach stops improving.";
         if ((fwOn && Shooter.kP == 0) || (rlOn && Shooter.ROLLER_kP == 0)) return "Next: A (HOLD) and raise kP.";
-        return "Next: STEP, then SHOT, then copy the lines below.";
+        return "Next: STEP, then SHOT, then VOLLEY, then copy the lines below.";
     }
 
     /** The bottom of the screen: the speed table with Test = TABLE, the gains otherwise. */
@@ -960,6 +1090,15 @@ public class ShooterTuner extends OpMode {
                 plain(Shooter.kS), plain(Shooter.kV), plain(Shooter.kP)));
         telemetry.addLine(String.format(Locale.US, "ROLLER_kS = %s, ROLLER_kV = %s, ROLLER_kP = %s;",
                 plain(Shooter.ROLLER_kS), plain(Shooter.ROLLER_kV), plain(Shooter.ROLLER_kP)));
+        telemetry.addLine(String.format(Locale.US, "BIG_kP = %s, ROLLER_BIG_kP = %s;",
+                plain(Shooter.BIG_kP), plain(Shooter.ROLLER_BIG_kP)));
+        if (test != Test.VOLLEY) return;
+        telemetry.addLine(String.format(Locale.US, "BIG_BAND_TICKS_PER_SEC = %s;  TOLERANCE_TICKS_PER_SEC = %s;",
+                plain(Shooter.BIG_BAND_TICKS_PER_SEC), plain(Shooter.TOLERANCE_TICKS_PER_SEC)));
+        telemetry.addLine(String.format(Locale.US, "TUNED_AT_VOLTS = %s;", plain(Shooter.TUNED_AT_VOLTS)));
+        telemetry.addLine("-- Shoot.java (public static long) ------");
+        telemetry.addLine(String.format(Locale.US, "FEED_PULSE_MS = %d;  SETTLE_AFTER_PULSE_MS = %d;",
+                Shoot.FEED_PULSE_MS, Shoot.SETTLE_AFTER_PULSE_MS));
     }
 
     // ------------------------------------------------------------------ formatting
@@ -992,6 +1131,13 @@ public class ShooterTuner extends OpMode {
         final DoubleConsumer set;
         private final double[] steps;
         private int stepIndex;
+        /** True for a row that is in the menu only while Test = VOLLEY. */
+        boolean volleyOnly;
+
+        Row volleyOnly() {
+            volleyOnly = true;
+            return this;
+        }
 
         Row(String label, DoubleSupplier get, DoubleConsumer set, int stepIndex, double... steps) {
             this.label = label;
@@ -1037,6 +1183,11 @@ public class ShooterTuner extends OpMode {
 
         boolean inBand() {
             return target > 0 && Math.abs(target - velocity) < Shooter.TOLERANCE_TICKS_PER_SEC;
+        }
+
+        /** Out of the big band: Shooter is using this wheel's big kP. */
+        boolean onBigKP() {
+            return target > 0 && Math.abs(target - velocity) >= Shooter.BIG_BAND_TICKS_PER_SEC;
         }
 
         /** Below the band: a ball is slowing it down. */
@@ -1324,6 +1475,131 @@ public class ShooterTuner extends OpMode {
         String text(double target) {
             String drop = String.format(Locale.US, "-%.0f", Math.max(0, target - lowest));
             return drop + (!left ? " ok" : saturated ? " SAT" : "");
+        }
+    }
+
+    /**
+     * One VOLLEY run, read off the Shoot cycle's steps: the spin-up, then per ball how far each wheel
+     * dropped and how long the cycle waited before feeding the next one.
+     */
+    private static final class VolleyStats {
+        /** One feed pulse and the wait after it. */
+        private static final class Ball {
+            final WheelDip fw = new WheelDip(), rl = new WheelDip();
+            double feedEndMs = -1;
+            double waitMs = -1;   // pulse end to the next pulse; stays -1 for the last ball
+        }
+
+        private final double startMs;
+        private final List<Ball> balls = new ArrayList<>();
+        private double firstFeedMs = -1, lastFeedEndMs = -1;
+        private String lastState = "";
+        private Ball ball;
+        // While waiting for the next ball: loops each wheel was out of tolerance, and of those, at full power.
+        private int fwOut, fwFlatOut, rlOut, rlFlatOut;
+
+        VolleyStats(double startMs) {
+            this.startMs = startMs;
+        }
+
+        void add(double nowMs, String state, Wheel fw, Wheel rl) {
+            boolean feeding = state.equals("FEED");
+            if (!state.equals(lastState)) {
+                if (feeding) {
+                    if (firstFeedMs < 0) firstFeedMs = nowMs;
+                    if (ball != null && ball.feedEndMs >= 0) ball.waitMs = nowMs - ball.feedEndMs;
+                    ball = new Ball();
+                    balls.add(ball);
+                } else if (lastState.equals("FEED") && ball != null) {
+                    ball.feedEndMs = nowMs;
+                    lastFeedEndMs = nowMs;
+                }
+                lastState = state;
+            }
+            if (ball == null || state.equals("DONE")) return;
+            ball.fw.add(nowMs, fw);
+            ball.rl.add(nowMs, rl);
+            if (state.equals("SETTLE") || state.equals("RECOVER")) {
+                if (!fw.inBand()) {
+                    fwOut++;
+                    if (Math.abs(fw.power) >= SATURATED) fwFlatOut++;
+                }
+                if (!rl.inBand()) {
+                    rlOut++;
+                    if (Math.abs(rl.power) >= SATURATED) rlFlatOut++;
+                }
+            }
+        }
+
+        /** First pulse starting to last pulse ending; 0 until a pulse has finished. */
+        double totalMs() {
+            return firstFeedMs < 0 || lastFeedEndMs < 0 ? 0 : lastFeedEndMs - firstFeedMs;
+        }
+
+        private double waitedMs() {
+            double sum = 0;
+            for (Ball b : balls) {
+                if (b.waitMs > 0) sum += b.waitMs;
+            }
+            return sum;
+        }
+
+        /** The match feeds on the timeout when the wheels never got back in tolerance. */
+        private static boolean timedOut(Ball b) {
+            // A loop of slack: the steps are read once per loop, so the measured wait can be a little short.
+            return b.waitMs >= Shoot.SETTLE_AFTER_PULSE_MS + Shoot.RECOVER_TIMEOUT_MS - SLOW_LOOP_MS;
+        }
+
+        List<String> summary(double fwTarget, double rlTarget) {
+            List<String> lines = new ArrayList<>();
+            if (firstFeedMs < 0) {
+                lines.add("VOLLEY: ended before the first ball was fed.");
+                return lines;
+            }
+            double spinUp = firstFeedMs - startMs;
+            lines.add(String.format(Locale.US, "VOLLEY spin-up %.0f ms%s", spinUp,
+                    spinUp >= Shoot.SPIN_UP_TIMEOUT_MS ? "  !! timeout: never READY" : ""));
+            for (int i = 0; i < balls.size(); i++) {
+                Ball b = balls.get(i);
+                String wait = b.waitMs < 0 ? "last      "
+                        : String.format(Locale.US, "wait %4.0f%s", b.waitMs, timedOut(b) ? "!" : " ");
+                lines.add(String.format(Locale.US, "#%d %s FW %s  RL %s", i + 1, wait,
+                        b.fw.text(fwTarget), b.rl.text(rlTarget)));
+            }
+            lines.add(String.format(Locale.US, "total %.2f s (waiting %.2f s of it)", totalMs() / 1000, waitedMs() / 1000));
+            if (fwOut + rlOut > 0) {
+                lines.add(String.format(Locale.US, "full power while recovering: FW %s  RL %s",
+                        percent(fwFlatOut, fwOut), percent(rlFlatOut, rlOut)));
+            }
+            return lines;
+        }
+
+        private static String percent(int part, int whole) {
+            return whole == 0 ? "--" : String.format(Locale.US, "%d%%", Math.round(100.0 * part / whole));
+        }
+
+        /** What to change next, from where the waiting time went. */
+        String advice() {
+            boolean anyTimeout = false;
+            for (Ball b : balls) anyTimeout |= b.waitMs >= 0 && timedOut(b);
+            // The slower wheel is the one the next ball waits for.
+            boolean fwSlower = fwOut >= rlOut;
+            String wheel = fwSlower ? "FW" : "RL";
+            int out = fwSlower ? fwOut : rlOut, flatOut = fwSlower ? fwFlatOut : rlFlatOut;
+            if (out == 0) {
+                return "Both wheels were back before each wait began: kP has nothing left to gain. "
+                        + "Shorten Feed ms / Settle ms.";
+            }
+            if (flatOut >= 0.7 * out) {
+                return wheel + " was at full power for most of its recovery: a bigger kP adds nothing. "
+                        + "Shorten Feed ms / Settle ms, lower its target, or widen Tolerance.";
+            }
+            if (anyTimeout) {
+                return "'!' = fed on the timeout, " + wheel + " never got back in tolerance with power to spare: "
+                        + "raise its small kP (or set Tuned at V if the battery is low).";
+            }
+            return wheel + " had power to spare while recovering: raise its big kP (and its small kP if it "
+                    + "creeps in slowly).";
         }
     }
 

@@ -144,6 +144,7 @@ public class Teleop extends OpMode {
     @Override
     public void stop() {
         Scheduler.reset();
+        if (robot != null) robot.limelight.stop();   // or the camera keeps being polled after the OpMode
         // No motor writes here: the SDK rejects them from stop() and stops the motors itself.
     }
 

@@ -5,6 +5,7 @@ import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
+import com.qualcomm.robotcore.hardware.VoltageSensor;
 
 import org.firstinspires.ftc.teamcode.commands.Shoot;
 import org.firstinspires.ftc.teamcode.subsystems.Intake;
@@ -77,6 +78,10 @@ public class HardcodedAuto extends OpMode {
     private Shooter shooter;
     private Intake intake;
     private DcMotor frontLeft, frontRight, backLeft, backRight;
+    /** For Shooter.TUNED_AT_VOLTS; read every {@link #VOLTAGE_SAMPLE_MS} (each read is its own bus transaction). */
+    private VoltageSensor battery;
+    private static final long VOLTAGE_SAMPLE_MS = 250;
+    private long lastVoltageMs = 0;
 
     private State state = State.DONE;
     private long startMs = 0;
@@ -105,6 +110,7 @@ public class HardcodedAuto extends OpMode {
 
         shooter = new Shooter(hardwareMap);
         intake = new Intake(hardwareMap);
+        battery = hardwareMap.voltageSensor.iterator().next();
 
         // Same names and directions as pedro/Constants.drivetrainConfig. If the robot strafes or
         // spins instead of driving straight, one of these directions is wrong.
@@ -166,6 +172,10 @@ public class HardcodedAuto extends OpMode {
     public void loop() {
         clearBulkCache();
         long now = System.currentTimeMillis();
+        if (shoot && now - lastVoltageMs >= VOLTAGE_SAMPLE_MS) {
+            lastVoltageMs = now;
+            shooter.setBatteryVolts(battery.getVoltage());   // only used when Shooter.TUNED_AT_VOLTS is set
+        }
 
         // Safety net: nothing may move once the 30 s period is over (BIOBUZZ G403). The steps below
         // end long before that unless the drive times have been set very high.

@@ -7,8 +7,9 @@ import org.firstinspires.ftc.teamcode.subsystems.Intake;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 
 /**
- * The shooting cycle: spin up, then pulse the tunnel and the feeder once per piece, waiting for the
- * wheels to recover in between.
+ * The pulsed shooting cycle: spin up, then pulse the tunnel and the feeder once per piece, waiting for
+ * the wheels to recover in between. <b>Only the Shooter Tuner uses it.</b> Matches do not: Teleop and
+ * Auto HARDCODED feed nonstop.
  *
  * <h2>Why this is one hand-written command and not an Ivy group tree</h2>
  * Ivy's {@code Sequential} hands off one child per {@code execute()} and never executes the child it
@@ -27,11 +28,7 @@ import org.firstinspires.ftc.teamcode.subsystems.Shooter;
  * pieces — nothing on this robot can know the difference, and the telemetry says so.
  *
  * <h2>What it requires</h2>
- * The intake only. The wheels are held by {@code Shooter.armedCommand()}, passed to
- * {@code Macros.reporting} as an alongside child, so an armed wheel is never told to stop when a
- * shot starts, and the drivetrain is left alone so the driver keeps translating and aiming through
- * a shot. The feeder is switched through that same shooter, which nothing else touches while the
- * shot holds it.
+ * The intake only. The caller arms the wheels itself ({@code shooter.arm()}) before starting it.
  */
 public class Shoot {
     /**
@@ -47,6 +44,11 @@ public class Shoot {
     public static long SPIN_UP_TIMEOUT_MS = 3000;
     /** After the last pulse, long enough for the piece to leave before the wheel is released. */
     public static long FINAL_DWELL_MS = 150;
+
+    /** How many pulses the Shooter Tuner's volley fires: the robot carries at most 4 (G407). */
+    public static int PIECES_PER_LOAD = 4;
+    /** The longest a whole volley may take before the Shooter Tuner stops it. */
+    public static long SHOOT_ALL_TIMEOUT_MS = 12000;
 
     private enum State { SPIN_UP, FEED, SETTLE, RECOVER, DWELL, DONE }
 

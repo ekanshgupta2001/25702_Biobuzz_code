@@ -21,7 +21,7 @@ import java.util.Locale;
  * along the floor, the angle (tx, + = right), and x / y from the robot (forward / left, inches).
  * Then the robot's field position worked back from the closest tag's CELL. Drives nothing.
  *
- * <p>The "Shot distance" line at the top is the number Teleop's TAG speed uses: the straight-line
+ * <p>The "Shot distance" line at the top is the number Teleop's wheel speeds use: the straight-line
  * camera-to-tag distance to the tag nearest the crosshair ({@code Limelight.getShotDistanceInches}),
  * and the speed {@code Shooter.SPEED_TABLE} gives for it. It is not the per-tag distance below, which
  * is from the robot centre and along the floor.

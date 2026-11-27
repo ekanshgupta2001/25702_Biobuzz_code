@@ -1,8 +1,5 @@
 package org.firstinspires.ftc.teamcode.subsystems;
 
-import com.pedropathing.ivy.Command;
-import com.pedropathing.ivy.behaviors.BlockedBehavior;
-import com.pedropathing.ivy.behaviors.InterruptedBehavior;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
@@ -11,24 +8,22 @@ import com.qualcomm.robotcore.hardware.HardwareMap;
 import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
 
 import java.util.Locale;
-import java.util.function.BooleanSupplier;
 
 /**
  * The shooter, firing out of the robot's front, three motors:
  * <ul>
  *   <li>the <b>flywheel</b> and the <b>counter-roller</b> opposite it, each with its own speed and
  *       its own gains;</li>
- *   <li>the <b>feeder</b> (up-wheels) that carries balls up into them, which is only ever on
- *       ({@link #FEEDER_POWER}) or off. {@code commands/Shoot} runs it together with the intake for
- *       each feed pulse.</li>
+ *   <li>the <b>feeder</b> (up-wheels) that carries balls up into them: on ({@link #FEEDER_POWER}),
+ *       off, or backwards to clear a stuck ball ({@link #feederOut()}).</li>
  * </ul>
- * Aiming is the drivetrain's job, through {@link #HEADING_OFFSET_RAD}.
+ * The shot leaves the robot's front, the way the Limelight looks: the driver aims by turning the robot.
  *
  * <h2>Where the speeds come from</h2>
- * {@code Robot.readSensors()} sets both targets every loop: from the Limelight's tag distance through
- * {@link #SPEED_TABLE} ({@link #setSpeedFromDistance}), or the fixed {@link #TARGET_TICKS_PER_SEC} /
- * {@link #ROLLER_TARGET_TICKS_PER_SEC} when auto speed is off ({@link #useFixedSpeed}). No tag seen
- * recently = the fixed speeds too.
+ * {@code Robot.readSensors()} sets both targets every loop from the distance to the CELL, through
+ * {@link #SPEED_TABLE} ({@link #setSpeedFromDistance}). That distance is the Limelight's tag distance
+ * (and the robot's position too, once the Pinpoint is set up: see {@code Robot.updateShotDistance}). No distance for
+ * {@link #TAG_HOLD_MS} = the fixed {@link #TARGET_TICKS_PER_SEC} / {@link #ROLLER_TARGET_TICKS_PER_SEC}.
  *
  * <h2>Everything here is ticks per second</h2>
  * {@code DcMotorEx.getVelocity()} reports encoder ticks per second, so that is the unit of the
@@ -59,9 +54,10 @@ import java.util.function.BooleanSupplier;
  * by tuned volts / volts now. At 0 nothing is scaled.
  *
  * <h2>Arming, not spinning up</h2>
- * The wheels are either holding their targets or off; there is no idle speed. {@link #armedCommand()}
- * owns the resource for as long as a shot needs and {@link #defaultIdleCommand()} disarms whenever
- * nothing owns it. Disarming also stops the feeder.
+ * The wheels are either holding their targets or off; there is no idle speed. The OpMode calls
+ * {@link #arm()} / {@link #disarm()} and {@link #feederOn()} / {@link #feederOff()} /
+ * {@link #feederOut()}, and {@link #update()} once per loop writes the motors. Disarming also stops
+ * the feeder.
  */
 public class Shooter {
     /**
@@ -93,25 +89,25 @@ public class Shooter {
     public static double MIN_VOLTS_SCALE = 0.8, MAX_VOLTS_SCALE = 1.3;
 
     /**
-     * The fixed speeds: used when auto speed is off, and the fallback when no tag has been seen for
-     * {@link #TAG_HOLD_MS}. Read every loop, so a live edit applies at once; it only lasts until the
+     * The fixed speeds: the fallback when there has been no distance for {@link #TAG_HOLD_MS}, and
+     * what Auto HARDCODED shoots at. Read every loop, so a live edit applies at once; it only lasts until the
      * Robot Controller app restarts, so paste the values you want to keep here.
      */
     public static double TARGET_TICKS_PER_SEC = 1500;
-    public static double ROLLER_TARGET_TICKS_PER_SEC = 2100;
+    public static double ROLLER_TARGET_TICKS_PER_SEC = 900;
     /** How close counts as at target, for both wheels. */
     public static double TOLERANCE_TICKS_PER_SEC = 50;
 
     /**
-     * Speeds per tag distance: rows of {distance from the camera to the tag in inches, flywheel ticks
-     * per second, counter-roller ticks per second}, nearest first. Between rows both speeds are
+     * Speeds per distance: rows of {distance from the camera to the tag in inches, flywheel ticks
+     * per second, counter-roller ticks per second}, nearest first. The robot's position distance is
+     * corrected onto the tag distance, so these inches are the ones both of them use. Between rows both speeds are
      * interpolated; past either end they are the end row's speeds.
      *
-     * <p>EMPTY UNTIL MEASURED: with no rows every distance gives the fixed speeds, so TAG and FIXED
-     * shoot the same. To fill it: {@code Shooter Tuner}, Test = TABLE. At each spot it shows the
-     * camera distance, you change both speeds until the shots land, Y saves the row, and the bottom of
-     * its screen is this whole array, sorted, ready to type in here. Four or so distances across the
-     * range you shoot from. (Teleop's FIXED speed works too: its Speed line reads as a row.)
+     * <p>With no rows every distance gives the fixed speeds. To add or redo rows: {@code Shooter Tuner},
+     * Test = TABLE. At each spot it shows the camera distance, you change both speeds until the shots
+     * land, Y saves the row, and the bottom of its screen is this whole array, sorted, ready to type
+     * in here.
      *
      * <p>Every row needs all three numbers, and the rows must get farther each time: a short row or
      * one out of order stops the OpMode at init with a message.
@@ -119,13 +115,20 @@ public class Shooter {
     public static double[][] SPEED_TABLE = {
             // {inches to the tag, flywheel t/s, counter-roller t/s},  nearest first.
             // Example: a spot 48 in from the tag that shoots well at the fixed speeds above
-            // (TARGET_TICKS_PER_SEC 1500, ROLLER_TARGET_TICKS_PER_SEC 2100) is this row:
-            // {48, 1500, 2100},
+            // (TARGET_TICKS_PER_SEC 1500, ROLLER_TARGET_TICKS_PER_SEC 900) is this row:
+            // {48, 1500, 900},
+            {68, 1600, 700},
+            {71, 1600, 900},
+            {74, 1500, 900},
+            {75, 1500, 1000},
+            {77, 1500, 1000},
+            {78, 1550, 1000},
+            {79, 1550, 1050},
     };
 
     /**
-     * After the tag is lost, keep its speeds this long before going back to the fixed speeds. Covers a
-     * frame or two where a ball crosses the camera.
+     * After the distance is lost (no tag, and no position), keep the last speeds this long before
+     * going back to the fixed speeds.
      */
     public static long TAG_HOLD_MS = 1000;
 
@@ -139,15 +142,6 @@ public class Shooter {
     public static double FEEDER_POWER = 0.6;
     public static boolean FEEDER_REVERSED = false;
 
-    /**
-     * Direction the shot leaves, relative to the robot's front, radians CCW. {@code 0} = out the front,
-     * the way the Limelight looks: aiming means turning the robot's front to the CELL. The robot
-     * heading that aims at field bearing b is {@code b - HEADING_OFFSET_RAD}.
-     */
-    public static double HEADING_OFFSET_RAD = 0;
-
-    public static int DEFAULT_IDLE_PRIORITY = -1;
-
     private static final int FLYWHEEL_COLUMN = 1;
     private static final int ROLLER_COLUMN = 2;
 
@@ -157,13 +151,15 @@ public class Shooter {
 
     private boolean armed = false;
     private boolean feederOn = false;
+    /** Feeder running backwards (Teleop's LT), to back a stuck ball out. Never true with feederOn. */
+    private boolean feederOut = false;
     private double target = TARGET_TICKS_PER_SEC;
     private double rollerTarget = ROLLER_TARGET_TICKS_PER_SEC;
     private double lastFlywheelPower = Double.NaN;
     private double lastRollerPower = Double.NaN;
     private double lastFeederPower = Double.NaN;
-    /** When a tag last gave a distance; -1 = never, or forgotten by {@link #useFixedSpeed()}. */
-    private long lastTagMs = -1;
+    /** When {@link #setSpeedFromDistance} last got a real distance; -1 = never. */
+    private long lastDistanceMs = -1;
     /** The last battery reading handed in; 0 = none yet, so no voltage scaling. */
     private double batteryVolts = 0;
 
@@ -252,15 +248,27 @@ public class Shooter {
         return lastRollerPower;
     }
 
-    // ---- Feeder: on or off ----
+    // ---- Feeder: on, off, or backwards ----
 
     /** Feeder on at {@link #FEEDER_POWER}; the power lands on the next {@link #update()}. */
     public void feederOn() {
         feederOn = true;
+        feederOut = false;
     }
 
     public void feederOff() {
         feederOn = false;
+        feederOut = false;
+    }
+
+    /** Feeder backwards at {@link #FEEDER_POWER}, to back a stuck ball out; lands on the next {@link #update()}. */
+    public void feederOut() {
+        feederOn = false;
+        feederOut = true;
+    }
+
+    public boolean isFeederOut() {
+        return feederOut;
     }
 
     public boolean isFeederOn() {
@@ -316,31 +324,24 @@ public class Shooter {
     }
 
     /**
-     * Called every loop with the tag distance in inches, or NaN when no tag is visible. A distance
-     * sets both targets from the table. NaN keeps the last tag speeds for {@link #TAG_HOLD_MS} (a ball
-     * crossing the camera should not change the speed mid-shot), then falls back to the fixed speeds.
+     * Called every loop with the distance to the CELL in inches, or NaN when there is none. A distance
+     * sets both targets from the table. NaN keeps the last speeds for {@link #TAG_HOLD_MS}, then falls
+     * back to the fixed speeds.
      */
     public void setSpeedFromDistance(double inchesOrNaN) {
         if (!Double.isNaN(inchesOrNaN)) {
             target = speedForDistance(inchesOrNaN);
             rollerTarget = rollerSpeedForDistance(inchesOrNaN);
-            lastTagMs = System.currentTimeMillis();
-        } else if (!isSpeedFromTag()) {
+            lastDistanceMs = System.currentTimeMillis();
+        } else if (!isSpeedFromTable()) {
             target = TARGET_TICKS_PER_SEC;
             rollerTarget = ROLLER_TARGET_TICKS_PER_SEC;
         }
     }
 
-    /** Both targets = the fixed speeds, and forget any tag. Called every loop in fixed mode. */
-    public void useFixedSpeed() {
-        target = TARGET_TICKS_PER_SEC;
-        rollerTarget = ROLLER_TARGET_TICKS_PER_SEC;
-        lastTagMs = -1;
-    }
-
-    /** True while the targets come from a tag (seen now, or within {@link #TAG_HOLD_MS}). */
-    public boolean isSpeedFromTag() {
-        return lastTagMs >= 0 && System.currentTimeMillis() - lastTagMs < TAG_HOLD_MS;
+    /** True while the targets come from the table (a distance now, or within {@link #TAG_HOLD_MS}). */
+    public boolean isSpeedFromTable() {
+        return lastDistanceMs >= 0 && System.currentTimeMillis() - lastDistanceMs < TAG_HOLD_MS;
     }
 
     /** Measured flywheel speed in ticks per second. */
@@ -403,7 +404,7 @@ public class Shooter {
         return Math.max(0, (kV * target + kS) * voltsScale + kP * error);
     }
 
-    /** Writes hardware. Called once per loop from {@code Robot.writeActuators()}, after commands run. */
+    /** Writes the motors. Called once per loop, at the bottom ({@code Robot.writeActuators()}). */
     public void update() {
         if (armed) {
             double voltsScale = getVoltsScale();
@@ -413,7 +414,7 @@ public class Shooter {
         } else {
             writeWheels(0, 0);
         }
-        writeFeeder(feederOn ? FEEDER_POWER : 0);
+        writeFeeder(feederOn ? FEEDER_POWER : feederOut ? -FEEDER_POWER : 0);
     }
 
     // An unchanged setPower is still a bus transaction, so each motor writes only on change.
@@ -437,73 +438,13 @@ public class Shooter {
     }
 
     /**
-     * One telemetry line, e.g. {@code ARMED fly 1480/1500  roller 2090/2100 t/s READY  (tag)  feeder ON}.
+     * One telemetry line, e.g. {@code ARMED fly 1480/1500  roller 2090/2100 t/s READY  (table)  feeder ON}.
      */
     public String getStatusLine() {
         return String.format(Locale.US, "%s fly %.0f/%.0f  roller %.0f/%.0f t/s %s  (%s)%s",
                 armed ? "ARMED" : "off", getVelocity(), target, getRollerVelocity(), rollerTarget,
                 atTarget() ? "READY" : armed && (isBigLoop() || isRollerBigLoop()) ? "... big kP" : "...",
-                isSpeedFromTag() ? "tag" : "fixed",
-                feederOn ? "  feeder ON" : "");
-    }
-
-    // ---- Ivy commands ----
-
-    /**
-     * Holds the targets for as long as it owns the shooter, and never finishes: whatever runs the shot
-     * decides when the wheels are no longer needed, by interrupting this or by ending the group it
-     * sits in. Its end deliberately does not disarm — the next owner takes over inside the same
-     * {@code Scheduler} pass, so an armed wheel is never zeroed across a shot, and when nothing
-     * re-holds it {@link #defaultIdleCommand()} disarms on its next loop.
-     */
-    public Command armedCommand() {
-        return Command.build()
-                .setStart(this::arm)
-                .setDone(() -> false)
-                .requiring(this);
-    }
-
-    /**
-     * The operator's flywheel toggle, as a default command: it re-reads {@code armedWanted} every loop
-     * rather than being re-scheduled on every press. Ivy has no duplicate guard, so re-scheduling
-     * would re-run {@code start()} every loop; and because Ivy <em>ends</em> rather than suspends a
-     * preempted priority-0 command, a hold scheduled on the press would have to be restored by hand
-     * after every shot. At priority -1 with {@code SUSPEND} a shooting cycle's own hold preempts this
-     * and it resumes by itself, still armed.
-     *
-     * <p>{@code feederWanted} is Teleop's manual feed: the feeder follows it every loop. During a shot
-     * macro this command is suspended, so {@code commands/Shoot} drives the feeder itself.
-     */
-    public Command armedControlCommand(BooleanSupplier armedWanted, BooleanSupplier feederWanted) {
-        return Command.build()
-                .setExecute(() -> {
-                    if (armedWanted.getAsBoolean()) arm();
-                    else disarm();
-                    if (feederWanted.getAsBoolean()) feederOn();
-                    else feederOff();
-                })
-                .setDone(() -> false)
-                .setEnd(ec -> disarm())
-                .setPriority(DEFAULT_IDLE_PRIORITY)
-                .setInterruptedBehavior(InterruptedBehavior.SUSPEND)
-                .setBlockedBehavior(BlockedBehavior.QUEUE)
-                .requiring(this);
-    }
-
-    /**
-     * Autonomous's default: disarms whenever nothing else owns the shooter. The logic is in
-     * {@code setExecute} because the Scheduler's resume path does not re-call {@code start()};
-     * {@link BlockedBehavior#QUEUE} so it is not silently dropped if something already holds the
-     * shooter at init.
-     */
-    public Command defaultIdleCommand() {
-        return Command.build()
-                .setExecute(this::disarm)
-                .setDone(() -> false)
-                .setEnd(ec -> disarm())
-                .setPriority(DEFAULT_IDLE_PRIORITY)
-                .setInterruptedBehavior(InterruptedBehavior.SUSPEND)
-                .setBlockedBehavior(BlockedBehavior.QUEUE)
-                .requiring(this);
+                isSpeedFromTable() ? "table" : "fixed",
+                feederOn ? "  feeder ON" : feederOut ? "  feeder OUT" : "");
     }
 }

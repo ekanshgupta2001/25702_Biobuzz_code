@@ -28,12 +28,9 @@ import org.firstinspires.ftc.teamcode.util.field.FieldConstants;
  * <p>Everything alliance-specific is authored for BLUE and converted on demand.
  *
  * <h2>Why so little of the field is described here</h2>
- * The shooter is bolted to the chassis and fires out the front, so the drivetrain heading <em>is</em>
- * the aim. What the aim law needs from the field is therefore small: where the target CELL opening
- * sits, and which AprilTag IDs are stuck underneath it. The robot has no game-piece sensors and
- * counts nothing, does not visit the GARDEN, and does not reason about FLOWERS — so those numbers
- * left with the code that used them. Adding a member back is cheap; leaving an unread constant in a
- * file whose whole job is to be the trusted source of field truth is not.
+ * The code needs two things from the field: where each CELL sits (for the position distance, once
+ * the Pinpoint is set up) and which AprilTag IDs are on it (so the camera's tag can be matched to a
+ * CELL). Nothing else is read, so nothing else is here.
  */
 public final class Field {
     private Field() {}
@@ -42,29 +39,6 @@ public final class Field {
 
     public static final double FIELD_SIZE_INCHES = FieldConstants.FIELD_SIZE_INCHES;
     public static final double TILE_INCHES = 24.0;
-    public static final int TILES_PER_SIDE = 6;
-
-    /**
-     * Centre of a tile by column letter A-F (left to right from the audience) and row 1-6 (from
-     * the audience wall to the far wall). Heading 0.
-     */
-    public static Pose tileCenter(char column, int row) {
-        int col = Character.toUpperCase(column) - 'A';
-        if (col < 0 || col >= TILES_PER_SIDE || row < 1 || row > TILES_PER_SIDE) {
-            throw new IllegalArgumentException("no such tile: " + column + row);
-        }
-        return new Pose(TILE_INCHES / 2 + TILE_INCHES * col, TILE_INCHES / 2 + TILE_INCHES * (row - 1));
-    }
-
-    /**
-     * The field heading a driver at the alliance station calls "forward": straight away from their
-     * own wall. The blue wall is the +X (column F) wall, so blue drivers face -X and red drivers +X.
-     * Feeds {@code Drivetrain.setDriverHeadingOffset}; without it a blue driver's stick-up drove the
-     * robot toward themselves once the pose was in the true field frame (fixthese B3).
-     */
-    public static double driverForwardHeading(Alliance alliance) {
-        return alliance == Alliance.BLUE ? Math.PI : 0;
-    }
 
     // ---- HIVE structure (manual section 9.6, figures 9-15 and 10-2) ----
 
@@ -117,12 +91,6 @@ public final class Field {
         return alliance == Alliance.RED ? CellSide.AUDIENCE : CellSide.FAR;
     }
 
-    /** The up-facing CELL after {@code tipsSoFar} TIPs of that alliance's HIVE: it flips each time. */
-    public static CellSide upCellSide(Alliance alliance, int tipsSoFar) {
-        CellSide start = startingUpCellSide(alliance);
-        return tipsSoFar % 2 == 0 ? start : start.opposite();
-    }
-
     // ---- AprilTags (manual section 9.9, figures 9-15 and 9-17; SDK v12.0 notes) ----
 
     /**
@@ -131,26 +99,13 @@ public final class Field {
      * each CELL, facing down. The cluster origin is the centre of the CELL opening, so a detection's
      * bearing points straight at the mouth.
      *
-     * <p>This is the only tag fact the robot needs: the Limelight is told which IDs belong to the
-     * CELL being shot at and ignores every other detection. Nothing localises from a tag, so there
-     * is no need for the full ID span of the field.
+     * <p>{@code Robot} uses it to tell which of our two CELLs the camera's tag is on, and to ignore
+     * a tag that is on neither.
      */
     public static int[] tagRange(Alliance alliance, CellSide side) {
         if (alliance == Alliance.RED) {
             return side == CellSide.AUDIENCE ? new int[] {34, 37} : new int[] {30, 33};
         }
         return side == CellSide.AUDIENCE ? new int[] {38, 41} : new int[] {42, 45};
-    }
-
-    // ---- LOADING ZONE (manual section 9.3, Setup Guide section 8): where PARK is ----
-
-    public static final double LOADING_ZONE_DEPTH_INCHES = 11.0;
-
-    /**
-     * Centre of the blue LOADING ZONE on tile F2. INFERRED placement: against the blue wall,
-     * centred on the tile's Y span. PARK is at least partially inside it.
-     */
-    public static Pose blueLoadingZoneCenter() {
-        return new Pose(FIELD_SIZE_INCHES - LOADING_ZONE_DEPTH_INCHES / 2, tileCenter('F', 2).y());
     }
 }

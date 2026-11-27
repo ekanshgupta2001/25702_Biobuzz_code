@@ -9,6 +9,7 @@ import com.qualcomm.robotcore.hardware.DcMotorSimple;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.teamcode.pedro.Constants;
+import org.firstinspires.ftc.teamcode.subsystems.Intake;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
 
@@ -70,7 +71,7 @@ public class MotorBench extends OpMode {
         add(HardwareNames.BACK_RIGHT_MOTOR, "back right wheel: robot FORWARD",
                 Constants.drivetrainConfig.backRightDirection.get(), "pedro/Constants");
         add(HardwareNames.INTAKE_MOTOR, "intake: roller + tunnel pull IN",
-                DcMotorSimple.Direction.FORWARD, "Intake.java");
+                Intake.DIRECTION, "Intake.java");
         add(HardwareNames.FLYWHEEL_MOTOR, "flywheel: ball OUT the front",
                 DcMotorSimple.Direction.FORWARD, "Shooter.java");
         add(HardwareNames.COUNTER_ROLLER_MOTOR, "counter-roller: ball OUT too",

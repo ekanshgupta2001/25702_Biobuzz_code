@@ -27,21 +27,19 @@ import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
  * restart the Pinpoint's IMU calibration. Sharing one of each is what lets stick driving, the pose
  * and path following coexist in a single {@code Drivetrain}.
  *
- * <h2>Filling the three configs</h2>
- * In the order AutoTune produces them, (docs/01 section A.7):
- * {@link #drivetrainConfig} needs only a direction check (Mecanum Tuner, or the SDK's TestHardware
- * utility); {@link #localizerConfig} is the Pinpoint Tuner's output; {@link #foresightConfig} is the
- * Foresight Tuner's. With only {@link #localizerConfig} the pose works (read straight from the
- * Pinpoint). Until {@link #foresightConfig} exists too, {@link #create} returns {@code null} and the
- * robot drives robot-centric straight through the {@code Mecanum}, with no heading hold, no aim lock
- * and no paths. Everything else runs normally.
+ * <h2>The three configs</h2>
+ * {@link #drivetrainConfig} is filled and checked ({@code Bench: Motors}). {@link #localizerConfig}
+ * (the Pinpoint) and {@link #foresightConfig} (path following) are {@code null}: the robot drives
+ * robot-centric straight through the {@code Mecanum} and has no pose. Both come from Pedro's AutoTune
+ * tuners, which were removed from this build because BIOBUZZ R704 bans them in matches. To tune
+ * after the event, restore {@code pedro/Tuning.java}, {@code pedro/procedures/} and the
+ * {@code com.pedropathing:tuning} line in {@code build.dependencies.gradle} from git commit 6834106.
  */
 public class Constants {
     /**
      * Motor names and directions. Left reversed / right forward is the usual mecanum wiring; confirm
-     * each wheel pushes the robot forward with the SDK's TestHardware utility or the Mecanum Tuner,
-     * and flip the offending direction here. A direction verified once carries into the tuned
-     * follower, because the follower drives this very config.
+     * each wheel pushes the robot forward with {@code Bench: Motors} and flip the offending direction
+     * here. {@code HardcodedAuto} has its own copy of these four directions: change both.
      */
     public static MecanumConfig drivetrainConfig = new MecanumConfig(c -> {
         c.frontLeftName.set(HardwareNames.FRONT_LEFT_MOTOR);

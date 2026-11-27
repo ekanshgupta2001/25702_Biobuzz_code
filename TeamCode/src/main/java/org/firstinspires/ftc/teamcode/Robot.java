@@ -4,13 +4,14 @@ import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 
-import org.firstinspires.ftc.teamcode.commands.Macros;
+import com.pedropathing.math.Pose;
+
+import org.firstinspires.ftc.teamcode.game.Field;
 import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
 import org.firstinspires.ftc.teamcode.subsystems.Intake;
 import org.firstinspires.ftc.teamcode.subsystems.Limelight;
 import org.firstinspires.ftc.teamcode.subsystems.Shooter;
 import org.firstinspires.ftc.teamcode.util.field.Alliance;
-import org.firstinspires.ftc.teamcode.util.time.MatchClock;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -18,28 +19,37 @@ import java.util.List;
 /**
  * The whole robot: the drivetrain, the intake, the shooter, the Limelight, and the two loop halves.
  *
- * <p>Every subsystem is a {@code public final} field. There is no supplier wiring, no sensor policy
- * and no fail-soft layer, because there is nothing left to arbitrate: the robot has eight motors, a
- * Pinpoint and a Limelight, and a missing config name (including {@code limelight}) throws at init
- * where it is easy to read.
+ * <p>Every subsystem is a {@code public final} field. A config name that is missing from the Robot
+ * Controller configuration (including {@code limelight}) throws at init, where it is easy to read.
  *
- * <h2>The loop is split in two halves, deliberately</h2>
- * The OpMode calls these on either side of the Ivy scheduler:
+ * <h2>The loop has two halves</h2>
  * <ul>
- *   <li>{@link #readSensors()} — clear every hub's bulk cache, read the Limelight and set both
- *       wheel speeds from it, tick the match clock, sample the battery. Top of the loop, before
- *       commands run.</li>
- *   <li>{@link #writeActuators()} — push every mechanism's intent to hardware, drivetrain last.
- *       Bottom of the loop, after commands run.</li>
+ *   <li>{@link #readSensors()}, top of the loop: clear every hub's bulk cache, read the Limelight,
+ *       work out the distance to the CELL and set both wheel speeds from it, sample the battery.</li>
+ *   <li>{@link #writeActuators()}, bottom of the loop: every mechanism writes its motors.</li>
  * </ul>
- * There is no {@code update()} that does both: one method would let a caller put observe-and-act on
- * the same side of {@code Scheduler.execute()}, and every command would then decide on last loop's
- * data. The order is structural, not a convention.
+ * The OpMode decides what the mechanisms should do in between, so it always decides on this loop's
+ * sensor data.
  *
  * <h2>Nothing counts game pieces</h2>
- * There is no sensor anywhere in the intake or the tunnel, so the code never claims to know how many
- * pieces are aboard. The operator decides when to stop intaking (BIOBUZZ G407, at most 4 controlled)
- * and when to fire. Every "shot count" in telemetry is a count of tunnel pulses, not of pieces.
+ * There is no sensor anywhere in the intake or the tunnel. The driver decides when to stop intaking
+ * (BIOBUZZ G407, at most 4 controlled) and when to fire.
+ *
+ * <h2>The shot distance</h2>
+ * {@link #updateShotDistance()} runs every loop and is the whole story.
+ *
+ * <p><b>Today, with no Pinpoint config:</b> the shot distance is the Limelight's distance to one of
+ * our CELL's tags, smoothed a little. No tag = no distance, and the shooter goes to its fixed speeds.
+ *
+ * <p><b>Once {@code Constants.localizerConfig} is filled in:</b>
+ * <pre>
+ * position distance = from the Pinpoint pose to the CELL (game/Field)
+ * correction        = tag distance - position distance, updated only while a tag is in view
+ * shot distance     = position distance + correction      -> Shooter.SPEED_TABLE
+ * </pre>
+ * So the speed follows the robot's position (a lost tag does not change it), and every time the
+ * camera sees the CELL the position distance is pulled back onto the tag distance. Every number is on
+ * the Teleop card.
  */
 public class Robot {
     /**
@@ -52,16 +62,24 @@ public class Robot {
     public final Intake intake;
     public final Shooter shooter;
     public final Limelight limelight;
-    public final Macros macros;
 
     /**
-     * True: both wheel speeds come from the tag distance ({@code Shooter.SPEED_TABLE}). False: the
-     * fixed {@code Shooter.TARGET_TICKS_PER_SEC} / {@code ROLLER_TARGET_TICKS_PER_SEC}. Applied every
-     * loop in {@link #readSensors()}.
+     * How fast the shot distance follows the tag: each loop with a tag in view it moves this fraction
+     * of the way there. 1 = jump there at once, smaller = smoother.
      */
-    public boolean autoSpeed = true;
+    public static double CORRECTION_BLEND = 0.2;
+    /** A correction bigger than this means the pose or the Field numbers are wrong: the card warns. */
+    public static double CORRECTION_WARN_INCHES = 12;
 
-    private MatchClock matchClock;
+    private Alliance alliance = Alliance.BLUE;
+    /** The CELL the distance is measured to: the one the camera last saw, the starting up-CELL until then. */
+    private Field.CellSide targetCell = Field.startingUpCellSide(Alliance.BLUE);
+
+    // The shot distance and the numbers it is made of, all inches. NaN = not known this loop.
+    private double tagInches = Double.NaN;        // Limelight: camera to the tag
+    private double positionInches = Double.NaN;   // Pinpoint pose to the CELL
+    private double correctionInches = 0;          // tag - position, from the last time a tag was seen
+    private double shotInches = Double.NaN;       // what the speed table is given
 
     private final List<LynxModule> hubs;
     private final List<VoltageSensor> voltageSensors;
@@ -93,19 +111,24 @@ public class Robot {
         intake = new Intake(hardwareMap);
         shooter = new Shooter(hardwareMap);
         limelight = new Limelight(hardwareMap);
-
-        macros = new Macros(this);   // last: it takes this, so every field must already be set
     }
 
-    /** Switches the Limelight to the alliance's tag pipeline. Once, when the alliance is known. */
+    /**
+     * Once, when the alliance is known: switches the Limelight to that alliance's tag pipeline and
+     * starts the shot distance over, measured to the CELL that starts the match facing up.
+     */
     public void setAlliance(Alliance alliance) {
+        this.alliance = alliance;
+        targetCell = Field.startingUpCellSide(alliance);
+        correctionInches = 0;
+        shotInches = Double.NaN;
         limelight.setAlliance(alliance);
     }
 
     // ---- The two loop halves ----
 
     /**
-     * Refreshes cached sensor data. Call at the TOP of the loop, before commands run. Clearing the
+     * Refreshes the sensor data and sets both wheel speeds. Call at the TOP of the loop. Clearing the
      * bulk caches here is what makes the whole loop see one consistent snapshot.
      */
     public void readSensors() {
@@ -113,43 +136,104 @@ public class Robot {
             hub.clearBulkCache();
         }
 
-        // The wheel speeds are set here, before commands run, so a shot sees this loop's distance.
         limelight.update();
-        // Not while a shot macro runs: the speeds it spun up to are kept, so a jittering distance
-        // cannot move the targets under wheels that are recovering between balls.
-        if (macros.getOutcome() != Macros.Outcome.RUNNING) {
-            if (autoSpeed) shooter.setSpeedFromDistance(limelight.getShotDistanceInches());
-            else shooter.useFixedSpeed();
-        }
+        updateShotDistance();
+        shooter.setSpeedFromDistance(shotInches);   // NaN = no distance: the fixed speeds
 
         long now = System.currentTimeMillis();
-        if (matchClock != null) matchClock.update(now);
         sampleBattery(now);
         trackLoopTime(now);
     }
 
-    /**
-     * Pushes intent to hardware. Call at the BOTTOM of the loop, after commands run. The drivetrain
-     * goes last: its update is the one {@code follower.update()} per loop.
-     */
+    /** Writes every motor. Call at the BOTTOM of the loop. The drivetrain goes last. */
     public void writeActuators() {
         intake.update();
         shooter.update();
         drivetrain.update();
     }
 
-    // ---- Match state ----
+    // ---- Shot distance ----
 
-    /** Starts the match clock for the period. Call once from the OpMode's {@code start()}. */
-    public void startMatch(MatchClock.Period period) {
-        matchClock = MatchClock.forPeriod(period);
-        matchClock.start(System.currentTimeMillis());
+    /** See the class comment. Every number it works out is kept in a field so the card can show it. */
+    private void updateShotDistance() {
+        // 1. The Limelight: how far the tag is, and which of our two CELLs it is on. A tag that is
+        //    not on one of our CELLs is ignored: tagInches is NaN for it.
+        Field.CellSide seen = cellOfTag(limelight.getShotTagId());   // null = no tag of ours in view
+        tagInches = seen == null ? Double.NaN : limelight.getShotDistanceInches();
+        boolean tagSeen = !Double.isNaN(tagInches);
+        if (tagSeen) targetCell = seen;
+
+        // 2. No pose (no Pinpoint config, or the Pinpoint sent a bad reading this loop): the tag is
+        //    all there is. Smoothed, so an inch of camera noise does not move the speeds every frame.
+        Pose pose = drivetrain.getPose();
+        if (pose == null || Double.isNaN(pose.x()) || Double.isNaN(pose.y())) {
+            positionInches = Double.NaN;
+            if (!tagSeen) shotInches = Double.NaN;            // the shooter holds, then goes to fixed
+            else if (Double.isNaN(shotInches)) shotInches = tagInches;   // first sight: no lag
+            else shotInches += CORRECTION_BLEND * (tagInches - shotInches);
+            return;
+        }
+
+        // 3. The position: how far the pose is from that CELL.
+        Pose cell = Field.cell(alliance, targetCell);
+        positionInches = Math.hypot(cell.x() - pose.x(), cell.y() - pose.y());
+
+        // 4. The Limelight corrects it, only while it sees a tag.
+        if (tagSeen) {
+            double wanted = tagInches - positionInches;
+            correctionInches += CORRECTION_BLEND * (wanted - correctionInches);
+        }
+        shotInches = positionInches + correctionInches;
     }
 
-    /** {@code null} before {@link #startMatch}; callers must null-check (init_loop, diagnostics). */
-    public MatchClock getMatchClock() {
-        return matchClock;
+    /** Which of this alliance's two CELLs a tag ID is on (game/Field.tagRange), or null if neither. */
+    private Field.CellSide cellOfTag(int tagId) {
+        for (Field.CellSide side : Field.CellSide.values()) {
+            int[] range = Field.tagRange(alliance, side);
+            if (tagId >= range[0] && tagId <= range[1]) return side;
+        }
+        return null;
     }
+
+    /** The distance the speed table is given this loop, inches; NaN = none (fixed speeds). */
+    public double getShotInches() {
+        return shotInches;
+    }
+
+    /** The Limelight's distance to the tag, inches; NaN = no tag in view. */
+    public double getTagInches() {
+        return tagInches;
+    }
+
+    /** The distance from the Pinpoint pose to the CELL, inches; NaN = no pose. */
+    public double getPositionInches() {
+        return positionInches;
+    }
+
+    /** What the Limelight has added to the position distance, inches. */
+    public double getCorrectionInches() {
+        return correctionInches;
+    }
+
+    /** The CELL the distance is measured to. */
+    public Field.CellSide getTargetCell() {
+        return targetCell;
+    }
+
+    /**
+     * True when the camera sees a tag of that CELL of ours right now. A CELL's tags are only visible
+     * while it is UP, so this is how the Limelight autos tell whether the HIVE has tipped.
+     */
+    public boolean seesCell(Field.CellSide side) {
+        return !Double.isNaN(tagInches) && targetCell == side;
+    }
+
+    /** True when the Limelight has had to move the position distance a long way: check the pose. */
+    public boolean isPositionOff() {
+        return !Double.isNaN(positionInches) && Math.abs(correctionInches) > CORRECTION_WARN_INCHES;
+    }
+
+    // ---- Battery and loop time ----
 
     /** Lowest volts across all sensors, refreshed at most every {@link #VOLTAGE_SAMPLE_MS}; 0 if unreadable. */
     public double getBatteryVolts() {
@@ -190,29 +274,5 @@ public class Robot {
         }
         batteryVolts = lowest == Double.MAX_VALUE ? 0 : lowest;
         shooter.setBatteryVolts(batteryVolts);   // only used when Shooter.TUNED_AT_VOLTS is set
-    }
-
-    // ---- Shared cancel and shutdown paths ----
-
-    /**
-     * Cleanup shared by an operator abort and the auto's buzzer stop: hands the follower back to the
-     * sticks (Ivy cannot stop a follower that was handed a path) and marks the macro cancelled.
-     */
-    public void abortMacro() {
-        drivetrain.cancelPath();
-        macros.markCancelled();
-    }
-
-    /**
-     * Stops every mechanism now, from inside the loop. Called by the autonomous buzzer safety net
-     * (G403: no powered movement after the period ends). Never from an OpMode's {@code stop()}: it
-     * writes motors, which the SDK rejects there (CANCELLED_FOR_SAFETY) and zeroes them itself.
-     */
-    public void stopMechanisms() {
-        intake.stop();
-        shooter.disarm();
-        drivetrain.cancelPath();
-        intake.update();
-        shooter.update();
     }
 }

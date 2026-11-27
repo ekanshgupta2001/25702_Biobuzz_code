@@ -10,7 +10,7 @@ import org.firstinspires.ftc.teamcode.subsystems.Drivetrain;
  * Drives the robot with Pedro, the same way Teleop does, and shows the localization.
  *
  * <p>Gamepad 1: sticks drive, OPTIONS switches field / robot centric, Y zeroes the pose.
- * The pose needs only the Pinpoint config in {@code Constants} (run the Pinpoint Tuner). Field
+ * The pose needs only the Pinpoint config in {@code Constants}. Field
  * centric still needs the full Pedro tuning (Pinpoint + Foresight configs, so
  * {@code drivetrain.hasFollower()} is true); before that OPTIONS does nothing and it drives robot
  * centric. The pose starts at 0, 0, 0 where the robot sits at init, so field-centric "forward" is
@@ -47,7 +47,7 @@ public class DriveBench extends OpMode {
                 : "ROBOT centric (field centric needs Pedro fully tuned)");
         Pose pose = drivetrain.getPose();
         if (pose == null) {
-            telemetry.addLine("No Pinpoint config yet: run the Pinpoint Tuner");
+            telemetry.addLine("No Pinpoint config in Constants: no pose");
         } else {
             telemetry.addData("x", "%.2f in", pose.x());
             telemetry.addData("y", "%.2f in", pose.y());

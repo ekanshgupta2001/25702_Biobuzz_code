@@ -11,11 +11,10 @@ import com.qualcomm.robotcore.util.RobotLog;
 
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.robotcore.internal.system.AppUtil;
-import org.firstinspires.ftc.teamcode.commands.Macros;
 import org.firstinspires.ftc.teamcode.commands.Shoot;
 import org.firstinspires.ftc.teamcode.commands.Waits;
 import org.firstinspires.ftc.teamcode.util.field.Alliance;
-import org.firstinspires.ftc.teamcode.util.field.PoseStorage;
+import org.firstinspires.ftc.teamcode.util.field.AllianceStorage;
 
 import java.io.BufferedWriter;
 import java.io.File;
@@ -41,8 +40,8 @@ import java.util.function.DoubleSupplier;
  *                                           Y  apply the kS / kV the last FF FIT found
  *                                           B  STOP everything
  *
- * Gamepad 1 while TABLE runs (like Teleop's FIXED speed)
- *   dpad up/down     flywheel target +- step      A     shoot four, exactly like Teleop's A
+ * Gamepad 1 while TABLE runs
+ *   dpad up/down     flywheel target +- step      A     shoot four pulses (the Shoot cycle)
  *   dpad right/left  counter-roller +- step       Y     save this spot as a SPEED_TABLE row
  *   LB / RB          smaller / bigger step        back  delete this spot's row
  *   LT (hold)        intake out, to clear a jam   X     end TABLE        B  STOP
@@ -81,12 +80,12 @@ import java.util.function.DoubleSupplier;
  * the right sets it to the battery voltage now (do that right after tuning), a press left = off.
  *
  * <h2>TABLE</h2>
- * The distance is {@code Limelight.getShotDistanceInches()}, the same number Teleop's TAG speed reads,
- * averaged over half a second and rounded to the inch. A works like Teleop's A: the match's own
+ * The distance is {@code Limelight.getShotDistanceInches()}, the same number Teleop's speed reads,
+ * averaged over half a second and rounded to the inch. A runs the pulsed
  * {@link Shoot} cycle (spin up, then one intake + feeder pulse per ball, the wheels recovering in
  * between), so the speeds you save are the speeds the match shoots with. Y on a spot within
  * {@link #SAME_SPOT_INCHES} of a saved row replaces it. Saved rows go into
- * {@code Shooter.SPEED_TABLE} straight away, so Teleop's TAG speed uses them until the Robot
+ * {@code Shooter.SPEED_TABLE} straight away, so Teleop uses them until the Robot
  * Controller app restarts: type them into {@code Shooter.java} to keep them. The rows already in
  * {@code Shooter.java} are on the list from the start.
  *
@@ -123,7 +122,7 @@ public class ShooterTuner extends OpMode {
     private static final double VOLTAGE_PERIOD_MS = 250;   // a voltage read is its own bus transaction
     private static final double SLOW_LOOP_MS = 25;
 
-    /** TABLE's dpad steps, ticks/sec; LB / RB pick one. 25 is Teleop's FIXED step. */
+    /** TABLE's dpad steps, ticks/sec; LB / RB pick one. */
     private static final double[] TABLE_STEPS = {10, 25, 50, 100};
     /** VOLLEY keeps this many earlier runs on screen to compare against. */
     private static final int VOLLEY_HISTORY = 5;
@@ -212,7 +211,7 @@ public class ShooterTuner extends OpMode {
         intake = new Intake(hardwareMap);
         limelight = new Limelight(hardwareMap);
         // Starts on the side Teleop last picked; the Alliance line changes it.
-        alliance = PoseStorage.getAlliance(Alliance.BLUE);
+        alliance = AllianceStorage.get(Alliance.BLUE);
         limelight.setAlliance(alliance);
         // The rows already in Shooter.java (or saved earlier since the app started) are the starting list.
         if (Shooter.SPEED_TABLE != null) {
@@ -715,7 +714,7 @@ public class ShooterTuner extends OpMode {
         modeStartMs = nowMs;
         openLog("volley");
         setTargets(true, true);   // armed with both targets before the shot starts
-        startVolley();            // Teleop's A: the same Shoot cycle
+        startVolley();            // the pulsed Shoot cycle
     }
 
     private void runVolley() {
@@ -726,11 +725,11 @@ public class ShooterTuner extends OpMode {
 
     private void finishVolley(String why) {
         int pulses = volleyCycle == null ? 0 : volleyCycle.getShotsFired();
-        boolean complete = pulses >= Macros.PIECES_PER_LOAD;
+        boolean complete = pulses >= Shoot.PIECES_PER_LOAD;
         result.addAll(volleyStats.summary(Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC));
         if (!why.isEmpty()) result.add(why);
         if (!complete) {
-            result.add(String.format(Locale.US, "Stopped after %d of %d pulses.", pulses, Macros.PIECES_PER_LOAD));
+            result.add(String.format(Locale.US, "Stopped after %d of %d pulses.", pulses, Shoot.PIECES_PER_LOAD));
         } else {
             result.add("-> " + volleyStats.advice());
             volleyRuns++;
@@ -756,7 +755,7 @@ public class ShooterTuner extends OpMode {
         setTargets(true, true);
     }
 
-    /** TABLE's buttons, in place of the menu's: the dpad changes the two speeds, like Teleop's FIXED. */
+    /** TABLE's buttons, in place of the menu's: the dpad changes the two speeds. */
     private void handleTableButtons() {
         if (pressed(cur.x, prev.x)) {
             endMode();
@@ -787,11 +786,11 @@ public class ShooterTuner extends OpMode {
         else intake.stop();
     }
 
-    /** Teleop's A: the same Shoot cycle, the same ball count, the same time limit. */
+    /** The pulsed Shoot cycle: Shoot.PIECES_PER_LOAD pulses, stopped after Shoot.SHOOT_ALL_TIMEOUT_MS. */
     private void startVolley() {
         if (volleyRunning()) return;   // let the running one finish
-        volleyCycle = new Shoot(intake, shooter, Macros.PIECES_PER_LOAD);
-        volley = Waits.bounded(volleyCycle.build(), Macros.SHOOT_ALL_TIMEOUT_MS);
+        volleyCycle = new Shoot(intake, shooter, Shoot.PIECES_PER_LOAD);
+        volley = Waits.bounded(volleyCycle.build(), Shoot.SHOOT_ALL_TIMEOUT_MS);
         Scheduler.schedule(volley);
     }
 
@@ -867,7 +866,7 @@ public class ShooterTuner extends OpMode {
         Collections.sort(tableRows, (a, b) -> Double.compare(a[0], b[0]));
     }
 
-    /** The live table: Teleop's TAG speed uses these rows until the Robot Controller app restarts. */
+    /** The live table: Teleop uses these rows until the Robot Controller app restarts. */
     private void publishTable() {
         Shooter.SPEED_TABLE = tableRows.toArray(new double[0][]);
     }
@@ -1003,14 +1002,14 @@ public class ShooterTuner extends OpMode {
                         : "SHOT: spinning up, wait for READY";
             case VOLLEY:
                 return String.format(Locale.US, "VOLLEY: [%s] pulse %d of %d (X = end)", volleyCycle.getStateName(),
-                        volleyCycle.getShotsFired(), Macros.PIECES_PER_LOAD);
+                        volleyCycle.getShotsFired(), Shoot.PIECES_PER_LOAD);
             case TABLE:
                 if (volleyRunning()) {
                     return String.format(Locale.US, "TABLE: shooting [%s] pulse %d of %d", volleyCycle.getStateName(),
-                            volleyCycle.getShotsFired(), Macros.PIECES_PER_LOAD);
+                            volleyCycle.getShotsFired(), Shoot.PIECES_PER_LOAD);
                 }
                 return String.format(Locale.US, "TABLE: A = shoot %d. Step %.0f t/s",
-                        Macros.PIECES_PER_LOAD, TABLE_STEPS[tableStep]);
+                        Shoot.PIECES_PER_LOAD, TABLE_STEPS[tableStep]);
             default:
                 return note.isEmpty() ? "IDLE" : note;
         }
@@ -1081,7 +1080,7 @@ public class ShooterTuner extends OpMode {
         if (tableRows.isEmpty()) telemetry.addLine("    // no rows yet: Y saves this spot");
         for (double[] row : tableRows) telemetry.addLine("    " + rowText(row) + ",");
         telemetry.addLine("};");
-        if (!tableRows.isEmpty()) telemetry.addLine("(Teleop TAG uses these now; type them in to keep)");
+        if (!tableRows.isEmpty()) telemetry.addLine("(Teleop uses these now; type them in to keep)");
     }
 
     private void addPasteLines() {

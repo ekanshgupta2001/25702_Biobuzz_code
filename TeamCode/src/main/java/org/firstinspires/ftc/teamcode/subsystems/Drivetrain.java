@@ -3,21 +3,15 @@ package org.firstinspires.ftc.teamcode.subsystems;
 import com.pedropathing.drivetrain.DrivePowers;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.follower.ManualDrive;
-import com.pedropathing.ivy.Command;
-import com.pedropathing.ivy.behaviors.EndCondition;
 import com.pedropathing.math.Pose;
-import com.pedropathing.paths.Path;
 import com.pedropathing.revhub.drivetrains.Mecanum;
 import com.pedropathing.revhub.localizers.PinpointLocalizer;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
 import org.firstinspires.ftc.teamcode.pedro.Constants;
-import org.firstinspires.ftc.teamcode.util.math.Angles;
-
-import java.util.function.Supplier;
 
 /**
- * The mecanum drivetrain: stick driving, pose, and Pedro paths.
+ * The mecanum drivetrain: stick driving and the pose.
  *
  * <h2>One motor layer, one localizer</h2>
  * This class owns exactly one {@link Mecanum}, built from names and directions alone, and at most one
@@ -29,24 +23,15 @@ import java.util.function.Supplier;
  *       Without one they go straight to {@code mecanum.drive(...)}, robot-centric.</li>
  *   <li><b>The pose needs only the localizer</b>: once {@code Constants.localizerConfig} is filled,
  *       {@link #getPose()} reads the Pinpoint, with or without a follower.</li>
- *   <li><b>Paths and turns need the follower</b> and are inert until
- *       AutoTune has filled {@code Constants.localizerConfig} and {@code foresightConfig}.</li>
  * </ul>
- * There is deliberately no second drivetrain class for the untuned case. Two {@code Mecanum} objects
- * over four motors keep two independent {@code CachedMotor} power caches and fight; one instance is
- * the whole fix, and it is why this code no longer needs a rule about which layer may exist.
+ * Today both configs are null, so the sticks go straight to the motors and there is no pose. Never
+ * build a second {@code Mecanum} over the same four motors: each keeps its own power cache and they
+ * fight.
  *
  * <h2>Who drives it</h2>
- * Teleop calls {@link #drive} directly every loop. Autonomous drives it through Ivy commands that
- * declare {@code requiring(drivetrain)}. Ivy cannot stop the follower, which drives itself once
- * handed a path, so every path command hands control back in its {@code setEnd}.
+ * Teleop calls {@link #drive} every loop. The hardcoded autos do not use this class at all.
  */
 public class Drivetrain {
-    /**
-     * Minimum time a started path or turn must run before it may report complete. A zero-length path
-     * is at its parametric end on tick one and would otherwise read as a perfect zero-time run.
-     */
-    public static long MIN_PATH_MS = 60;
     /**
      * How long a freshly constructed Pinpoint spends recalibrating its IMU. A pose written before
      * that is lost (docs/01 A.9 gotcha 6), so a {@link #setPose} inside the window is repeated once by
@@ -66,19 +51,10 @@ public class Drivetrain {
 
     /** Robot-centric unless {@link #toggleFieldCentric()} is called; field-centric needs the follower. */
     private boolean fieldCentric = false;
-    /**
-     * Field heading the driver calls "forward", radians. Field-centric sticks are rotated by
-     * (heading - this), so a blue driver standing behind the +X wall facing -X pushes the stick up
-     * and the robot drives -X. Season value from {@code game/Field.driverForwardHeading}; aiming
-     * and every macro stay in the true field frame.
-     */
-    private double driverHeadingOffset = 0;
 
     private final long builtAtMs;
     private Pose lastSetPose = null;
     private boolean reapplyWhenSettled = false;
-    /** How many times the pose estimate has been rewritten; anything derived from an older frame is stale. */
-    private int poseWrites = 0;
 
     public Drivetrain(HardwareMap hardwareMap) {
         this.builtAtMs = System.currentTimeMillis();
@@ -87,7 +63,7 @@ public class Drivetrain {
         this.follower = Constants.create(mecanum, localizer);   // the same localizer, not a second one
     }
 
-    /** True once both tuning configs exist, so field-centric, heading hold and paths are live. */
+    /** True once both tuning configs exist, so field-centric driving is available. */
     public boolean hasFollower() {
         return follower != null;
     }
@@ -113,15 +89,6 @@ public class Drivetrain {
     }
 
     /**
-     * Sets which field heading is "stick forward" for field-centric driving: {@code 0} for a driver
-     * behind the -X wall, {@code Math.PI} for one behind the +X wall. {@link #resetHeading()} uses the
-     * same value, since the driver presses it facing away from their own wall.
-     */
-    public void setDriverHeadingOffset(double fieldHeadingRad) {
-        driverHeadingOffset = fieldHeadingRad;
-    }
-
-    /**
      * Applies stick powers. Convention (Pedro's): {@code +forward} ahead, {@code +strafe} left,
      * {@code +turn} counter-clockwise. Powers are latched, so this is called every loop while driving.
      *
@@ -135,10 +102,7 @@ public class Drivetrain {
         }
         Pose pose = follower.pose();
         if (fieldCentric && pose != null) {
-            // The driver's "forward" is field heading driverHeadingOffset, so the stick is rotated by
-            // the robot's heading relative to that, not relative to +X.
-            DrivePowers p = ManualDrive.fieldCentric(forward, strafe, turn,
-                    pose.heading() - driverHeadingOffset);
+            DrivePowers p = ManualDrive.fieldCentric(forward, strafe, turn, pose.heading());
             follower.manual(p.forward(), p.strafe(), p.turn());
         } else {
             follower.manual(forward, strafe, turn);
@@ -172,16 +136,6 @@ public class Drivetrain {
     private void writePose(Pose pose) {
         if (follower != null) follower.setPose(pose);
         else localizer.setPose(pose);
-        poseWrites++;
-    }
-
-    /**
-     * Count of pose rewrites. A caller holding something computed against the pose ({@code Macros}'
-     * tag-derived aim correction) compares this with the count it saw and drops its value when they
-     * differ.
-     */
-    public int getPoseWrites() {
-        return poseWrites;
     }
 
     /** The pose estimate, or {@code null} until {@code Constants.localizerConfig} is filled. */
@@ -189,51 +143,6 @@ public class Drivetrain {
         if (follower != null) return follower.pose();
         if (localizer != null) return localizer.pose();
         return null;
-    }
-
-    /** Whether the robot is within the given distance of a pose on each axis. False without a pose. */
-    public boolean atPose(Pose target, double xToleranceInches, double yToleranceInches) {
-        Pose here = getPose();
-        return here != null && target != null
-                && Math.abs(target.x() - here.x()) <= xToleranceInches
-                && Math.abs(target.y() - here.y()) <= yToleranceInches;
-    }
-
-    public boolean atHeading(double headingRad, double toleranceRad) {
-        Pose here = getPose();
-        return here != null && Math.abs(Angles.angleError(here.heading(), headingRad)) <= toleranceRad;
-    }
-
-    /**
-     * Abandons the current path or hold immediately and hands control back to the driver.
-     *
-     * <p>This is the abort path. Cancelling the Ivy command that started a path does not stop the
-     * follower, because the follower drives itself; without this the robot keeps going to its target
-     * with the sticks locked out.
-     */
-    public void cancelPath() {
-        if (follower != null) follower.manual(0, 0, 0);
-        else mecanum.stop();
-    }
-
-    /**
-     * Treats the robot's current facing as "away from the driver wall", keeping its x/y. The escape
-     * hatch when odometry has drifted: face away from your wall and press it.
-     */
-    public void resetHeading() {
-        Pose p = getPose();
-        if (p != null) setPose(new Pose(p.x(), p.y(), driverHeadingOffset));
-    }
-
-    /**
-     * Station-keeps at the current position facing {@code headingRadians}: Pedro's hold as a turn
-     * primitive. For a command that re-issues the target as it refines it; such a caller must call
-     * {@link #cancelPath()} itself.
-     */
-    public void holdHeading(double headingRadians) {
-        if (follower == null) return;
-        Pose here = follower.pose();
-        if (here != null) follower.hold(here.withHeading(headingRadians), false);
     }
 
     /**
@@ -249,85 +158,5 @@ public class Drivetrain {
         }
         if (follower != null) follower.update();
         else localizer.update();   // never both: that would tick the Pinpoint twice a loop
-    }
-
-    // ---- Ivy commands ----
-
-    /**
-     * Follows a path that is not known until the command starts.
-     *
-     * <p>The supplier runs in {@code start()}, so the path is built from where the robot is
-     * <em>then</em> — necessary for anything planned from the current pose. A supplier returning
-     * {@code null} yields a command that finishes immediately rather than driving somewhere
-     * arbitrary.
-     *
-     * <h3>What {@code holdEnd} does</h3>
-     * With {@code holdEnd = true} a natural end leaves the follower station-keeping at the path's end
-     * pose, commanded explicitly so the robot does not stop at the 97.5% parametric threshold while
-     * Pedro's tracker catches up. With {@code holdEnd = false}, or on any interruption,
-     * {@link #cancelPath()} runs and the follower goes back to manual. Pedro's own
-     * {@code PedroCommands.follow} does neither, which is why this exists.
-     */
-    public Command followLazyCommand(Supplier<Path> pathSupplier, boolean holdEnd) {
-        if (follower == null) return finishedCommand();
-        // Boxed so the lambdas share one instance each; the command may be built once and run twice.
-        final boolean[] started = new boolean[1];
-        final long[] startedAt = new long[1];
-        final Pose[] endPose = new Pose[1];
-
-        return Command.build()
-                .setStart(() -> {
-                    startedAt[0] = System.currentTimeMillis();
-                    started[0] = false;
-                    endPose[0] = null;
-                    Path path = pathSupplier.get();
-                    if (path == null) return;
-                    // endPose() throws if the path carries no heading interpolator. Better a command
-                    // that finishes at once than an exception out of the OpMode loop.
-                    try {
-                        endPose[0] = path.endPose();
-                    } catch (RuntimeException e) {
-                        return;
-                    }
-                    follower.follow(path);
-                    started[0] = true;
-                })
-                .setDone(() -> {
-                    if (!started[0]) return true;
-                    if (System.currentTimeMillis() - startedAt[0] < MIN_PATH_MS) return false;
-                    return follower.atParametricEnd();
-                })
-                .setEnd(ec -> {
-                    if (!started[0]) return;
-                    if (ec == EndCondition.NATURALLY && holdEnd && endPose[0] != null) {
-                        follower.hold(endPose[0], false);
-                    } else {
-                        cancelPath();
-                    }
-                })
-                .requiring(this);
-    }
-
-    /**
-     * Drives at fixed powers for {@code ms}, then hands control back. Works with or without a
-     * follower, which is what lets the first-event autonomous leave the wall before anything is
-     * tuned. It goes through {@link #drive}, so the powers are robot-centric.
-     */
-    public Command driveForMsCommand(double forward, double strafe, double turn, long ms) {
-        final long[] startedAt = new long[1];
-        return Command.build()
-                .setStart(() -> {
-                    startedAt[0] = System.currentTimeMillis();
-                    drive(forward, strafe, turn);
-                })
-                .setExecute(() -> drive(forward, strafe, turn))
-                .setDone(() -> System.currentTimeMillis() - startedAt[0] >= ms)
-                .setEnd(ec -> cancelPath())
-                .requiring(this);
-    }
-
-    /** A command that completes on its first tick. Returned when there is no follower to drive. */
-    private static Command finishedCommand() {
-        return Command.build().setDone(() -> true);
     }
 }

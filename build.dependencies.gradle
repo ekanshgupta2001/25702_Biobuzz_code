@@ -19,10 +19,9 @@ dependencies {
     implementation 'com.pedropathing:revhub:3.0.1'
     implementation 'com.pedropathing.ivy:pedro:1.1.1'
 
-    // !! NOT MATCH LEGAL WHILE THIS IS HERE (BIOBUZZ R704) !!
-    // AutoTune (the Pedro tuning site, http://192.168.43.1:10158) binds a web server whenever it is in
-    // the APK, and R704 prohibits streaming/dashboard tools during matches. Before an event, delete
-    // this line AND pedro/Tuning.java and pedro/procedures/ (the only sources that import it), or the
-    // build will not compile.
-    implementation 'com.pedropathing:tuning:1.0.1'
+    // AutoTune (com.pedropathing:tuning:1.0.1) is NOT here on purpose: it binds a web server whenever
+    // it is in the APK, and BIOBUZZ R704 bans that in matches. To tune after an event, add
+    //     implementation 'com.pedropathing:tuning:1.0.1'
+    // back and restore pedro/Tuning.java and pedro/procedures/ from git commit 6834106. Remove all
+    // three again before the next event.
 }

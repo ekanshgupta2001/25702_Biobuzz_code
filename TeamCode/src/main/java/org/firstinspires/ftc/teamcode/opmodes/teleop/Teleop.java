@@ -1,106 +1,88 @@
 package org.firstinspires.ftc.teamcode.opmodes.teleop;
 
-import com.pedropathing.ivy.Command;
-import com.pedropathing.ivy.Scheduler;
 import com.pedropathing.math.Pose;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
-import com.qualcomm.robotcore.util.RobotLog;
 
 import org.firstinspires.ftc.teamcode.Robot;
-import org.firstinspires.ftc.teamcode.subsystems.Intake;
-import org.firstinspires.ftc.teamcode.subsystems.Shooter;
+import org.firstinspires.ftc.teamcode.game.FieldPoses;
 import org.firstinspires.ftc.teamcode.util.field.Alliance;
-import org.firstinspires.ftc.teamcode.util.field.PoseStorage;
+import org.firstinspires.ftc.teamcode.util.field.FieldConstants;
+import org.firstinspires.ftc.teamcode.util.field.AllianceStorage;
 
 import java.util.Locale;
 
 /**
- * The match TeleOp. One gamepad (gamepad 1) runs everything. Drive is robot-centric; the Pinpoint
- * pose is only shown on the card. The shot leaves the FRONT, so face the HIVE to shoot.
+ * The match TeleOp. One gamepad (gamepad 1) runs everything. Drive is robot-centric. The shot leaves
+ * the FRONT, so face the HIVE to shoot.
  *
  * <pre>
- * INIT     dpad left/right  alliance RED / BLUE (which HIVE's tags the camera reads)
- * DRIVE    L-stick        drive / strafe (robot centric)
- *          R-stick X      turn
- *          LB (hold)      slow mode
- * INTAKE   RT (hold)      intake in
- *          LT (hold)      intake out          (neither, or both = off)
- * SHOOTER  X              wheels on / off (flywheel + counter-roller)
- *          options        AUTO / MANUAL shooting (starts in AUTO; switching cancels a running shot)
- *          AUTO    RB     shoot one   (macro)
- *                  A      shoot four  (macro)
- *          B              cancel a running shot
- *          MANUAL  RB     hold = feed (intake FEED + feeder), only while the wheels are on
- * SPEED    Y              TAG (Limelight distance, starts here) / FIXED
- *          dpad up/down   FIXED only: flywheel speed +/- 25 t/s
- *          dpad l/r       FIXED only: counter-roller speed -/+ 25 t/s
+ * INIT     dpad left/right  alliance RED / BLUE
+ * DRIVE    L-stick          drive / strafe (robot centric)
+ *          R-stick X        turn
+ *          LB (hold)        slow mode
+ * SHOOTER  X                shooter on / off (flywheel + counter-roller)
+ * INTAKE   RT (hold)        shooter off: intake in
+ *                           shooter on:  intake + feeder = SHOOT, for as long as it is held
+ *          LT (hold)        intake out, and the feeder backwards (backs a stuck ball out)
  * </pre>
  *
- * MANUAL is the fallback for when the shot macro misbehaves: the driver spins up with X, watches
- * for READY on the card, and holds RB to feed balls in by hand.
- *
- * <p>Building the speed table: Y to FIXED, park facing the CELL, dpad until the shots land, then copy
- * the tag distance and both speeds from the Speed line into {@code Shooter.SPEED_TABLE}. The dpad
- * edits {@code Shooter.TARGET_TICKS_PER_SEC} and {@code ROLLER_TARGET_TICKS_PER_SEC}, statics: they
- * last until the Robot Controller app restarts, so they also change the speeds Auto HARDCODED shoots at.
+ * The wheel speeds are automatic: {@code robot.readSensors()} sets them every loop from the distance
+ * the Limelight reads to our CELL's tag (the Distance line on the card shows the number it used).
+ * No tag for a second = the fixed speeds in {@code Shooter}.
  *
  * <p>The controller buzzes once when both wheels first reach speed after X, and three times when the
- * intake gives up un-jamming, so the driver does not have to look at the card.
+ * intake gives up un-jamming.
  *
- * <p>Every loop: read sensors (this also sets the wheel speeds from the tag), then one section per
- * mechanism ({@link #drive()}, {@link #intake()}, {@link #shooter()}), then the shot macros
- * ({@code Scheduler.execute()}), then write the motors. The sections only set fields; the intake's
- * and shooter's default commands apply those fields every loop.
+ * <p>Every loop, top to bottom: read sensors, {@link #drive()}, {@link #shooter()}, {@link #intake()},
+ * write the motors, show the card. There are no commands and no scheduler here: each section tells
+ * its mechanism what to do this loop, and that is all that happens.
  */
 @TeleOp(name = "Teleop", group = "Main")
 public class Teleop extends OpMode {
     public static double SLOW_SCALE = 0.4;
-    /** One dpad press in FIXED speed. */
-    public static double SPEED_STEP_TICKS_PER_SEC = 25;
 
     private Robot robot;
     private Alliance alliance;
 
-    /** What the triggers ask for this loop. Nothing latches: let go and it is OFF. */
-    private Intake.Mode intakeFromTriggers = Intake.Mode.OFF;
+    /** X toggles it. True = both wheels hold their speeds, and RT shoots. */
+    private boolean shooterOn = false;
 
-    private boolean flywheelOn = false;
-    /** False = AUTO (RB / A run the shot macros). True = MANUAL (hold RB to feed). */
-    private boolean manualShooting = false;
-    /** MANUAL only: RB held with the wheels on. Runs the intake as FEED and the feeder. */
-    private boolean feeding = false;
     /** The controller has already buzzed for this spin-up / for this jam, so each buzzes only once. */
     private boolean readyBuzzed = false;
     private boolean jamBuzzed = false;
-    /** The shot macro last started, so it can be cancelled. */
-    private Command shot = null;
 
     @Override
     public void init() {
-        Scheduler.reset();   // the scheduler is static and survives OpMode restarts
         robot = new Robot(hardwareMap);
 
         // Starts on the side picked last time (BLUE after an app restart); the dpad changes it in init_loop.
-        alliance = PoseStorage.getAlliance(Alliance.BLUE);
+        alliance = AllianceStorage.get(Alliance.BLUE);
         robot.setAlliance(alliance);
+        setStartPose();
+    }
 
-        // The intake and shooter follow these fields every loop. A shot macro takes both over while
-        // it runs and hands them back when it ends.
-        Scheduler.schedule(
-                robot.intake.operatorControlCommand(() -> feeding ? Intake.Mode.FEED : intakeFromTriggers),
-                robot.shooter.armedControlCommand(() -> flywheelOn, () -> feeding));
+    /**
+     * Where the robot is when Teleop starts: the alliance's start spot (the hardcoded auto ends close
+     * to it). It does not have to be exact: the Limelight corrects the shot distance as soon as
+     * it sees the CELL. Does nothing until the Pinpoint is set up ({@code Constants.localizerConfig}).
+     */
+    private void setStartPose() {
+        robot.drivetrain.setPose(FieldConstants.forAlliance(FieldPoses.BLUE_START_FACING_HIVE, alliance));
     }
 
     @Override
     public void init_loop() {
+        robot.readSensors();   // so the card below shows what the camera sees before START
+
         Alliance picked = alliance;
         if (gamepad1.dpadLeftWasPressed()) picked = Alliance.RED;
         if (gamepad1.dpadRightWasPressed()) picked = Alliance.BLUE;
         if (picked != alliance) {
             alliance = picked;
-            PoseStorage.saveAlliance(alliance);   // the next Teleop init starts on this side
-            robot.setAlliance(alliance);   // a network call to the camera: only on a change
+            AllianceStorage.save(alliance);   // the next Teleop init starts on this side
+            robot.setAlliance(alliance);          // a network call to the camera: only on a change
+            setStartPose();
         }
 
         telemetry.addLine("=========================");
@@ -108,17 +90,15 @@ public class Teleop extends OpMode {
         telemetry.addLine("=========================");
         telemetry.addLine("dpad left = RED, right = BLUE");
         telemetry.addLine();
-        telemetry.addLine("ONE GAMEPAD (gamepad 1). Drive is robot centric.");
-        telemetry.addLine(String.format(Locale.US, "Speed starts on TAG; fixed fly %.0f / roller %.0f t/s",
-                Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC));
-        telemetry.addLine();
         telemetry.addLine("DRIVE    sticks drive, LB hold = slow");
-        telemetry.addLine("INTAKE   hold RT = in, hold LT = out");
-        telemetry.addLine("SHOOTER  X wheels on/off, options = AUTO/MANUAL");
-        telemetry.addLine("  AUTO    RB shoot one, A shoot four, B cancel");
-        telemetry.addLine("  MANUAL  hold RB to feed (wheels must be on)");
-        telemetry.addLine("SPEED    Y = TAG/FIXED, FIXED: dpad up/down fly, left/right roller +/-25");
+        telemetry.addLine("SHOOTER  X = on / off");
+        telemetry.addLine("INTAKE   hold RT = in (shooter on: SHOOT), hold LT = out");
         telemetry.addLine("BUZZ     once = wheels ready, three = intake jammed");
+        telemetry.addLine();
+        // The pre-match check: face the CELL and these two lines should show a tag and a distance.
+        telemetry.addData("Limelight", "%s   (%s)", robot.limelight.getStatusLine(), alliance);
+        telemetry.addData("Distance", distanceLine());
+        telemetry.addData("Battery", "%.1f V", robot.getBatteryVolts());
     }
 
     @Override
@@ -133,17 +113,15 @@ public class Teleop extends OpMode {
         robot.readSensors();
 
         drive();
-        intake();
         shooter();
+        intake();
 
-        Scheduler.execute();
         robot.writeActuators();
         showTelemetry();
     }
 
     @Override
     public void stop() {
-        Scheduler.reset();
         if (robot != null) robot.limelight.stop();   // or the camera keeps being polled after the OpMode
         // No motor writes here: the SDK rejects them from stop() and stops the motors itself.
     }
@@ -159,140 +137,92 @@ public class Teleop extends OpMode {
         robot.drivetrain.drive(forward, strafe, turn);
     }
 
-    // ---- Intake ----
+    // ---- Shooter: X on / off ----
+
+    private void shooter() {
+        if (gamepad1.xWasPressed()) {
+            shooterOn = !shooterOn;
+            // Off: stops both wheels and the feeder right now. Only on the press, not every loop,
+            // so it does not undo LT's feeder-backwards in intake() below.
+            if (!shooterOn) robot.shooter.disarm();
+        }
+        if (shooterOn) robot.shooter.arm();
+
+        // One buzz per spin-up, when both wheels reach speed.
+        if (!shooterOn) {
+            readyBuzzed = false;
+        } else if (!readyBuzzed && robot.shooter.atTarget()) {
+            gamepad1.rumble(200);
+            readyBuzzed = true;
+        }
+    }
+
+    // ---- Intake and feeder: the triggers ----
 
     private void intake() {
         boolean in = gamepad1.right_trigger > 0.5;
         boolean out = gamepad1.left_trigger > 0.5;
-        if (in && !out) intakeFromTriggers = Intake.Mode.IN;
-        else if (out && !in) intakeFromTriggers = Intake.Mode.OUT;
-        else intakeFromTriggers = Intake.Mode.OFF;   // neither, or both
-    }
 
-    // ---- Shooter ----
-
-    private void shooter() {
-        // Read every press once per loop, whatever the mode: the SDK keeps a press until it is read,
-        // so one skipped in one mode would fire later in the other.
-        boolean xPressed = gamepad1.xWasPressed();
-        boolean yPressed = gamepad1.yWasPressed();
-        boolean optionsPressed = gamepad1.optionsWasPressed();
-        boolean rbPressed = gamepad1.rightBumperWasPressed();
-        boolean aPressed = gamepad1.aWasPressed();
-        boolean bPressed = gamepad1.bWasPressed();
-        boolean upPressed = gamepad1.dpadUpWasPressed();
-        boolean downPressed = gamepad1.dpadDownWasPressed();
-        boolean leftPressed = gamepad1.dpadLeftWasPressed();
-        boolean rightPressed = gamepad1.dpadRightWasPressed();
-
-        if (xPressed) flywheelOn = !flywheelOn;
-
-        // Speed source. robot.readSensors() applies it from the next loop.
-        if (yPressed) {
-            robot.autoSpeed = !robot.autoSpeed;
-            RobotLog.ii("Teleop", "speed -> %s", robot.autoSpeed ? "TAG" : "FIXED");
-        }
-        if (!robot.autoSpeed) {
-            // Up/down: flywheel. Left/right: counter-roller.
-            if (upPressed) Shooter.TARGET_TICKS_PER_SEC += SPEED_STEP_TICKS_PER_SEC;
-            if (downPressed) {
-                Shooter.TARGET_TICKS_PER_SEC = Math.max(0, Shooter.TARGET_TICKS_PER_SEC - SPEED_STEP_TICKS_PER_SEC);
-            }
-            if (rightPressed) Shooter.ROLLER_TARGET_TICKS_PER_SEC += SPEED_STEP_TICKS_PER_SEC;
-            if (leftPressed) {
-                Shooter.ROLLER_TARGET_TICKS_PER_SEC =
-                        Math.max(0, Shooter.ROLLER_TARGET_TICKS_PER_SEC - SPEED_STEP_TICKS_PER_SEC);
-            }
+        if (in && !out && shooterOn) {
+            // SHOOT: the intake and the feeder carry balls into the wheels, nonstop while RT is held.
+            robot.intake.feed();
+            robot.shooter.feederOn();
+        } else if (out && !in) {
+            // OUT: the intake and the feeder both run backwards, so a stuck ball comes back down.
+            robot.intake.out();
+            robot.shooter.feederOut();
+        } else {
+            robot.shooter.feederOff();
+            if (in && !out) robot.intake.in();
+            else robot.intake.stop();   // neither, or both
         }
 
-        // Feel it instead of looking at the card: one buzz per spin-up when both wheels reach
-        // speed, three blips when the intake gives up un-jamming.
-        if (!flywheelOn) readyBuzzed = false;
-        else if (!readyBuzzed && robot.shooter.atTarget()) {
-            gamepad1.rumble(200);
-            readyBuzzed = true;
-        }
+        // Three blips when the intake gives up un-jamming.
         boolean jammed = robot.intake.hasGivenUpUnjamming();
         if (jammed && !jamBuzzed) gamepad1.rumbleBlips(3);
         jamBuzzed = jammed;
-
-        if (optionsPressed) {
-            manualShooting = !manualShooting;
-            RobotLog.ii("Teleop", "shooting mode -> %s", manualShooting ? "MANUAL" : "AUTO");
-            cancelShot();
-        }
-        if (bPressed) cancelShot();
-
-        if (manualShooting) {
-            feeding = gamepad1.right_bumper && flywheelOn;
-        } else {
-            feeding = false;
-            // B wins over a shot pressed in the same loop, and so does the mode switch.
-            boolean mayShoot = !bPressed && !optionsPressed;
-            if (rbPressed && mayShoot) startShot(robot.macros.shootOne());
-            if (aPressed && mayShoot) startShot(robot.macros.shootAll());
-        }
-    }
-
-    private void startShot(Command command) {
-        if (shot != null && Scheduler.isScheduled(shot)) return;   // let the running shot finish
-        shot = command;
-        Scheduler.schedule(shot);
-    }
-
-    private void cancelShot() {
-        if (shot != null && Scheduler.isScheduled(shot)) {
-            RobotLog.ii("Teleop", "shot cancelled");
-            Scheduler.cancel(shot);
-        }
-        shot = null;
     }
 
     // ---- Telemetry ----
 
     private void showTelemetry() {
         telemetry.addData("Loop", "%.0f Hz   battery %.1f V", robot.getLoopHz(), robot.getBatteryVolts());
-        telemetry.addData("SHOOTING", manualShooting
-                ? (feeding ? "MANUAL - FEEDING" : "MANUAL (hold RB to feed)")
-                : "AUTO (RB one, A four, B cancel)");
-        telemetry.addData("Speed", speedLine());
-        telemetry.addData("Shooter", robot.shooter.getStatusLine());
-        telemetry.addData("Intake", robot.intake.getMode());
-        if (!manualShooting) {
-            telemetry.addData("Shot", "%s [%s]  (%d pulses)", robot.macros.getStatus(), robot.macros.getShotState(),
-                    robot.macros.getShotsFired());
-        }
+        telemetry.addData("Shooter", "%s   %s", shooterOn ? "ON (X = off)" : "OFF (X = on)",
+                robot.shooter.getStatusLine());
+        telemetry.addData("Intake", "%s%s", robot.intake.getMode(),
+                robot.shooter.isFeederOn() ? " + feeder = SHOOTING"
+                        : robot.shooter.isFeederOut() ? " + feeder backwards" : "");
+        telemetry.addData("Distance", distanceLine());
         telemetry.addData("Limelight", "%s   (%s)", robot.limelight.getStatusLine(), alliance);
         Pose pose = robot.drivetrain.getPose();
-        telemetry.addData("Pose", pose == null ? "none (run Pinpoint Tuner)"
+        telemetry.addData("Pose", pose == null ? "none (Pinpoint not set up)"
                 : String.format(Locale.US, "%.1f, %.1f @ %.0f deg", pose.x(), pose.y(),
                         Math.toDegrees(pose.heading())));
 
-        if (manualShooting && !flywheelOn && gamepad1.right_bumper) {
-            telemetry.addLine("!! wheels are off: press X first");
+        if (robot.isPositionOff()) {
+            telemetry.addLine("!! POSITION OFF: the Limelight moved the distance more than "
+                    + Math.round(Robot.CORRECTION_WARN_INCHES) + " in");
         }
         if (robot.intake.hasGivenUpUnjamming()) telemetry.addLine("!! INTAKE JAMMED - run it out (LT)");
     }
 
     /**
-     * Where the wheel speeds come from, as "flywheel / roller". In FIXED the tag distance is shown
-     * too, so the line reads as a speed table row: {distance, flywheel, roller}.
+     * The distance the wheel speeds are set from, and what it is made of, e.g.
+     * {@code 74 in = position 71 + correction 3   tag 74   target FAR}.
      */
-    private String speedLine() {
-        double distance = robot.limelight.getShotDistanceInches();
-        boolean tagInView = !Double.isNaN(distance);
-        if (!robot.autoSpeed) {
-            String line = String.format(Locale.US, "FIXED fly %.0f / roller %.0f t/s (dpad)",
-                    Shooter.TARGET_TICKS_PER_SEC, Shooter.ROLLER_TARGET_TICKS_PER_SEC);
-            return tagInView ? line + String.format(Locale.US, "   tag %.0f in", distance) : line;
+    private String distanceLine() {
+        double shot = robot.getShotInches();
+        double tag = robot.getTagInches();
+        String tagText = Double.isNaN(tag) ? "no tag" : String.format(Locale.US, "tag %.0f", tag);
+
+        if (Double.isNaN(robot.getPositionInches())) {
+            // No Pinpoint: the tag is the only distance there is. (The shooter keeps its last table
+            // speeds for Shooter.TAG_HOLD_MS after the tag is lost; its own line says table / fixed.)
+            return Double.isNaN(shot) ? "NO TAG of ours in view: fixed speeds"
+                    : String.format(Locale.US, "%.0f in  TAG ONLY   (tag now %.0f)", shot, tag);
         }
-        if (tagInView) {
-            return String.format(Locale.US, "TAG  %.0f in -> %.0f / %.0f t/s", distance,
-                    robot.shooter.getTarget(), robot.shooter.getRollerTarget());
-        }
-        // The shooter keeps the last tag speeds for a moment (Shooter.TAG_HOLD_MS), then goes to fixed.
-        return String.format(Locale.US, "TAG  no tag: %s %.0f / %.0f t/s",
-                robot.shooter.isSpeedFromTag() ? "holding" : "fixed",
-                robot.shooter.getTarget(), robot.shooter.getRollerTarget());
+        return String.format(Locale.US, "%.0f in = position %.0f + correction %.0f   %s   target %s",
+                shot, robot.getPositionInches(), robot.getCorrectionInches(), tagText,
+                robot.getTargetCell());
     }
 }

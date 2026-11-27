@@ -21,8 +21,7 @@ import java.util.Locale;
  * <p>Front-mounted ({@link #CAMERA_YAW_OFFSET_DEGREES} = 0), facing the way the shot leaves, so the
  * tags stay in view while the robot is lined up to shoot. Its main job is the shot distance:
  * {@link #getShotDistanceInches()} is the distance to the tag the robot points at, and
- * {@code Robot.readSensors()} turns it into the flywheel speed. {@link #getTagTx(int, int)}, the
- * horizontal error to a cluster, is kept for aiming. Every BIOBUZZ tag rides on a moving CELL and
+ * {@code Robot.readSensors()} sets the wheel speeds from it. Every BIOBUZZ tag rides on a moving CELL and
  * the SDK v12.0 notes say they are unsuitable for field localisation, so there is no botpose here.
  * Which IDs belong to which CELL lives in {@code game/Field}.
  *
@@ -49,14 +48,17 @@ public class Limelight {
     private LLResult latestResult;
     private List<LLResultTypes.FiducialResult> tagDetections = Collections.emptyList();
     /**
-     * Set by the first call the camera does not answer, and never cleared: {@code start()} happens
-     * once, at init, so a camera that was not talking then will not begin on its own. Power-cycle the
-     * camera and restart the OpMode.
+     * Set by a call the camera does not answer, cleared by the next fresh frame. If {@code start()}
+     * itself failed at init there never is a frame, so it stays set: power-cycle the camera and
+     * restart the OpMode.
      */
     private boolean cameraFailed = false;
     /** The pipeline setAlliance asked for. A distance is only trusted while the camera is on it. */
     private int wantedPipeline = BLUE_PIPELINE;
     private long lastSwitchMs = 0;
+    /** Times update() has re-sent the pipeline since setAlliance. It stops at {@link #MAX_SWITCH_RETRIES}. */
+    private int switchRetries = 0;
+    public static int MAX_SWITCH_RETRIES = 5;
 
     public Limelight(HardwareMap hardwareMap) {
         this(hardwareMap, HardwareNames.LIMELIGHT);
@@ -75,6 +77,7 @@ public class Limelight {
     /** Switches to the alliance's pipeline. Once, when the alliance is known: it is a network call. */
     public void setAlliance(Alliance alliance) {
         wantedPipeline = pipelineFor(alliance);
+        switchRetries = 0;
         sendPipeline();
     }
 
@@ -93,25 +96,28 @@ public class Limelight {
 
     /** Takes the camera's latest frame; once per loop from {@code Robot.readSensors()}. */
     public void update() {
+        // Everything that touches a frame is inside the try: a bad frame must never stop the OpMode.
         try {
             latestResult = limelight.getLatestResult();
+            if (latestResult != null && !isStale()) cameraFailed = false;   // it is talking again
+
+            // A camera that was booting when the switch was sent is still on its old pipeline: ask
+            // again, once a second, a few times (the switch is a network call, so not for ever).
+            int running = getPipelineIndex();
+            if (running >= 0 && running != wantedPipeline && switchRetries < MAX_SWITCH_RETRIES
+                    && System.currentTimeMillis() - lastSwitchMs > 1000) {
+                switchRetries++;
+                sendPipeline();
+            }
+
+            List<LLResultTypes.FiducialResult> tags =
+                    latestResult != null && latestResult.isValid() ? latestResult.getFiducialResults() : null;
+            tagDetections = tags == null ? Collections.<LLResultTypes.FiducialResult>emptyList() : tags;
         } catch (RuntimeException e) {
             cameraFailed = true;
             latestResult = null;
-        }
-        // A camera that was booting when the switch was sent is still on its old pipeline: ask again,
-        // at most once a second (the switch is a network call).
-        int running = getPipelineIndex();
-        if (running >= 0 && running != wantedPipeline
-                && System.currentTimeMillis() - lastSwitchMs > 1000) {
-            sendPipeline();
-        }
-        if (latestResult == null || !latestResult.isValid()) {
             tagDetections = Collections.emptyList();
-            return;
         }
-        List<LLResultTypes.FiducialResult> tags = latestResult.getFiducialResults();
-        tagDetections = tags == null ? Collections.<LLResultTypes.FiducialResult>emptyList() : tags;
     }
 
     /** False when the camera is configured but not answering (unplugged, unpowered, still booting). */
@@ -160,15 +166,7 @@ public class Limelight {
      * alliance's pipeline (those would be the wrong HIVE's tags). Called every loop.
      */
     public double getShotDistanceInches() {
-        if (!hasTarget() || !isOnWantedPipeline()) return Double.NaN;
-        LLResultTypes.FiducialResult nearest = null;
-        for (int i = 0; i < tagDetections.size(); i++) {
-            LLResultTypes.FiducialResult tag = tagDetections.get(i);
-            if (nearest == null
-                    || Math.abs(tag.getTargetXDegrees()) < Math.abs(nearest.getTargetXDegrees())) {
-                nearest = tag;
-            }
-        }
+        LLResultTypes.FiducialResult nearest = nearestTag();
         if (nearest == null) return Double.NaN;
         Pose3D pose = nearest.getTargetPoseCameraSpace();
         if (pose == null || pose.getPosition() == null) return Double.NaN;
@@ -178,25 +176,39 @@ public class Limelight {
         return inches < 1 ? Double.NaN : inches;
     }
 
-    // ---- AprilTags: aiming ----
+    /**
+     * The ID of that same tag (the one {@link #getShotDistanceInches()} measures to), or -1 when there
+     * is none. {@code Robot} uses it to tell which of the two CELLs the robot is pointing at.
+     */
+    public int getShotTagId() {
+        LLResultTypes.FiducialResult nearest = nearestTag();
+        return nearest == null ? -1 : nearest.getFiducialId();
+    }
 
     /**
-     * Mean horizontal offset, in degrees, of the visible tags with IDs in {@code [minId, maxId]},
-     * or NaN when none is visible. For a BIOBUZZ cluster this approximates the CELL opening's
-     * centre. Nothing in match code reads it yet: {@code Macros} aims by odometry.
+     * How far off centre that same tag is, in degrees: + = the tag is to the RIGHT of where the robot
+     * points, 0 = dead ahead. NaN when there is no tag. The Limelight autos turn until this is near 0.
      */
-    public double getTagTx(int minId, int maxId) {
-        if (!hasTarget()) return Double.NaN;
-        double sum = 0;
-        int n = 0;
+    public double getShotTagTxDegrees() {
+        LLResultTypes.FiducialResult nearest = nearestTag();
+        return nearest == null ? Double.NaN : nearest.getTargetXDegrees();
+    }
+
+    /**
+     * The visible tag nearest the crosshair (smallest |tx|), or null when there is no fresh tag or the
+     * camera is still on the other alliance's pipeline.
+     */
+    private LLResultTypes.FiducialResult nearestTag() {
+        if (!hasTarget() || !isOnWantedPipeline()) return null;
+        LLResultTypes.FiducialResult nearest = null;
         for (int i = 0; i < tagDetections.size(); i++) {
             LLResultTypes.FiducialResult tag = tagDetections.get(i);
-            int id = tag.getFiducialId();
-            if (id < minId || id > maxId) continue;
-            sum += tag.getTargetXDegrees();
-            n++;
+            if (nearest == null
+                    || Math.abs(tag.getTargetXDegrees()) < Math.abs(nearest.getTargetXDegrees())) {
+                nearest = tag;
+            }
         }
-        return n == 0 ? Double.NaN : sum / n;
+        return nearest;
     }
 
     /**

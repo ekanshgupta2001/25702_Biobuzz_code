@@ -1,8 +1,5 @@
 package org.firstinspires.ftc.teamcode.subsystems;
 
-import com.pedropathing.ivy.Command;
-import com.pedropathing.ivy.behaviors.BlockedBehavior;
-import com.pedropathing.ivy.behaviors.InterruptedBehavior;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
@@ -13,27 +10,28 @@ import org.firstinspires.ftc.teamcode.util.hardware.HardwareNames;
 
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 
-import java.util.function.Supplier;
-
 /**
  * The front roller <b>and</b> the tunnel behind it. One goBILDA 5203-2402-0051 (50.9:1, 117 RPM)
  * drives both through the sprocket chain, so they are one subsystem with one mode: whatever the
  * roller is doing, the tunnel is doing.
  *
- * <p><b>Feeding the shooter is running this forward</b>, together with the shooter's feeder. There is
- * no gate and no sensor anywhere in the path, so a piece reaches the wheels because the tunnel and the
- * feeder ran long enough to carry it there. That is why {@code commands/Shoot} owns this subsystem for
- * the length of a shot and pulses it.
+ * <p><b>Feeding the shooter is running this forward</b> ({@link #feed()}), together with the shooter's
+ * feeder. There is no gate and no sensor anywhere in the path, so a piece reaches the wheels because
+ * the tunnel and the feeder ran long enough to carry it there.
  *
- * <p><b>Power, not velocity.</b> A 50.9:1 roller has no use for a closed velocity loop; the SDK's
- * velocity PID would only add a tuning surface and a bus transaction. Commands set a {@link Mode};
- * {@link #update()} is the one place that writes hardware, and anti-jam can override it on the way
- * out.
+ * <p><b>Power, not velocity.</b> The OpMode sets a {@link Mode}; {@link #update()} is the one place
+ * that writes the motor, and anti-jam can override it on the way out.
  *
  * <p>Nothing here knows how many pieces are aboard, because nothing on the robot can know. The
  * operator is the only thing that decides when to stop intaking (BIOBUZZ G407, max 4 controlled).
  */
 public class Intake {
+    /**
+     * The motor direction that makes {@link #IN} pull pieces in. {@code Bench: Motors} reads this too.
+     * If the intake ever runs backwards again, this is the one line to flip.
+     */
+    public static final DcMotorSimple.Direction DIRECTION = DcMotorSimple.Direction.REVERSE;
+
     public static double IN = 1.0;
     public static double OUT = -1.0;
 
@@ -56,8 +54,6 @@ public class Intake {
      */
     public static long HEALTHY_RESET_MS = 500;
 
-    public static int DEFAULT_IDLE_PRIORITY = -1;
-
     public enum Mode { OFF, IN, OUT, FEED }
 
     private final DcMotorEx motor;
@@ -74,7 +70,7 @@ public class Intake {
 
     public Intake(HardwareMap hardwareMap, String name) {
         motor = hardwareMap.get(DcMotorEx.class, name);
-        motor.setDirection(DcMotorSimple.Direction.FORWARD);
+        motor.setDirection(DIRECTION);
         // BRAKE: the tunnel holds pieces on a slope, and a coasting tunnel lets them drift back.
         motor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         motor.setPower(0);
@@ -125,7 +121,7 @@ public class Intake {
         return jamDetector.hasGivenUp();
     }
 
-    /** Writes hardware. Called once per loop from {@code Robot.writeActuators()}, after commands run. */
+    /** Writes the motor. Called once per loop, at the bottom ({@code Robot.writeActuators()}). */
     public void update() {
         long now = System.currentTimeMillis();
         boolean pulling = mode == Mode.IN;
@@ -152,44 +148,5 @@ public class Intake {
             motor.setPower(power);
             lastWritten = power;
         }
-    }
-
-    // ---- Ivy commands ----
-
-    /**
-     * The operator's standing wish, as a default command: it re-reads {@code mode} every loop rather
-     * than being re-scheduled on every press.
-     *
-     * <p>This matters because Ivy has <em>no duplicate guard</em> — scheduling the same intent every
-     * loop would re-run {@code start()} every loop. At priority -1 with {@code SUSPEND} a shooting
-     * cycle (which owns the intake to pulse the tunnel) preempts this and it resumes by itself
-     * afterwards, still holding whatever the operator last asked for.
-     */
-    public Command operatorControlCommand(Supplier<Mode> mode) {
-        return Command.build()
-                .setExecute(() -> setMode(mode.get()))
-                .setDone(() -> false)
-                .setEnd(ec -> stop())
-                .setPriority(DEFAULT_IDLE_PRIORITY)
-                .setInterruptedBehavior(InterruptedBehavior.SUSPEND)
-                .setBlockedBehavior(BlockedBehavior.QUEUE)
-                .requiring(this);
-    }
-
-    /**
-     * Schedule once at OpMode init. Suspends when a real command takes the resource and resumes when
-     * that command ends. Logic in {@code setExecute} because the Scheduler's resume path does not
-     * re-call {@code start()}; {@link BlockedBehavior#QUEUE} so it is not silently dropped if
-     * something already holds the intake at init.
-     */
-    public Command defaultIdleCommand() {
-        return Command.build()
-                .setExecute(this::stop)
-                .setDone(() -> false)
-                .setEnd(ec -> stop())
-                .setPriority(DEFAULT_IDLE_PRIORITY)
-                .setInterruptedBehavior(InterruptedBehavior.SUSPEND)
-                .setBlockedBehavior(BlockedBehavior.QUEUE)
-                .requiring(this);
     }
 }

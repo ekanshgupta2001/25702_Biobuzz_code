@@ -53,7 +53,7 @@ public abstract class ShootPickupAuto extends OpMode {
     public static double TURN_TO_POLLEN_DIRECTION = 1;
     public static double TURN_POWER = 0.5;
     /** How long a 90 degree turn takes at {@link #TURN_POWER}. It does not need to be exact: SQUARE fixes it. */
-    public static long TURN_90_MS = 450;
+    public static long TURN_90_MS = 900;
 
     /** Which way the wall is after that turn: +1 = strafe LEFT into it, -1 = strafe RIGHT. */
     public static double SQUARE_DIRECTION = 1;

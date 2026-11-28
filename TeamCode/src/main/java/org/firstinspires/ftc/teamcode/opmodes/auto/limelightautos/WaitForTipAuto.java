@@ -42,20 +42,20 @@ public abstract class WaitForTipAuto extends OpMode {
     // ---- Numbers to tune. Drive convention: + forward, + strafe LEFT, + turn LEFT (counter-clockwise). ----
 
     /** How long to wait for a tip before giving up and parking. */
-    public static long WAIT_MS = 15000;
+    public static long WAIT_MS = 20000;
     /** The tags must stay in view this long to count as a tip, so one odd camera frame does not. */
     public static long TIP_CONFIRM_MS = 300;
 
     /** The park move: these three powers for {@link #PARK_MS}. A first guess: strafe right for a second. */
-    public static double PARK_FORWARD = 0;
-    public static double PARK_STRAFE = -0.5;
+    public static double PARK_FORWARD = 0.2;
+    public static double PARK_STRAFE = -0.75;
     public static double PARK_TURN = 0;
-    public static long PARK_MS = 1000;
+    public static long PARK_MS = 1500;
 
     /** The autonomous period. Nothing may move after it (BIOBUZZ G403). */
     private static final long AUTO_PERIOD_MS = 30000;
 
-    private enum State { WATCH, SPIN_UP, FEED, DWELL, PARK, DONE }
+    private enum State { WATCH, SPIN_UP, FEED, DWELL, PARK1, Park2, DONE }
 
     private final Alliance alliance;
     /** The CELL that starts DOWN: the one this robot faces. Its tags appear when the HIVE tips. */
@@ -135,7 +135,7 @@ public abstract class WaitForTipAuto extends OpMode {
                     enter(State.SPIN_UP, now);
                 } else if (inState >= WAIT_MS) {
                     tipResult = "no tip in time: parking with the balls";
-                    enter(State.PARK, now);
+                    enter(State.PARK1, now);
                 }
                 break;
             case SPIN_UP:
@@ -145,9 +145,12 @@ public abstract class WaitForTipAuto extends OpMode {
                 if (inState >= HardcodedAuto.FEED_MS) enter(State.DWELL, now);
                 break;
             case DWELL:
-                if (inState >= Shoot.FINAL_DWELL_MS) enter(State.PARK, now);
+                if (inState >= Shoot.FINAL_DWELL_MS) enter(State.PARK1, now);
                 break;
-            case PARK:
+            case PARK1:
+                if (inState >= PARK_MS) enter(State.Park2, now);
+                break;
+            case Park2:
                 if (inState >= PARK_MS) enter(State.DONE, now);
                 break;
             default:
@@ -193,12 +196,15 @@ public abstract class WaitForTipAuto extends OpMode {
                 robot.intake.stop();
                 robot.shooter.feederOff();
                 break;
-            case PARK:
+            case PARK1:
                 robot.intake.stop();
                 robot.shooter.disarm();   // the wheels and the feeder
                 forward = PARK_FORWARD;
+                break;
+            case Park2:
+                robot.intake.stop();
+                robot.shooter.disarm();   // the wheels and the feeder
                 strafe = PARK_STRAFE;
-                turn = PARK_TURN;
                 break;
             case DONE:
             default:

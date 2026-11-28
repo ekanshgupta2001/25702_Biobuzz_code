@@ -38,7 +38,7 @@ import java.util.Locale;
  * write the motors, show the card. There are no commands and no scheduler here: each section tells
  * its mechanism what to do this loop, and that is all that happens.
  */
-@TeleOp(name = "Teleop", group = "Main")
+@TeleOp(name = "Teleop one driver", group = "Main")
 public class Teleop extends OpMode {
     public static double SLOW_SCALE = 0.4;
 
@@ -140,19 +140,22 @@ public class Teleop extends OpMode {
     // ---- Shooter: X on / off ----
 
     private void shooter() {
-        if (gamepad1.xWasPressed()) {
+        if (gamepad1.yWasPressed()) {
             shooterOn = !shooterOn;
             // Off: stops both wheels and the feeder right now. Only on the press, not every loop,
             // so it does not undo LT's feeder-backwards in intake() below.
             if (!shooterOn) robot.shooter.disarm();
         }
-        if (shooterOn) robot.shooter.arm();
+        if (shooterOn){
+            robot.shooter.arm();
+            gamepad1.rumbleBlips(3);
+        }
 
         // One buzz per spin-up, when both wheels reach speed.
         if (!shooterOn) {
             readyBuzzed = false;
         } else if (!readyBuzzed && robot.shooter.atTarget()) {
-            gamepad1.rumble(200);
+            gamepad1.rumbleBlips(3);
             readyBuzzed = true;
         }
     }

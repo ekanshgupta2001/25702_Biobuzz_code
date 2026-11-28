@@ -93,8 +93,8 @@ public class Shooter {
      * what Auto HARDCODED shoots at. Read every loop, so a live edit applies at once; it only lasts until the
      * Robot Controller app restarts, so paste the values you want to keep here.
      */
-    public static double TARGET_TICKS_PER_SEC = 1500;
-    public static double ROLLER_TARGET_TICKS_PER_SEC = 900;
+    public static double TARGET_TICKS_PER_SEC = 1600;
+    public static double ROLLER_TARGET_TICKS_PER_SEC = 1000;
     /** How close counts as at target, for both wheels. */
     public static double TOLERANCE_TICKS_PER_SEC = 50;
 
@@ -119,11 +119,11 @@ public class Shooter {
             // {48, 1500, 900},
             {68, 1600, 700},
             {71, 1600, 900},
-            {74, 1500, 900},
-            {75, 1500, 1000},
-            {77, 1500, 1000},
-            {78, 1550, 1000},
-            {79, 1550, 1050},
+            {74, 1600, 900},
+            {75, 1600, 1000},
+            {77, 1600, 1000},
+            {78, 1650, 1000},
+            {79, 1650, 1050},
     };
 
     /**

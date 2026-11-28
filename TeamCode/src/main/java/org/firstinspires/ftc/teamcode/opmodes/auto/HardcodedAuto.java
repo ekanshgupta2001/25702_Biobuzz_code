@@ -22,8 +22,9 @@ import java.util.List;
  * <pre>
  *   START        wheels spin up (the robot's FRONT faces the target)
  *   3 s          intake + feeder run nonstop for FEED_MS: all four balls go in one after another
- *   then         shooter and intake off, drive AWAY (backwards) at 70% for DRIVE_MS
- *   then         stop for DRIVE_PAUSE_MS, then RETURN (forwards) at 70% for DRIVE_BACK_MS
+ *   then         shooter and intake off, strafe LEFT at 50% for STRAFE_LEFT_MS
+ *   then         drive FORWARD at 75% for FORWARD_MS
+ *   then         strafe RIGHT at 50% for STRAFE_RIGHT_MS
  *   then         stop, nothing moves again
  * </pre>
  *
@@ -44,10 +45,10 @@ import java.util.List;
  * the speeds this run will use.
  *
  * <p>"Auto HARDCODED NO SHOOT" ({@link HardcodedNoShootAuto}) is this auto without the shooting: it
- * starts the drive at START. Both use the same DRIVE_ constants, so tuning one tunes both.
+ * starts the drive at START. Both use the same drive constants, so tuning one tunes both.
  *
- * <p>Set on the practice field: {@link #FEED_MS}, {@link #DRIVE_MS}, {@link #DRIVE_BACK_MS} (and
- * {@link #DRIVE_POWER}'s sign).
+ * <p>Set on the practice field: {@link #FEED_MS}, {@link #STRAFE_LEFT_MS}, {@link #FORWARD_MS} and
+ * {@link #STRAFE_RIGHT_MS}.
  */
 @Autonomous(name = "Auto HARDCODED", group = "Main", preselectTeleOp = "Teleop")
 public class HardcodedAuto extends OpMode {
@@ -59,26 +60,23 @@ public class HardcodedAuto extends OpMode {
      */
     public static long FEED_MS = 2000;
     /**
-     * Drive power after shooting, for both moves. AWAY drives at -DRIVE_POWER (backwards, away from
-     * the target the front faces), RETURN at +DRIVE_POWER. Flipping its sign flips both moves. 70% on
-     * 435 RPM motors covers several feet a second, so change the times below a little at a time on
-     * the practice field until the robot stops where you want.
+     * The drive after shooting: strafe left, drive forward, strafe right. Forward is the way the
+     * front (the shooter) faces. Change the times a little at a time on the practice field until the
+     * robot stops where you want.
      */
-    public static double DRIVE_POWER = 0.7;
-    /** How long it drives away (backwards). */
-    public static long DRIVE_MS = 1000;
-    /** Stopped between the two moves, so the return starts from standstill instead of skidding. */
-    public static long DRIVE_PAUSE_MS = 300;
-    /**
-     * How long it drives back toward the start. Shorter than {@link #DRIVE_MS} so it stops short of
-     * where it started, where a wall or the goal may be.
-     */
-    public static long DRIVE_BACK_MS = 800;
+    public static double STRAFE_POWER = 0.5;
+    /** How long it strafes left. */
+    public static long STRAFE_LEFT_MS = 750;
+    public static double FORWARD_POWER = 0.75;
+    /** How long it drives forward. */
+    public static long FORWARD_MS = 750;
+    /** How long it strafes right, at {@link #STRAFE_POWER}. */
+    public static long STRAFE_RIGHT_MS = 500;
 
     /** The autonomous period. Nothing may move after it (BIOBUZZ G403). */
     private static final long AUTO_PERIOD_MS = 30000;
 
-    private enum State { SPIN_UP, FEED, DWELL, AWAY, PAUSE, RETURN, DONE }
+    private enum State { SPIN_UP, FEED, DWELL, STRAFE_LEFT, FORWARD, STRAFE_RIGHT, DONE }
 
     /** False in Auto HARDCODED NO SHOOT: the robot only drives. */
     private final boolean shoot;
@@ -98,8 +96,9 @@ public class HardcodedAuto extends OpMode {
     private State state = State.DONE;
     private long startMs = 0;
     private long stateSinceMs = 0;
-    /** The power the drive motors were last given, for the card. */
-    private double drivePower = 0;
+    /** What the drive was last given, for the card. */
+    private double driveForward = 0;
+    private double driveStrafe = 0;
 
     public HardcodedAuto() {
         this(true);
@@ -159,13 +158,14 @@ public class HardcodedAuto extends OpMode {
         telemetry.addLine("dpad left = RED, right = BLUE  (Teleop starts on it)");
         telemetry.addLine();
         telemetry.addLine(shoot
-                ? "HARDCODED AUTO: shoot, then drive away and part way back"
-                : "HARDCODED AUTO, NO SHOOTING: at START it drives away and part way back");
+                ? "HARDCODED AUTO: shoot, then strafe left, forward, strafe right"
+                : "HARDCODED AUTO, NO SHOOTING: at START it strafes left, forward, strafe right");
         telemetry.addLine();
         if (shoot) telemetry.addLine("PLACE: FRONT (shooter + camera) toward the target");
-        telemetry.addLine(String.format("Drives AWAY %.1f s at %+.0f%%, stops, then RETURNS %.1f s at %+.0f%%",
-                DRIVE_MS / 1000.0, -DRIVE_POWER * 100, DRIVE_BACK_MS / 1000.0, DRIVE_POWER * 100));
-        telemetry.addLine("  (- = backwards): make sure that path is clear.");
+        telemetry.addLine(String.format("Strafes LEFT %.2f s at %.0f%%, FORWARD %.2f s at %.0f%%, RIGHT %.2f s at %.0f%%",
+                STRAFE_LEFT_MS / 1000.0, STRAFE_POWER * 100, FORWARD_MS / 1000.0, FORWARD_POWER * 100,
+                STRAFE_RIGHT_MS / 1000.0, STRAFE_POWER * 100));
+        telemetry.addLine("  Make sure that path is clear.");
         if (shoot) {
             telemetry.addLine();
             telemetry.addData("Feeds", "from %.1f s, for %.1f s", FIRST_SHOT_AT_MS / 1000.0, FEED_MS / 1000.0);
@@ -186,7 +186,7 @@ public class HardcodedAuto extends OpMode {
             shooter.arm();   // holds the fixed speeds, read when the Shooter was built
             enter(State.SPIN_UP, startMs);
         } else {
-            enter(State.AWAY, startMs);
+            enter(State.STRAFE_LEFT, startMs);
         }
     }
 
@@ -217,16 +217,16 @@ public class HardcodedAuto extends OpMode {
                 break;
             case DWELL:
                 // The wheels stay on a moment so the last ball leaves.
-                if (inState >= Shoot.FINAL_DWELL_MS) enter(State.AWAY, now);
+                if (inState >= Shoot.FINAL_DWELL_MS) enter(State.STRAFE_LEFT, now);
                 break;
-            case AWAY:
-                if (inState >= DRIVE_MS) enter(State.PAUSE, now);
+            case STRAFE_LEFT:
+                if (inState >= STRAFE_LEFT_MS) enter(State.FORWARD, now);
                 break;
-            case PAUSE:
-                if (inState >= DRIVE_PAUSE_MS) enter(State.RETURN, now);
+            case FORWARD:
+                if (inState >= FORWARD_MS) enter(State.STRAFE_RIGHT, now);
                 break;
-            case RETURN:
-                if (inState >= DRIVE_BACK_MS) enter(State.DONE, now);
+            case STRAFE_RIGHT:
+                if (inState >= STRAFE_RIGHT_MS) enter(State.DONE, now);
                 break;
             default:
                 break;
@@ -240,7 +240,7 @@ public class HardcodedAuto extends OpMode {
         if (shoot) {
             telemetry.addData("Shooter", shooter.getStatusLine());
         }
-        telemetry.addData("Drive", "%.2f", drivePower);
+        telemetry.addData("Drive", "forward %.2f  strafe %.2f (+ = right)", driveForward, driveStrafe);
     }
 
     // No stop(): the SDK zeroes every motor itself and rejects motor writes from there.
@@ -259,32 +259,37 @@ public class HardcodedAuto extends OpMode {
                 intake.stop();
                 shooter.feederOff();
                 break;
-            case AWAY:
+            case STRAFE_LEFT:
                 intake.stop();
                 shooter.disarm();   // the wheels and the feeder
-                setDrive(-DRIVE_POWER);   // backwards: the front faced the target
+                setDrive(0, -STRAFE_POWER);
                 break;
-            case PAUSE:
-                setDrive(0);
+            case FORWARD:
+                setDrive(FORWARD_POWER, 0);
                 break;
-            case RETURN:
-                setDrive(DRIVE_POWER);
+            case STRAFE_RIGHT:
+                setDrive(0, STRAFE_POWER);
                 break;
             case DONE:
             default:
                 intake.stop();
                 shooter.disarm();
-                setDrive(0);
+                setDrive(0, 0);
                 break;
         }
     }
 
-    private void setDrive(double power) {
-        drivePower = power;
-        frontLeft.setPower(power);
-        frontRight.setPower(power);
-        backLeft.setPower(power);
-        backRight.setPower(power);
+    /**
+     * Mecanum drive with no turning. {@code forward} + is the way the front faces, {@code strafe} + is
+     * to the robot's right. If a strafe goes the wrong way, a motor direction in init() is wrong.
+     */
+    private void setDrive(double forward, double strafe) {
+        driveForward = forward;
+        driveStrafe = strafe;
+        frontLeft.setPower(forward + strafe);
+        backLeft.setPower(forward - strafe);
+        frontRight.setPower(forward - strafe);
+        backRight.setPower(forward + strafe);
     }
 
     /**
